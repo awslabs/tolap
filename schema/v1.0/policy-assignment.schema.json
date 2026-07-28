@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tolap.dev/schema/v1.0/policy-assignment.schema.json",
+  "title": "TOLAP Policy Assignment",
+  "description": "Links a TOLAP policy definition to a user, group, role, or service account. Assignments are scoped, time-bound, and audited.",
+  "type": "object",
+  "required": [
+    "version",
+    "policyName",
+    "assignee",
+    "scope",
+    "active",
+    "audit"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for validation tooling."
+    },
+    "version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "TOLAP schema version. Must be '1.0' for this schema."
+    },
+    "policyName": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Name of the policy definition this assignment references. Must match a policy definition's 'name' field."
+    },
+    "assignee": {
+      "type": "object",
+      "required": [
+        "type",
+        "identifier"
+      ],
+      "additionalProperties": false,
+      "description": "The entity receiving this policy assignment.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "group",
+            "role",
+            "serviceAccount"
+          ],
+          "description": "Type of assignee. user: individual user. group: identity provider group. role: application role. serviceAccount: machine identity."
+        },
+        "identifier": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique identifier for the assignee. Format depends on type: UUID for users, group name for groups, role name for roles, service account ID for service accounts."
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Narrows where this assignment applies.",
+      "properties": {
+        "tenantId": {
+          "type": "string",
+          "description": "Tenant this assignment applies to. If omitted, applies to all tenants the assignee belongs to."
+        },
+        "sourceConnectionId": {
+          "type": "string",
+          "description": "Specific data source connection this assignment applies to. If omitted, applies to all sources matched by the policy's sourcePatterns."
+        }
+      }
+    },
+    "active": {
+      "type": "boolean",
+      "description": "Whether this assignment is currently active. Inactive assignments are ignored during policy resolution."
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when this assignment expires. After expiry, the assignment is treated as inactive. Omit for assignments that do not expire."
+    },
+    "audit": {
+      "type": "object",
+      "required": [
+        "grantedBy",
+        "grantedAt",
+        "reason"
+      ],
+      "additionalProperties": false,
+      "description": "Audit trail for this assignment. All fields are mandatory.",
+      "properties": {
+        "grantedBy": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier of the user or system that created this assignment."
+        },
+        "grantedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp when this assignment was created."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "description": "Human-readable explanation of why this assignment was granted."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "description": "Two policies with overlapping allowedFields -- verify intersection",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "policy-a",
+      "priority": 10,
+      "permissions": { "canQuery": true, "canExport": true, "readOnly": false },
+      "objectRules": {
+        "allowedObjects": ["patients", "encounters", "medications"],
+        "fieldRules": {
+          "allowedFields": ["name", "age", "region", "diagnosis"]
+        }
+      },
+      "limits": { "maxResults": 5000 }
+    },
+    {
+      "version": "1.0",
+      "name": "policy-b",
+      "priority": 20,
+      "permissions": { "canQuery": true, "canExport": false, "readOnly": true },
+      "objectRules": {
+        "allowedObjects": ["patients", "diagnoses", "medications"],
+        "fieldRules": {
+          "allowedFields": ["name", "region", "status", "diagnosis"]
+        }
+      },
+      "limits": { "maxResults": 1000 }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["policy-a", "policy-b"],
+    "permissions": { "canQuery": true, "canExport": false, "readOnly": true },
+    "objectRules": {
+      "allowedObjects": ["patients", "medications"],
+      "fieldRules": {
+        "allowedFields": ["name", "region", "diagnosis"]
+      }
+    },
+    "limits": { "maxResults": 1000 }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "description": "Object access -- allowed, hidden, and unlisted objects",
+  "action": "validateAccess",
+  "cases": [
+    {
+      "objectName": "patients",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients", "encounters"],
+          "hiddenObjects": ["audit_log"]
+        }
+      },
+      "expected": { "allowed": true }
+    },
+    {
+      "objectName": "audit_log",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients", "encounters"],
+          "hiddenObjects": ["audit_log"]
+        }
+      },
+      "expected": { "allowed": false, "reason": "object is hidden" }
+    },
+    {
+      "objectName": "medications",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients", "encounters"]
+        }
+      },
+      "expected": { "allowed": false, "reason": "object not in allowed set" }
+    }
+  ]
+}

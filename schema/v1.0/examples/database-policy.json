@@ -1,0 +1,72 @@
+{
+  "$schema": "https://tolap.dev/schema/v1.0/policy-definition.schema.json",
+  "version": "1.0",
+  "name": "healthcare-analyst-db",
+  "description": "Database access for healthcare analysts. Can query patient and encounter tables with PII masking and region filtering. Billing internals are hidden.",
+  "priority": 10,
+  "appliesToAll": false,
+  "sourcePatterns": ["db:production:patient_*", "db:production:encounter_*"],
+  "permissions": {
+    "canQuery": true,
+    "canExport": false,
+    "readOnly": true
+  },
+  "objectRules": {
+    "allowedObjects": ["patients", "encounters", "diagnoses", "medications"],
+    "hiddenObjects": ["billing_internal", "audit_log", "admin_notes"],
+    "fieldRules": {
+      "allowedFields": [
+        "patients.patient_id",
+        "patients.age_group",
+        "patients.region",
+        "patients.diagnosis_code",
+        "encounters.encounter_id",
+        "encounters.encounter_date",
+        "encounters.provider_type",
+        "diagnoses.*",
+        "medications.medication_name",
+        "medications.dosage"
+      ],
+      "hiddenFields": [
+        "patients.ssn",
+        "patients.date_of_birth",
+        "patients.street_address",
+        "patients.drivers_license"
+      ],
+      "maskedFields": [
+        {
+          "field": "patients.full_name",
+          "maskType": "partial",
+          "parameters": { "showFirst": 1, "showLast": 0, "maskChar": "*" }
+        },
+        {
+          "field": "patients.email",
+          "maskType": "hash",
+          "parameters": { "algorithm": "sha256" }
+        },
+        {
+          "field": "patients.phone",
+          "maskType": "full",
+          "parameters": { "maskChar": "*" }
+        }
+      ],
+      "readOnlyFields": []
+    },
+    "rowFilters": [
+      {
+        "field": "region",
+        "operator": "in",
+        "values": ["us-east", "us-west"]
+      },
+      {
+        "field": "status",
+        "operator": "notEquals",
+        "value": "deleted"
+      }
+    ]
+  },
+  "limits": {
+    "maxResults": 5000,
+    "maxQueryTimeSeconds": 30
+  }
+}

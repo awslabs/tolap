@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "name": "bad-mask-policy",
+  "permissions": {
+    "canQuery": true
+  },
+  "objectRules": {
+    "fieldRules": {
+      "maskedFields": [
+        {
+          "field": "email",
+          "maskType": "scramble"
+        }
+      ]
+    }
+  }
+}

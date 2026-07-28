@@ -1,0 +1,41 @@
+{
+  "$schema": "https://tolap.dev/schema/v1.0/policy-definition.schema.json",
+  "version": "1.0",
+  "name": "data-lake-analyst",
+  "description": "Storage access for data lake analysts. Can access curated and published data. Raw ingestion and admin paths are hidden. Large file access is restricted.",
+  "priority": 20,
+  "appliesToAll": false,
+  "sourcePatterns": ["storage:datalake:*"],
+  "permissions": {
+    "canQuery": true,
+    "canExport": true,
+    "readOnly": true
+  },
+  "objectRules": {
+    "allowedObjects": [
+      "curated/*",
+      "published/*",
+      "reports/*"
+    ],
+    "hiddenObjects": [
+      "raw/*",
+      "staging/*",
+      "admin/*",
+      "backups/*"
+    ],
+    "fieldRules": {
+      "hiddenFields": ["x-amz-server-side-encryption-key", "x-amz-meta-internal-*"],
+      "maskedFields": [
+        {
+          "field": "x-amz-meta-uploaded-by",
+          "maskType": "hash",
+          "parameters": { "algorithm": "sha256" }
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxResults": 500,
+    "maxObjectSizeBytes": 104857600
+  }
+}

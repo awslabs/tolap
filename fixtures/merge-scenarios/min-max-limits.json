@@ -1,0 +1,39 @@
+{
+  "description": "Different numeric limits -- minimum for maxima, maximum for minima",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "policy-generous",
+      "priority": 10,
+      "permissions": { "canQuery": true },
+      "limits": {
+        "maxResults": 10000,
+        "maxQueryTimeSeconds": 60,
+        "minSimilarityScore": 0.5,
+        "maxObjectSizeBytes": 209715200
+      }
+    },
+    {
+      "version": "1.0",
+      "name": "policy-strict",
+      "priority": 20,
+      "permissions": { "canQuery": true },
+      "limits": {
+        "maxResults": 500,
+        "maxQueryTimeSeconds": 15,
+        "minSimilarityScore": 0.8,
+        "maxObjectSizeBytes": 52428800
+      }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["policy-generous", "policy-strict"],
+    "permissions": { "canQuery": true },
+    "limits": {
+      "maxResults": 500,
+      "maxQueryTimeSeconds": 15,
+      "minSimilarityScore": 0.8,
+      "maxObjectSizeBytes": 52428800
+    }
+  }
+}

@@ -1,0 +1,252 @@
+{
+  "meta": {
+    "disclaimer": "Do not rely on openFDA to make decisions regarding medical care. While we make every effort to ensure that data is accurate, you should assume all results are unvalidated. We may limit or otherwise restrict your access to the API in line with our Terms of Service.",
+    "terms": "https://open.fda.gov/terms/",
+    "license": "https://open.fda.gov/license/",
+    "last_updated": "2026-06-09",
+    "results": {
+      "skip": 0,
+      "limit": 3,
+      "total": 258984
+    }
+  },
+  "results": [
+    {
+      "effective_time": "20210902",
+      "inactive_ingredient": [
+        "INACTIVE INGREDIENTS Sucrose"
+      ],
+      "purpose": [
+        "USES USES: Temporary Relief - Acne, Boils* * Claims based on traditional homeopathic practice, not accepted medical evidence. Not FDA evaluated."
+      ],
+      "keep_out_of_reach_of_children": [
+        "Keep this and all medication out of reach of children"
+      ],
+      "warnings": [
+        "WARNINGS This product is to be used for self-limiting conditions If symptoms do not improve in 4 days, or worsen, discontinue use and seek assistance of health professional. As with any drug, if you are pregnant, or nursing a baby, seek professional advice before taking this product. Keep this and all medication out of reach of children Do not use if capseal is broken or missing. Close the cap tightly after use."
+      ],
+      "questions": [
+        "QUESTIONS OR COMMENTS www.example.com | 1.555.0100 | info@example.com Example Labs, Inc 100 Sample Street, Ste 000, Anytown, ST 00000 USA"
+      ],
+      "spl_product_data_elements": [
+        "SILICEA SILICEA SUCROSE SILICON DIOXIDE SILICON DIOXIDE"
+      ],
+      "openfda": {
+        "brand_name": [
+          "SILICEA"
+        ],
+        "generic_name": [
+          "SILICEA"
+        ],
+        "manufacturer_name": [
+          "Example Labs Private Limited d.b.a. Example Labs, Inc"
+        ],
+        "product_ndc": [
+          "15631-0404"
+        ],
+        "product_type": [
+          "HUMAN OTC DRUG"
+        ],
+        "route": [
+          "ORAL"
+        ],
+        "substance_name": [
+          "SILICON DIOXIDE"
+        ],
+        "spl_id": [
+          "ca7bbcc8-2354-375c-e053-2995a90a72a0"
+        ],
+        "spl_set_id": [
+          "0000025c-6dbf-4af7-a741-5cbacaed519a"
+        ],
+        "package_ndc": [
+          "15631-0404-0",
+          "15631-0404-1",
+          "15631-0404-2",
+          "15631-0404-3",
+          "15631-0404-4",
+          "15631-0404-5",
+          "15631-0404-6",
+          "15631-0404-7"
+        ],
+        "is_original_packager": [
+          true
+        ],
+        "upc": [
+          "8907460005526"
+        ],
+        "unii": [
+          "ETJ7Z6XBU4"
+        ]
+      },
+      "version": "2",
+      "dosage_and_administration": [
+        "DOSAGE Adults- Take 4 or 6 Pellets by mouth, three times daily or as suggested by physician. Children 2 years and older- take 1/2 the adult dose."
+      ],
+      "pregnancy_or_breast_feeding": [
+        "As with any drug, if you are pregnant, or nursing a baby, seek professional advice before taking this product."
+      ],
+      "stop_use": [
+        "If symptoms do not improve in 4 days, or worsen, discontinue use and seek assistance of health professional."
+      ],
+      "storage_and_handling": [
+        "STORAGE Store in a cool dark place"
+      ],
+      "do_not_use": [
+        "Do not use if capseal is broken or missing. Close the cap tightly after use."
+      ],
+      "package_label_principal_display_panel": [
+        "Mini-Label Label-Pellets Blister-Pack Carton-Pack"
+      ],
+      "indications_and_usage": [
+        "INDICATIONS Condition listed above or as directed by the physician"
+      ],
+      "set_id": "0000025c-6dbf-4af7-a741-5cbacaed519a",
+      "id": "ca7bbcc8-2354-375c-e053-2995a90a72a0",
+      "active_ingredient": [
+        "ACTIVE INGREDIENT SILICEA HPUS 2X and higher"
+      ]
+    },
+    {
+      "effective_time": "20150109",
+      "inactive_ingredient": [
+        "INGREDIENTS: TALC, POLYMETHYL METHACRYLATE, VINYL DIMETHICONE/METHICONE SILSESQUIOXANE CROSSPOLYMER, CALCIUM SILICATE, TRIETHYLHEXANOIN, ALUMINUM HYDROXIDE, LAUROYL LYSINE, METHICONE, PHENOXYETHANOL, DIMETHICONE, ALUMINUM DIMYRISTATE, HYDROXYAPATITIE [+/-: MICA (CI77019), IRON OXIDES (CI 77491/CI 77492/CI 77499)]"
+      ],
+      "purpose": [
+        "Purpose Sunscreen"
+      ],
+      "keep_out_of_reach_of_children": [
+        "Keep out of reach of children If product is swallowed, get medical help or contact a Poison Control Center right away"
+      ],
+      "warnings": [
+        "Warnings For external use only."
+      ],
+      "when_using": [
+        "When using this product keep out of eyes. Rinse with water to remove."
+      ],
+      "spl_product_data_elements": [
+        "CHANTECAILLE PROTECTION NATURELLE BRONZE SPF 46 TITANIUM DIOXIDE, OCTINOXATE, ZINC OXIDE TITANIUM DIOXIDE TITANIUM DIOXIDE OCTINOXATE OCTINOXATE ZINC OXIDE ZINC OXIDE TALC CALCIUM SILICATE TRIETHYLHEXANOIN ALUMINUM HYDROXIDE LAUROYL LYSINE PHENOXYETHANOL DIMETHICONE ALUMINUM DIMYRISTATE MICA FERRIC OXIDE RED"
+      ],
+      "openfda": {},
+      "version": "4",
+      "dosage_and_administration": [
+        "Directions Protection Naturelle SPF 46 PA+++ Powder can be used on clean skin or over makeup. Shake lightly to activate the flow of powder. Sweep the brush all over the face to evenly distribute powder for immediate UVA/UVB protection."
+      ],
+      "package_label_principal_display_panel": [
+        "CHANTECAILLE Protection Naturelle SPF 46 PA+++ Powder NET WT. 0.088 OZ. 2.5g e",
+        "CHANTECAILLE PROTECTION NATURELLE BRONZE SPF 46 .088OZ/2.5g (42893-030-00) CHANTECAILLE PROTECTION NATURELLE SPF 46"
+      ],
+      "indications_and_usage": [
+        "Uses Multi-purpose mineral powder provides broad-spectrum SPF 46 PA+++ protection. Leaves the skin flawless and protected."
+      ],
+      "set_id": "0000076a-fc39-4208-ace8-6c2cb367904f",
+      "id": "f229e866-5775-4e42-a316-8480dd92fec6",
+      "active_ingredient": [
+        "BRONZE ACTIVE INGREDIENTS: TITANIUM DIOXIDE 2 %, ETHYLHEXYL METHOXYCINNAMATE 7%, ZINC OXIDE 24.5%"
+      ]
+    },
+    {
+      "spl_product_data_elements": [
+        "Betadine POVIDONE-IODINE POVIDONE-IODINE IODINE C12-15 Pareth-9 Water Sodium Hydroxide Bottle Label"
+      ],
+      "active_ingredient": [
+        "Drug Facts Active ingredients Povidone-iodine, 5% (0.5% available iodine)"
+      ],
+      "purpose": [
+        "Purpose First aid Antiseptic"
+      ],
+      "indications_and_usage": [
+        "Uses First aid to help prevent infection in minor cuts scrapes burns"
+      ],
+      "warnings": [
+        "Warnings For external use only"
+      ],
+      "do_not_use": [
+        "Do not use in the eyes over large areas of the body If you are allergic to povidone-iodine or any other ingredients in this preparation"
+      ],
+      "ask_doctor": [
+        "Ask a doctor before use if you have deep or puncture wounds serious burns animal bites"
+      ],
+      "stop_use": [
+        "Stop use and ask a doctor if the condition persists or gets worse you need to use this product for more than 1 week"
+      ],
+      "keep_out_of_reach_of_children": [
+        "Keep out of reach of children If swallowed, get medical help or contact a Poison Control Center right away."
+      ],
+      "dosage_and_administration": [
+        "Directions clean the affected area spray a small amount of the product on the area 1 to 3 times daily may be covered with a sterile bandage if bandaged, let dry first"
+      ],
+      "storage_and_handling": [
+        "Other information store at 25⁰C (77⁰F); excursions permitted between 15⁰-30⁰C (59⁰-86⁰F) Do Not Freeze"
+      ],
+      "inactive_ingredient": [
+        "Inactive ingredients pareth 25-9, purified water, sodium hydroxide Questions? 1-555-0100"
+      ],
+      "package_label_principal_display_panel": [
+        "PACKAGE LABEL.PRINCIPAL DISPLAY PANEL NEW LOOK! HOSPITAL TRUSTED SINCE 1955 BETADINE ® ANTISEPTIC 5% POVIDONE-IODINE First Aid Antiseptic Spray √ Ideal for Minor Cuts, Wounds, Scrapes & Burns √ Kills 99.9% of Germs * To Prevent Infection √ Works in Seconds t √ No Stinging or Burning 3 fl oz (88.7mL) Helps protect against skin infection Golden brown color indicates area treated Visit www.Betadine.com for more information * commonlly associated with skin infections. t based on in vitro lab data. Dist. by: Atlantis Consumer Healthcare Inc. Bridgewater, NJ 08807 USA ©2024 Atlantis Consumer Healthcare Inc. Betadine is a registered trademark of Atlantis Consumer Healthcare Inc. A0324"
+      ],
+      "set_id": "00002127-02bc-4c66-b0c3-ca29d8224afc",
+      "id": "b8f5797b-73e1-4201-b824-2cdd50c90497",
+      "effective_time": "20250102",
+      "version": "1",
+      "openfda": {
+        "application_number": [
+          "M003"
+        ],
+        "brand_name": [
+          "Betadine"
+        ],
+        "generic_name": [
+          "POVIDONE-IODINE"
+        ],
+        "manufacturer_name": [
+          "Atlantis Consumer Healthcare, Inc."
+        ],
+        "product_ndc": [
+          "67618-192"
+        ],
+        "product_type": [
+          "HUMAN OTC DRUG"
+        ],
+        "route": [
+          "TOPICAL"
+        ],
+        "substance_name": [
+          "POVIDONE-IODINE"
+        ],
+        "rxcui": [
+          "108204",
+          "238850"
+        ],
+        "spl_id": [
+          "b8f5797b-73e1-4201-b824-2cdd50c90497"
+        ],
+        "spl_set_id": [
+          "00002127-02bc-4c66-b0c3-ca29d8224afc"
+        ],
+        "package_ndc": [
+          "67618-192-03"
+        ],
+        "is_original_packager": [
+          true
+        ],
+        "upc": [
+          "0367618160039"
+        ],
+        "nui": [
+          "N0000175486",
+          "M0011640"
+        ],
+        "pharm_class_epc": [
+          "Antiseptic [EPC]"
+        ],
+        "pharm_class_cs": [
+          "Iodine [CS]"
+        ],
+        "unii": [
+          "85H0HZU99M"
+        ]
+      }
+    }
+  ]
+}

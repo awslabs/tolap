@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Tolap.Core</RootNamespace>
+    <PackageId>Tolap.Core</PackageId>
+    <Description>TOLAP (Tool-Object Level Access Protocol) core library - policy models, merging, resolution, enforcement, and signing</Description>
+  </PropertyGroup>
+
+</Project>

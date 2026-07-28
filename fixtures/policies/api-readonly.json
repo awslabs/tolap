@@ -1,0 +1,36 @@
+{
+  "version": "1.0",
+  "name": "internal-api-readonly",
+  "description": "Read-only access to internal APIs with admin endpoints hidden.",
+  "priority": 20,
+  "appliesToAll": false,
+  "sourcePatterns": ["api:internal:*"],
+  "permissions": {
+    "canQuery": true,
+    "canExport": false,
+    "readOnly": true
+  },
+  "objectRules": {
+    "endpointRules": {
+      "allowedEndpoints": [
+        "/api/v1/patients", "/api/v1/patients/*",
+        "/api/v1/encounters", "/api/v1/encounters/*"
+      ],
+      "hiddenEndpoints": ["/api/v1/admin/*", "/api/v1/billing/*"],
+      "allowedMethods": ["GET", "HEAD", "OPTIONS"]
+    },
+    "fieldRules": {
+      "hiddenFields": ["ssn", "date_of_birth"],
+      "maskedFields": [
+        {
+          "field": "full_name",
+          "maskType": "partial",
+          "parameters": { "showFirst": 1, "showLast": 0, "maskChar": "*" }
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxResults": 1000
+  }
+}

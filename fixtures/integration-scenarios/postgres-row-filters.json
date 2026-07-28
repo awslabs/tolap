@@ -1,0 +1,171 @@
+{
+  "description": "Row-filter enforcement against the seeded patients table. Each scenario runs a SELECT projecting the columns named in `query.columns`, applies the policy via the SDK wrapper, and asserts the resulting collection.",
+  "scenarios": [
+    {
+      "name": "equals-keeps-only-us-east",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "region", "operator": "equals", "value": "us-east" }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region", "status"] },
+      "expected": { "pass": true, "regions": ["us-east", "us-east"] }
+    },
+    {
+      "name": "not-equals-drops-us-east",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "region", "operator": "notEquals", "value": "us-east" }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region", "status"] },
+      "expected": { "pass": true, "idsEqual": [2, 4, 5, 6] }
+    },
+    {
+      "name": "in-keeps-us-east-and-us-west",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "region", "operator": "in", "values": ["us-east", "us-west"] }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region", "status"] },
+      "expected": { "pass": true, "idsEqual": [1, 2, 3, 6] }
+    },
+    {
+      "name": "not-in-drops-eu-west-and-us-central",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "region", "operator": "notIn", "values": ["eu-west", "us-central"] }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region", "status"] },
+      "expected": { "pass": true, "idsEqual": [1, 2, 3, 6] }
+    },
+    {
+      "name": "greater-than-id-3",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "id", "operator": "greaterThan", "value": 3 }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region"] },
+      "expected": { "pass": true, "idsEqual": [4, 5, 6] }
+    },
+    {
+      "name": "less-than-id-3",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "id", "operator": "lessThan", "value": 3 }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region"] },
+      "expected": { "pass": true, "idsEqual": [1, 2] }
+    },
+    {
+      "name": "contains-Smith-in-full-name",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "full_name", "operator": "contains", "value": "Smith" }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "full_name", "region"] },
+      "expected": { "pass": true, "idsEqual": [1] }
+    },
+    {
+      "name": "starts-with-us-region",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "region", "operator": "startsWith", "value": "us-" }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region"] },
+      "expected": { "pass": true, "idsEqual": [1, 2, 3, 4, 6] }
+    },
+    {
+      "name": "matches-us-east-or-us-west-regex",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "region", "operator": "matches", "value": "us-(east|west)" }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region"] },
+      "expected": { "pass": true, "idsEqual": [1, 2, 3, 6] }
+    },
+    {
+      "name": "filters-AND-together-region-and-status",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "region", "operator": "equals", "value": "us-east" },
+            { "field": "status", "operator": "equals", "value": "active" }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region", "status"] },
+      "expected": { "pass": true, "idsEqual": [1, 3] }
+    },
+    {
+      "name": "missing-field-fails-closed",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "rowFilters": [
+            { "field": "ssn", "operator": "equals", "value": "anything" }
+          ]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region"] },
+      "expected": { "pass": true, "rowCount": 0 }
+    }
+  ]
+}

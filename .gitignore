@@ -1,0 +1,41 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.nupkg
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.egg
+
+# TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+.turbo/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test output
+coverage/
+TestResults/
+.pytest_cache/
+htmlcov/
+.coverage

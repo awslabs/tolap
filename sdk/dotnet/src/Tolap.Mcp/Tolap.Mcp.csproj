@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Tolap.Mcp</RootNamespace>
+    <PackageId>Tolap.Mcp</PackageId>
+    <Description>TOLAP (Tool-Object Level Access Protocol) MCP adapter - secure tool wrapping for MCP servers</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Tolap.Core\Tolap.Core.csproj" />
+    <ProjectReference Include="..\Tolap.Store\Tolap.Store.csproj" />
+  </ItemGroup>
+
+</Project>

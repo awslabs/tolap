@@ -1,0 +1,73 @@
+{
+  "description": "Single policy -- pass through unchanged",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "only-policy",
+      "priority": 10,
+      "permissions": { "canQuery": true, "canExport": true, "readOnly": false },
+      "objectRules": {
+        "allowedObjects": ["patients", "encounters"],
+        "hiddenObjects": ["admin"],
+        "fieldRules": {
+          "allowedFields": ["name", "age"],
+          "hiddenFields": ["ssn"],
+          "maskedFields": [
+            { "field": "email", "maskType": "hash", "parameters": { "algorithm": "sha256" } }
+          ]
+        },
+        "rowFilters": [
+          { "field": "region", "operator": "equals", "value": "us-east" }
+        ],
+        "tagRules": {
+          "allowedTags": ["public"],
+          "deniedTags": ["classified"]
+        },
+        "endpointRules": {
+          "allowedEndpoints": ["/api/v1/patients"],
+          "hiddenEndpoints": ["/api/v1/admin/*"],
+          "allowedMethods": ["GET", "HEAD"]
+        }
+      },
+      "limits": {
+        "maxResults": 1000,
+        "maxQueryTimeSeconds": 30,
+        "minSimilarityScore": 0.7,
+        "maxObjectSizeBytes": 52428800
+      }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["only-policy"],
+    "permissions": { "canQuery": true, "canExport": true, "readOnly": false },
+    "objectRules": {
+      "allowedObjects": ["patients", "encounters"],
+      "hiddenObjects": ["admin"],
+      "fieldRules": {
+        "allowedFields": ["name", "age"],
+        "hiddenFields": ["ssn"],
+        "maskedFields": [
+          { "field": "email", "maskType": "hash", "parameters": { "algorithm": "sha256" } }
+        ]
+      },
+      "rowFilters": [
+        { "field": "region", "operator": "equals", "value": "us-east" }
+      ],
+      "tagRules": {
+        "allowedTags": ["public"],
+        "deniedTags": ["classified"]
+      },
+      "endpointRules": {
+        "allowedEndpoints": ["/api/v1/patients"],
+        "hiddenEndpoints": ["/api/v1/admin/*"],
+        "allowedMethods": ["GET", "HEAD"]
+      }
+    },
+    "limits": {
+      "maxResults": 1000,
+      "maxQueryTimeSeconds": 30,
+      "minSimilarityScore": 0.7,
+      "maxObjectSizeBytes": 52428800
+    }
+  }
+}

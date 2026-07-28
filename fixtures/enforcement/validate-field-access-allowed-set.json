@@ -1,0 +1,17 @@
+{
+  "description": "Fields not in allowedFields set -- deny fields outside the allowed set",
+  "action": "validateFieldAccess",
+  "input": { "fields": ["name", "age", "ssn", "region"] },
+  "policy": {
+    "permissions": { "canQuery": true },
+    "objectRules": {
+      "fieldRules": {
+        "allowedFields": ["name", "age", "region"]
+      }
+    }
+  },
+  "expected": {
+    "allowed": ["name", "age", "region"],
+    "denied": ["ssn"]
+  }
+}
