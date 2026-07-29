@@ -151,20 +151,40 @@ The enforcement layer. Each Secure Tool Wrapper wraps a data source and enforces
 
 ### 5. Secure Tool Factory
 
-Creates and initializes Secure Tool Wrapper instances with the correct security context for a given user.
+Creates a Secure Tool Wrapper of the correct type for a signed Security Context.
 
 **Responsibilities:**
-- Accept a Security Context (or user identity to build one)
-- Determine which data sources the user can access
-- For each accessible source: load connection configuration and credentials
-- Instantiate the appropriate Secure Tool Wrapper type
-- Initialize the wrapper with the user's effective policy (via `SetSecurityContext()`)
-- Return the set of ready-to-use tools
+- Accept a signed Security Context and validate its signature and expiry
+- Refuse to produce a tool at all when the context is unusable, or when `canQuery` is false
+- Determine the source's **category** from the `category` segment of its signed
+  `sourceConnectionId` (connector-spec §1)
+- Instantiate the Secure Tool Wrapper that enforces that category
+- Return the ready-to-use tool
 
 **Properties:**
-- The factory is the composition root for secure tools -- agents receive tools from the factory, never constructing them directly
-- The factory can create tools for all accessible sources or for a specific subset
-- Credential resolution happens here, not in the wrapper (separation of concerns)
+- The factory is the composition root for secure tools — agents receive tools from the
+  factory, never constructing them directly. That is what makes §4's "the wrapper is the
+  only path" structural rather than a convention everyone has to remember.
+- **One context governs one data source** (§1), so the factory returns one tool per
+  context. A caller holding contexts for several sources calls it per context.
+- **Dispatch reads the signed category.** Taking it from unsigned configuration instead
+  would let a flipped `db` → `api` select the wrapper that enforces the *other*
+  category's rules — and `endpointRules` do not constrain a SQL query. Inside the signed
+  bytes, changing it invalidates the signature.
+
+**Deliberately out of scope — and why:**
+
+| Not the factory's job | Reason |
+| --- | --- |
+| Resolving credentials | The SDK never holds a connection: the record-shaped wrapper hands back rewritten SQL for the caller to execute, and the HTTP wrapper is given its client by the caller. Nothing on the enforcement path takes a secret as input, so accepting one would add secret-handling surface for no enforcement benefit. Same reasoning as §9's removal of `maxQueryTimeSeconds`: the SDK cannot enforce what it does not own. |
+| Pinning connection configuration | A deployment concern. The factory takes the transport it needs as an argument and opens nothing itself. |
+| Holding the user's Security Context | Wrappers are **stateless** and take the context per call. A context stored on a shared wrapper can outlive the request that supplied it and be reused for the next caller, who may be a different user. |
+
+> **Note on earlier drafts.** This section previously described a factory that resolved
+> credentials, iterated a multi-source `policies` array, and injected the context into a
+> wrapper via `setSecurityContext()`. No SDK implements that shape, and the last of those
+> is the statefulness hazard above. The implementation guides' Step 5 has been corrected
+> to match what ships.
 
 ## Data Flow
 
@@ -192,7 +212,7 @@ sequenceDiagram
 
     SC->>Factory: Transport signed context
 
-    Note over Factory: Validate signature and expiry<br/>Load data source configurations<br/>Resolve credentials<br/>Instantiate Secure Tool Wrappers<br/>Call SetSecurityContext()
+    Note over Factory: Validate signature and expiry<br/>Read the signed category (§1)<br/>Instantiate the matching Secure Tool Wrapper<br/>No credentials, no stored context
 
     Factory->>Agent: Return tool set
 

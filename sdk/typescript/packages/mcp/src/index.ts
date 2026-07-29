@@ -34,3 +34,9 @@ export {
   type RequestArgs,
   type FetchLike,
 } from "./http-wrapper.js";
+export {
+  SecureToolFactory,
+  ToolCreationError,
+  type SecureToolFactoryOptions,
+  type SecureTool,
+} from "./factory.js";

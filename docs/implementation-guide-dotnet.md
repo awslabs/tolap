@@ -661,6 +661,15 @@ public sealed class SecurityContextBuilder : ISecurityContextBuilder
 
 Each Secure Tool Wrapper wraps a data source and enforces the effective policy. Here is a C# template:
 
+> **This step is illustrative.** It shows how a wrapper enforces a policy, written from
+> scratch so the enforcement steps are visible. The **shipped** wrappers differ in one
+> important way: they are stateless and take the `SecurityContext` as an argument on every
+> call, rather than storing it via a `setSecurityContext()`-style method as the sketch below
+> does. A context held on a shared wrapper instance can outlive the request that supplied it
+> and be reused for the next caller — who may be a different user. Prefer the shipped
+> wrappers (see Step 5); read this step to understand what they do internally.
+
+
 ```csharp
 // ── Data Source Abstraction ──────────────────────────────────────────
 
@@ -902,173 +911,89 @@ Different source categories require different enforcement strategies:
 - Object size limits are enforced before download
 - Object metadata masking is applied to listing results
 
-## Step 5: Implement the Secure Tool Factory
+## Step 5: Use the Secure Tool Factory
 
-The factory creates initialized Secure Tool Wrapper instances for a user.
+The SDK ships the factory: `SecureToolFactory` in `Tolap.Mcp`. It is the composition root
+for enforced tools — an agent receives its tools from it and never constructs one, which is
+what makes "the wrapper is the only path to the source" structural rather than a convention
+every call site has to remember.
 
 ```csharp
-// ── Supporting Abstractions ──────────────────────────────────────────
+using Tolap.Mcp;
 
-public sealed record DataSourceConnection(
-    Guid ConnectionId,
-    string Type,
-    string Name,
-    string ConnectionString);
+var factory = new SecureToolFactory(
+    new SecureToolFactoryOptions(SigningKey: signingKey),
+    // Only needed for `api` sources. The SDK never opens a connection of its own, so you
+    // supply the client; omitting it and asking for an api tool throws rather than
+    // constructing a default HttpClient that would bypass your handler chain, proxy and
+    // timeout configuration.
+    httpClientFactory.CreateClient("internal-api"));
 
-public interface IDataSourceRegistry
+SecureTool tool;
+try
 {
-    Task<DataSourceConnection> GetConnectionAsync(
-        Guid connectionId,
-        CancellationToken cancellationToken = default);
+    tool = factory.CreateTool(signedContext);
+}
+catch (ToolCreationException)
+{
+    // No tool at all: the context was forged, expired, carried no policy, named an
+    // unparseable source, or CanQuery was false. Failing here rather than handing back a
+    // wrapper that denies every call keeps a caller from reading the denial as a
+    // transient error and retrying.
+    throw;
 }
 
-public interface ICredentialResolver
+// Exactly one of the two is non-null, and `Category` says which.
+var result = tool.Category switch
 {
-    Task<object> ResolveAsync(
-        DataSourceConnection connection,
-        CancellationToken cancellationToken = default);
-}
-
-// ── Secure Tool Factory ──────────────────────────────────────────────
-
-public interface ISecureToolFactory
-{
-    Task<IReadOnlyList<ISecureToolWrapper>> CreateAllAccessibleToolsAsync(
-        SecurityContext securityContext,
-        CancellationToken cancellationToken = default);
-
-    Task<ISecureToolWrapper> CreateToolForSourceAsync(
-        SecurityContext securityContext,
-        Guid sourceConnectionId,
-        CancellationToken cancellationToken = default);
-}
-
-public sealed class SecureToolFactory : ISecureToolFactory
-{
-    private readonly IDataSourceRegistry _dataSourceRegistry;
-    private readonly ICredentialResolver _credentialResolver;
-
-    public SecureToolFactory(
-        IDataSourceRegistry dataSourceRegistry,
-        ICredentialResolver credentialResolver)
-    {
-        _dataSourceRegistry = dataSourceRegistry;
-        _credentialResolver = credentialResolver;
-    }
-
-    public async Task<IReadOnlyList<ISecureToolWrapper>> CreateAllAccessibleToolsAsync(
-        SecurityContext securityContext,
-        CancellationToken cancellationToken = default)
-    {
-        var tools = new List<ISecureToolWrapper>();
-
-        foreach (var policy in securityContext.Policies)
-        {
-            if (!policy.CanQuery)
-            {
-                continue; // Skip sources the user cannot query
-            }
-
-            var wrapper = await CreateWrapperAsync(
-                securityContext, policy, cancellationToken);
-            tools.Add(wrapper);
-        }
-
-        return tools;
-    }
-
-    public async Task<ISecureToolWrapper> CreateToolForSourceAsync(
-        SecurityContext securityContext,
-        Guid sourceConnectionId,
-        CancellationToken cancellationToken = default)
-    {
-        var policy = securityContext.Policies
-            .FirstOrDefault(p => p.SourceConnectionId == sourceConnectionId)
-            ?? throw new InvalidOperationException(
-                $"No policy found for source: {sourceConnectionId}");
-
-        return await CreateWrapperAsync(securityContext, policy, cancellationToken);
-    }
-
-    private async Task<ISecureToolWrapper> CreateWrapperAsync(
-        SecurityContext securityContext,
-        EffectivePolicy policy,
-        CancellationToken cancellationToken)
-    {
-        var source = await _dataSourceRegistry.GetConnectionAsync(
-            policy.SourceConnectionId, cancellationToken);
-        var credentials = await _credentialResolver.ResolveAsync(source, cancellationToken);
-
-        var wrapper = CreateWrapperForSourceType(source, credentials);
-        wrapper.SetSecurityContext(
-            securityContext.UserId,
-            securityContext.TenantId,
-            policy.SourceConnectionId,
-            policy);
-
-        return wrapper;
-    }
-
-    private static ISecureToolWrapper CreateWrapperForSourceType(
-        DataSourceConnection source,
-        object credentials)
-    {
-        return source.Type.ToLowerInvariant() switch
-        {
-            "postgresql" or "mysql" or "sqlserver" or "athena"
-                or "bigquery" or "redshift" or "oracle" or "mariadb"
-                => CreateDatabaseWrapper(source, credentials),
-
-            "rest" or "graphql" or "soap" or "fhir" or "grpc"
-                => CreateApiWrapper(source, credentials),
-
-            "bedrock-kb" or "opensearch" or "elasticsearch"
-                or "azure-ai-search" or "vertex-ai-search"
-                => CreateKnowledgebaseWrapper(source, credentials),
-
-            "s3" or "azure-blob" or "gcs"
-                => CreateStorageWrapper(source, credentials),
-
-            _ => throw new NotSupportedException(
-                $"Unsupported source type: {source.Type}")
-        };
-    }
-
-    // These factory methods return concrete wrapper implementations.
-    // Each concrete type provides the appropriate IQueryRewriter and
-    // IDataSource for its source category.
-
-    private static ISecureToolWrapper CreateDatabaseWrapper(
-        DataSourceConnection source, object credentials)
-    {
-        // Concrete implementation would instantiate the database-specific
-        // IDataSource and IQueryRewriter (e.g., SqlQueryRewriter)
-        throw new NotImplementedException(
-            "Replace with your SecureDatabaseWrapper implementation.");
-    }
-
-    private static ISecureToolWrapper CreateApiWrapper(
-        DataSourceConnection source, object credentials)
-    {
-        throw new NotImplementedException(
-            "Replace with your SecureApiWrapper implementation.");
-    }
-
-    private static ISecureToolWrapper CreateKnowledgebaseWrapper(
-        DataSourceConnection source, object credentials)
-    {
-        throw new NotImplementedException(
-            "Replace with your SecureKnowledgebaseWrapper implementation.");
-    }
-
-    private static ISecureToolWrapper CreateStorageWrapper(
-        DataSourceConnection source, object credentials)
-    {
-        throw new NotImplementedException(
-            "Replace with your SecureStorageWrapper implementation.");
-    }
-}
+    SourceCategory.Api => await UseHttpAsync(tool.HttpTool!, signedContext),
+    _ => UseRecords(tool.RecordTool!, signedContext)
+};
 ```
+
+### What the factory decides
+
+The wrapper you get is chosen by the **category** segment of the signed
+`SourceConnectionId` (`category:namespace:name`, connector-spec section 1):
+
+| Category | Wrapper | Why |
+| --- | --- | --- |
+| `db`, `kb`, `storage` | `SecureContextToolWrapper` | All three return records — rows, chunks, listing entries — and share the post-execution pipeline. |
+| `api` | `SecureHttpToolWrapper` | HTTP-shaped: status lines, headers, redirects. |
+
+Reading the category from the *signed* identifier is deliberate. A category taken from
+unsigned configuration could disagree with the policy the context carries, and flipping
+`db` to `api` would select the wrapper that enforces the other category's rules —
+`endpointRules` do not constrain a SQL query. Inside the signed bytes, changing it
+invalidates the signature.
+
+Use `factory.CategoryOf(context)` to branch before requesting a tool.
+
+### What the factory does not do
+
+- **No credentials.** The SDK never holds a connection: the record wrapper hands back
+  rewritten SQL for you to execute, and the HTTP wrapper is given its `HttpClient` by you.
+  Nothing on the enforcement path takes a secret as input, so the factory accepts none.
+- **No stored context.** Wrappers are **stateless**; the context is supplied per call and
+  re-validated every time. A context held on a shared wrapper could outlive the request
+  that supplied it and be reused for the next caller, who may be a different user. This is
+  why there is no `SetSecurityContext()` — an earlier draft of this guide described one,
+  and it does not exist.
+- **One context, one source.** A `SecurityContext` carries a single effective policy
+  (architecture.md section 1), so the factory returns one tool. Hold several contexts and
+  call it per context.
+
+### Registering it
+
+```csharp
+services.AddSingleton(new SecureToolFactoryOptions(SigningKey: signingKey));
+services.AddScoped<SecureToolFactory>();
+```
+
+Scoped rather than singleton only because a request-scoped `HttpClient` is the common case;
+the factory itself holds no per-request state, so a singleton is equally correct when the
+client is too.
+
 
 ## Step 6: Wire It Together
 
@@ -1076,19 +1001,18 @@ Here is the complete flow from request to results:
 
 ```csharp
 using Microsoft.Extensions.DependencyInjection;
+using Tolap.Core;
+using Tolap.Mcp;
 
 // ── Dependency Injection Registration ────────────────────────────────
 
 public static class TolapServiceExtensions
 {
-    public static IServiceCollection AddTolap(this IServiceCollection services)
+    public static IServiceCollection AddTolap(this IServiceCollection services, string signingKey)
     {
         services.AddScoped<IPolicyStore, PolicyStore>();
-        services.AddScoped<IPolicyResolutionEngine, PolicyResolutionEngine>();
-        services.AddScoped<ISecurityContextBuilder, SecurityContextBuilder>();
-        services.AddScoped<ISecureToolFactory, SecureToolFactory>();
-        services.AddScoped<IDataSourceRegistry, DataSourceRegistry>();
-        services.AddScoped<ICredentialResolver, CredentialResolver>();
+        services.AddSingleton(new SecureToolFactoryOptions(SigningKey: signingKey));
+        services.AddScoped<SecureToolFactory>();
         return services;
     }
 }
@@ -1097,51 +1021,62 @@ public static class TolapServiceExtensions
 
 public sealed class AgentOrchestrator
 {
-    private readonly ISecurityContextBuilder _contextBuilder;
-    private readonly ISecureToolFactory _toolFactory;
-    private readonly byte[] _signingKey;
+    private readonly IPolicyStore _store;
+    private readonly SecureToolFactory _factory;
+    private readonly string _signingKey;
 
-    public AgentOrchestrator(
-        ISecurityContextBuilder contextBuilder,
-        ISecureToolFactory toolFactory,
-        byte[] signingKey)
+    public AgentOrchestrator(IPolicyStore store, SecureToolFactory factory, string signingKey)
     {
-        _contextBuilder = contextBuilder;
-        _toolFactory = toolFactory;
+        _store = store;
+        _factory = factory;
         _signingKey = signingKey;
     }
 
     public async Task<object> HandleAgentRequestAsync(
         string authenticatedUserId,
-        Guid tenantId,
-        IReadOnlyList<AccessibleSource> accessibleSources,
+        string tenantId,
+        string sourceConnectionId,
         string request,
         CancellationToken cancellationToken = default)
     {
-        // 1. Resolve policies and build security context
-        var context = await _contextBuilder.BuildAsync(
-            authenticatedUserId, tenantId, accessibleSources, cancellationToken);
-        var signedContext = _contextBuilder.Sign(context, _signingKey);
+        // 1. Resolve the effective policy for ONE source and sign it. One context governs
+        //    one data source, so an agent reaching several sources gets one context each.
+        var policy = PolicyResolutionEngine.Resolve(
+            authenticatedUserId,
+            tenantId,
+            sourceConnectionId,
+            await _store.GetAssignmentsAsync(authenticatedUserId, cancellationToken),
+            await _store.GetDefinitionsAsync(cancellationToken),
+            getGroups: _ => Array.Empty<string>(),
+            getRoles: _ => Array.Empty<string>());
 
-        // 2. If executing in a different process/service, serialize for transport
-        // string serialized = _contextBuilder.SerializeForTransport(signedContext);
-        // ... send via queue, header, or RPC ...
-        // var signedContext = _contextBuilder.DeserializeAndValidate(serialized, _signingKey);
+        var signedContext = SecurityContextSigner.Sign(
+            new SecurityContext(
+                Version: "1.0",
+                UserId: authenticatedUserId,
+                TenantId: tenantId,
+                IssuedAt: DateTimeOffset.UtcNow,
+                ExpiresAt: DateTimeOffset.UtcNow.AddHours(1),
+                Policies: new[] { policy }),
+            _signingKey);
 
-        // 3. Create secure tools
-        var tools = await _toolFactory.CreateAllAccessibleToolsAsync(
-            signedContext, cancellationToken);
+        // 2. If executing in a different process/service, serialize for transport. The
+        //    signature covers the whole envelope including the expiry, so a captured
+        //    context cannot be given a longer life.
 
-        // 4. Give tools to the agent runtime
-        var agent = CreateAgent(tools);
-        var result = await agent.ExecuteAsync(request, cancellationToken);
+        // 3. Build the enforcing tool. The factory picks the wrapper from the signed
+        //    category and throws outright if the context does not validate.
+        var tool = _factory.CreateTool(signedContext);
 
-        return result;
+        // 4. Give the tool to the agent runtime, passing the context on each call.
+        var agent = CreateAgent(tool, signedContext);
+        return await agent.ExecuteAsync(request, cancellationToken);
     }
 
-    private static IAgent CreateAgent(IReadOnlyList<ISecureToolWrapper> tools)
+    private static IAgent CreateAgent(SecureTool tool, SecurityContext context)
     {
-        // Plug into your agent framework (Strands SDK, Semantic Kernel, etc.)
+        // Plug into your agent framework (Strands SDK, Semantic Kernel, etc.). The context
+        // travels with each call rather than being stored on the tool.
         throw new NotImplementedException(
             "Replace with your agent runtime initialization.");
     }
@@ -1154,7 +1089,10 @@ public interface IAgent
 }
 ```
 
-The agent receives tools that can only return data the user is authorized to see. The agent does not need to know about security policies, check permissions, or filter results. Enforcement is invisible and non-bypassable.
+The agent receives a tool that can only return data the user is authorized to see. It does
+not need to know about security policies, check permissions, or filter results. Enforcement
+is invisible and non-bypassable — provided the tool came from the factory, which is the
+point of routing construction through it.
 
 ## Testing Recommendations
 

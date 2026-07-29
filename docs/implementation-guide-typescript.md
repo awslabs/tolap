@@ -660,6 +660,15 @@ function dateReviver(key: string, value: unknown): unknown {
 
 Each Secure Tool Wrapper wraps a data source and enforces the effective policy. Here is the base wrapper and the enforcement logic:
 
+> **This step is illustrative.** It shows how a wrapper enforces a policy, written from
+> scratch so the enforcement steps are visible. The **shipped** wrappers differ in one
+> important way: they are stateless and take the `SecurityContext` as an argument on every
+> call, rather than storing it via a `setSecurityContext()`-style method as the sketch below
+> does. A context held on a shared wrapper instance can outlive the request that supplied it
+> and be reused for the next caller — who may be a different user. Prefer the shipped
+> wrappers (see Step 5); read this step to understand what they do internally.
+
+
 ### Data Source Interfaces
 
 ```typescript
@@ -883,188 +892,72 @@ Different source categories require different enforcement strategies:
 - Object size limits are enforced before download
 - Object metadata masking is applied to listing results
 
-## Step 5: Implement the Secure Tool Factory
+## Step 5: Use the Secure Tool Factory
 
-The factory creates initialized Secure Tool Wrapper instances for a user.
-
-### Data Source Registry and Credential Resolver
+The SDK ships the factory: `SecureToolFactory` in `@tolap/mcp`. It is the composition root
+for enforced tools — an agent receives its tools from it and never constructs one, which is
+what makes "the wrapper is the only path to the source" structural rather than a convention
+every call site has to remember.
 
 ```typescript
-interface DataSourceConnection {
-  connectionId: UUID;
-  type: string;
-  config: Record<string, string>;
-}
+import { SecureToolFactory, ToolCreationError } from "@tolap/mcp";
 
-interface Credentials {
-  readonly [key: string]: string;
-}
+const factory = new SecureToolFactory({
+  signingKey: SIGNING_KEY,
+  // Only needed for `api` sources. The SDK never opens a connection of its own, so you
+  // supply the transport; omitting it and asking for an api tool is an error rather than
+  // a silent fallback to global `fetch` that would bypass your proxy, timeout and retry
+  // configuration.
+  fetchFn: myFetch,
+  baseUrl: "https://api.internal",
+});
 
-interface DataSourceRegistry {
-  getConnection(connectionId: UUID): Promise<DataSourceConnection>;
-}
-
-interface CredentialResolver {
-  resolve(source: DataSourceConnection): Promise<Credentials>;
+let tool;
+try {
+  tool = factory.createTool(signedContext);
+} catch (error) {
+  if (error instanceof ToolCreationError) {
+    // No tool at all: the context was forged, expired, carried no policy, named an
+    // unparseable source, or `canQuery` was false. Failing here rather than handing back
+    // a wrapper that denies every call keeps a caller from reading the denial as a
+    // transient error and retrying.
+  }
+  throw error;
 }
 ```
 
-### Factory Implementation
+### What the factory decides
 
-```typescript
-class SecureToolFactory {
-  constructor(
-    private readonly policyEngine: PolicyResolutionEngine,
-    private readonly dataSourceRegistry: DataSourceRegistry,
-    private readonly credentialResolver: CredentialResolver,
-  ) {}
+The wrapper you get is chosen by the **category** segment of the signed
+`sourceConnectionId` (`category:namespace:name`, connector-spec §1):
 
-  async createAllAccessibleTools(
-    securityContext: SecurityContext,
-  ): Promise<SecureToolWrapper<DataSource>[]> {
-    const tools: SecureToolWrapper<DataSource>[] = [];
+| Category | Wrapper | Why |
+| --- | --- | --- |
+| `db`, `kb`, `storage` | `SecureContextToolWrapper` | All three return records — rows, chunks, listing entries — and share the post-execution pipeline. |
+| `api` | `SecureHttpToolWrapper` | HTTP-shaped: status lines, headers, redirects. |
 
-    for (const policy of securityContext.policies) {
-      if (!policy.canQuery) {
-        continue; // Skip sources the user cannot query
-      }
+Reading the category from the *signed* identifier is deliberate. A category taken from
+unsigned configuration could disagree with the policy the context carries, and flipping
+`db` to `api` would select the wrapper that enforces the other category's rules —
+`endpointRules` do not constrain a SQL query. Inside the signed bytes, changing it
+invalidates the signature.
 
-      const source = await this.dataSourceRegistry.getConnection(
-        policy.sourceConnectionId,
-      );
-      const credentials = await this.credentialResolver.resolve(source);
+Use `factory.categoryOf(context)` to branch before requesting a tool.
 
-      const wrapper = this.createWrapperForSourceType(
-        source.type,
-        source,
-        credentials,
-      );
-      wrapper.setSecurityContext(
-        securityContext.userId,
-        securityContext.tenantId,
-        policy.sourceConnectionId,
-        policy,
-      );
-      tools.push(wrapper);
-    }
+### What the factory does not do
 
-    return tools;
-  }
+- **No credentials.** The SDK never holds a connection: the record wrapper hands back
+  rewritten SQL for you to execute, and the HTTP wrapper is given its transport by you.
+  Nothing on the enforcement path takes a secret as input, so the factory accepts none.
+- **No stored context.** Wrappers are **stateless**; the context is supplied per call and
+  re-validated every time. A context held on a shared wrapper could outlive the request
+  that supplied it and be reused for the next caller, who may be a different user. This is
+  why there is no `setSecurityContext()` — an earlier draft of this guide described one,
+  and it does not exist.
+- **One context, one source.** A `SecurityContext` carries a single effective policy
+  (architecture.md §1), so the factory returns one tool. Hold several contexts and call it
+  per context.
 
-  async createToolForSource(
-    securityContext: SecurityContext,
-    sourceConnectionId: UUID,
-  ): Promise<SecureToolWrapper<DataSource>> {
-    const policy = securityContext.policies.find(
-      (p) => p.sourceConnectionId === sourceConnectionId,
-    );
-    if (policy === undefined) {
-      throw new Error(
-        `No policy found for source: ${sourceConnectionId}`,
-      );
-    }
-
-    const source = await this.dataSourceRegistry.getConnection(
-      sourceConnectionId,
-    );
-    const credentials = await this.credentialResolver.resolve(source);
-
-    const wrapper = this.createWrapperForSourceType(
-      source.type,
-      source,
-      credentials,
-    );
-    wrapper.setSecurityContext(
-      securityContext.userId,
-      securityContext.tenantId,
-      sourceConnectionId,
-      policy,
-    );
-    return wrapper;
-  }
-
-  private createWrapperForSourceType(
-    sourceType: string,
-    source: DataSourceConnection,
-    credentials: Credentials,
-  ): SecureToolWrapper<DataSource> {
-    switch (sourceType) {
-      case "postgresql":
-      case "mysql":
-      case "sqlserver":
-      case "athena":
-        return new SecureDatabaseWrapper(
-          createDatabaseSource(source, credentials),
-        );
-
-      case "rest":
-      case "graphql":
-      case "soap":
-      case "fhir":
-      case "grpc":
-        return new SecureApiWrapper(
-          createApiSource(source, credentials),
-        );
-
-      case "bedrock-kb":
-      case "opensearch":
-      case "elasticsearch":
-        return new SecureKnowledgebaseWrapper(
-          createKnowledgebaseSource(source, credentials),
-        );
-
-      case "s3":
-      case "azure-blob":
-      case "gcs":
-        return new SecureStorageWrapper(
-          createStorageSource(source, credentials),
-        );
-
-      default:
-        throw new Error(`Unsupported source type: ${sourceType}`);
-    }
-  }
-}
-
-// ── Source-specific wrapper stubs ────────────────────────────────────────
-// Each subclass overrides analyzeQuery, injectWhereClause, and applyLimit
-// with source-appropriate logic.
-
-class SecureDatabaseWrapper extends SecureToolWrapper<DataSource> {}
-class SecureApiWrapper extends SecureToolWrapper<DataSource> {}
-class SecureKnowledgebaseWrapper extends SecureToolWrapper<DataSource> {}
-class SecureStorageWrapper extends SecureToolWrapper<DataSource> {}
-
-// ── Source creation functions (implement per your infrastructure) ────────
-
-function createDatabaseSource(
-  source: DataSourceConnection,
-  credentials: Credentials,
-): DataSource {
-  throw new Error("Implement for your database driver");
-}
-
-function createApiSource(
-  source: DataSourceConnection,
-  credentials: Credentials,
-): DataSource {
-  throw new Error("Implement for your HTTP client");
-}
-
-function createKnowledgebaseSource(
-  source: DataSourceConnection,
-  credentials: Credentials,
-): DataSource {
-  throw new Error("Implement for your vector store client");
-}
-
-function createStorageSource(
-  source: DataSourceConnection,
-  credentials: Credentials,
-): DataSource {
-  throw new Error("Implement for your storage client");
-}
-```
 
 ## Step 6: Wire It Together
 
@@ -1073,49 +966,54 @@ Here is the complete flow from request to results:
 ```typescript
 // ── In your request handler / orchestration layer ───────────────────────
 
+import { resolve, buildSecurityContext, signContext } from "@tolap/core";
+import { SecureToolFactory } from "@tolap/mcp";
+
 const SIGNING_KEY = process.env.TOLAP_SIGNING_KEY!;
 
 async function handleAgentRequest(
-  authenticatedUserId: UUID,
-  tenantId: UUID,
+  authenticatedUserId: string,
+  tenantId: string,
+  sourceConnectionId: string,
   request: string,
 ): Promise<unknown> {
-  // 1. Resolve policies and build security context
-  const accessibleSources = await getAccessibleSources(
+  // 1. Resolve the effective policy for ONE source and sign it. One context governs one
+  //    data source, so an agent reaching several sources gets one context each.
+  const policy = await resolve(
     authenticatedUserId,
     tenantId,
+    sourceConnectionId,
+    await policyStore.loadAssignments(authenticatedUserId),
+    await policyStore.loadDefinitions(),
+    (userId) => userDirectory.groupsFor(userId),
+    (userId) => userDirectory.rolesFor(userId),
   );
-  const engine = new PolicyResolutionEngine(policyStore);
-  const context = await buildSecurityContext(
-    authenticatedUserId,
-    tenantId,
-    accessibleSources,
-    engine,
+  const signedContext = signContext(
+    buildSecurityContext(authenticatedUserId, tenantId, policy),
+    SIGNING_KEY,
   );
-  const signedContext = signContext(context, SIGNING_KEY);
 
-  // 2. If executing in a different process/service, serialize for transport
-  // const serialized = serializeForTransport(signedContext);
+  // 2. If executing in a different process/service, serialize for transport. The
+  //    signature covers the whole envelope including the expiry, so a captured context
+  //    cannot be given a longer life.
+  // const serialized = serializeContext(signedContext);
   // ... send via queue, header, or RPC ...
-  // const signedContext = deserializeAndValidate(serialized, SIGNING_KEY);
 
-  // 3. Create secure tools
-  const factory = new SecureToolFactory(
-    engine,
-    dataSourceRegistry,
-    credentialResolver,
-  );
-  const tools = await factory.createAllAccessibleTools(signedContext);
+  // 3. Build the enforcing tool. The factory picks the wrapper from the signed category
+  //    and refuses outright if the context does not validate.
+  const factory = new SecureToolFactory({ signingKey: SIGNING_KEY, fetchFn: myFetch });
+  const tool = factory.createTool(signedContext);
 
-  // 4. Give tools to the agent runtime
-  const agent = createAgent(tools);
-  const result = await agent.execute(request);
-
-  return result;
+  // 4. Give the tool to the agent runtime, passing the context on each call.
+  const agent = createAgent(tool, signedContext);
+  return agent.execute(request);
 }
 ```
 
-The agent receives tools that can only return data the user is authorized to see. The agent does not need to know about security policies, check permissions, or filter results. Enforcement is invisible and non-bypassable.
+The agent receives a tool that can only return data the user is authorized to see. It does
+not need to know about security policies, check permissions, or filter results. Enforcement
+is invisible and non-bypassable — provided the tool came from the factory, which is the
+point of routing construction through it.
 
 ## Testing Recommendations
 
@@ -1236,11 +1134,9 @@ describe("TOLAP end-to-end", () => {
       engine,
     );
     const signed = signContext(context, TEST_SIGNING_KEY);
-    const tools = await factory.createAllAccessibleTools(signed);
+    const tool = factory.createTool(signed);
 
-    const results = await tools[0].executeQuery(
-      "SELECT * FROM patients",
-    );
+    const results = await executeQueryWith(tool, signed, "SELECT * FROM patients");
 
     // Verify: ssn column is not present, all rows are us-east
     for (const row of results) {
@@ -1249,17 +1145,14 @@ describe("TOLAP end-to-end", () => {
     }
   });
 
-  it("should deny access when no policies apply", async () => {
-    const context = await buildSecurityContext(
-      unknownUserId,
-      tenantId,
-      [],
-      engine,
-    );
+  it("should produce no tool at all when no policies apply", async () => {
+    // A user no policy applies to resolves to deny-all, so `canQuery` is false and the
+    // factory refuses to build a tool. Asserting the *absence of a tool* is stronger than
+    // asserting a later denial: there is no object a caller could accidentally use.
+    const context = await buildSecurityContext(unknownUserId, tenantId, denyAllPolicy);
     const signed = signContext(context, TEST_SIGNING_KEY);
-    const tools = await factory.createAllAccessibleTools(signed);
 
-    expect(tools).toHaveLength(0);
+    expect(() => factory.createTool(signed)).toThrow(ToolCreationError);
   });
 
   it("should reject an expired security context", () => {

@@ -157,6 +157,34 @@ untagged records.
 
 ### Added
 
+- **Secure Tool Factory** (`SecureToolFactory`) in all three SDKs — the composition root
+  `architecture.md` §5 documented but no SDK implemented. An agent receives its tools from
+  the factory and never constructs one, which is what makes §4's "the wrapper is the only
+  path to the source" structural rather than a convention every call site must remember.
+  It validates the signed context and then **refuses to produce a tool at all** when the
+  context is forged, expired, policy-less, names an unparseable source, or has `canQuery`
+  false — failing at composition time rather than handing back a wrapper that denies every
+  call, which a caller can misread as a transient error and retry.
+
+  Dispatch reads the **signed** category (the first segment of `sourceConnectionId`, §1):
+  `db`/`kb`/`storage` get the record-shaped wrapper, `api` gets the HTTP wrapper. Taking
+  the category from unsigned configuration instead would let a flipped `db` → `api` select
+  the wrapper that enforces the *other* category's rules, and `endpointRules` do not
+  constrain a SQL query.
+
+  Two things it deliberately does **not** do, both departures from the reference
+  implementation and from earlier drafts of the guides: it brokers **no credentials** (the
+  SDK never holds a connection — the record wrapper returns rewritten SQL and the HTTP
+  wrapper is handed its client, so nothing on the enforcement path takes a secret), and it
+  stores **no context** (wrappers stay stateless and take the context per call; a context
+  held on a shared wrapper can outlive its request and be reused for the next caller, who
+  may be a different user). There is consequently no `setSecurityContext()`.
+- **Source-identity parsing** (`parseSourceIdentity` / `parse_source_identity` /
+  `SourceIdentityParser`) — `category:namespace:name` per connector-spec §1, with the
+  category as a typed enum. Rejects a wrong segment count, an unknown category, and empty
+  segments; an empty namespace or name would otherwise let `db::` match a `db:*:*` pattern
+  while naming no real source. Returns null rather than throwing, and every caller in the
+  SDK treats null as a refusal.
 - **`docs/canonical-enforcement-spec.md`** — the normative cross-language
   specification for canonical signing, the enforcement pipeline and its order,
   null-vs-empty semantics, mask ranking, identity-failure semantics, timestamp

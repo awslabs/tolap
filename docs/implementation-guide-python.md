@@ -660,6 +660,15 @@ def _dict_to_security_context(data: dict[str, Any]) -> SecurityContext:
 
 Each Secure Tool Wrapper wraps a data source and enforces the effective policy. Here is a base class and a database-specific example:
 
+> **This step is illustrative.** It shows how a wrapper enforces a policy, written from
+> scratch so the enforcement steps are visible. The **shipped** wrappers differ in one
+> important way: they are stateless and take the `SecurityContext` as an argument on every
+> call, rather than storing it via a `setSecurityContext()`-style method as the sketch below
+> does. A context held on a shared wrapper instance can outlive the request that supplied it
+> and be reused for the next caller — who may be a different user. Prefer the shipped
+> wrappers (see Step 5); read this step to understand what they do internally.
+
+
 ```python
 from __future__ import annotations
 
@@ -869,128 +878,64 @@ Different source categories require different enforcement strategies:
 - Object size limits are enforced before download
 - Object metadata masking is applied to listing results
 
-## Step 5: Implement the Secure Tool Factory
+## Step 5: Use the Secure Tool Factory
 
-The factory creates initialized Secure Tool Wrapper instances for a user.
+The SDK ships the factory: `SecureToolFactory` in `tolap_mcp`. It is the composition
+root for enforced tools — an agent receives its tools from it and never constructs one,
+which is what makes "the wrapper is the only path to the source" structural rather than a
+convention every call site has to remember.
 
 ```python
-from __future__ import annotations
+from tolap_mcp import SecureMcpServerOptions, SecureToolFactory, ToolCreationError
 
-from abc import ABC, abstractmethod
-from typing import Any, Optional
-from uuid import UUID
+factory = SecureToolFactory(
+    SecureMcpServerOptions(signing_key=SIGNING_KEY),
+    # Only needed for `api` sources. The SDK never opens a connection of its own, so
+    # you supply the transport; omitting it and asking for an api tool is an error
+    # rather than a silent fallback that would bypass your proxy and timeout settings.
+    client=httpx.Client(base_url="https://api.internal"),
+)
 
-
-class DataSourceRegistry(Protocol):
-    """Protocol for looking up data source connection metadata."""
-
-    async def get_connection(self, connection_id: UUID) -> SourceConnection:
-        ...
-
-
-class CredentialResolver(Protocol):
-    """Protocol for resolving credentials for a data source."""
-
-    async def resolve(self, source: SourceConnection) -> dict[str, Any]:
-        ...
-
-
-@dataclass
-class SourceConnection:
-    connection_id: UUID
-    source_type: str
-    host: str
-    port: int = 0
-    database: str = ""
-    extra: dict[str, str] = field(default_factory=dict)
-
-
-class SecureToolFactory:
-    """Creates secure tool wrappers bound to a user's effective policies."""
-
-    def __init__(
-        self,
-        policy_engine: PolicyResolutionEngine,
-        data_source_registry: DataSourceRegistry,
-        credential_resolver: CredentialResolver,
-    ) -> None:
-        self._engine = policy_engine
-        self._registry = data_source_registry
-        self._credentials = credential_resolver
-
-    async def create_all_accessible_tools(
-        self, security_context: SecurityContext
-    ) -> list[SecureToolWrapper]:
-        tools: list[SecureToolWrapper] = []
-
-        for policy in security_context.policies:
-            if not policy.can_query:
-                continue  # Skip sources the user cannot query
-
-            source = await self._registry.get_connection(policy.source_connection_id)
-            credentials = await self._credentials.resolve(source)
-
-            wrapper = self._create_wrapper_for_source_type(
-                source.source_type, source, credentials
-            )
-            wrapper.set_security_context(
-                user_id=security_context.user_id,
-                tenant_id=security_context.tenant_id,
-                source_connection_id=policy.source_connection_id,
-                effective_policy=policy,
-            )
-            tools.append(wrapper)
-
-        return tools
-
-    async def create_tool_for_source(
-        self, security_context: SecurityContext, source_connection_id: UUID
-    ) -> SecureToolWrapper:
-        policy = next(
-            (
-                p
-                for p in security_context.policies
-                if p.source_connection_id == source_connection_id
-            ),
-            None,
-        )
-        if policy is None:
-            raise LookupError(
-                f"No policy found for source: {source_connection_id}"
-            )
-
-        source = await self._registry.get_connection(source_connection_id)
-        credentials = await self._credentials.resolve(source)
-
-        wrapper = self._create_wrapper_for_source_type(
-            source.source_type, source, credentials
-        )
-        wrapper.set_security_context(
-            user_id=security_context.user_id,
-            tenant_id=security_context.tenant_id,
-            source_connection_id=source_connection_id,
-            effective_policy=policy,
-        )
-        return wrapper
-
-    @staticmethod
-    def _create_wrapper_for_source_type(
-        source_type: str,
-        source: SourceConnection,
-        credentials: dict[str, Any],
-    ) -> SecureToolWrapper:
-        match source_type:
-            case "postgresql" | "mysql" | "sqlserver" | "athena":
-                return SecureDatabaseWrapper(source, credentials)
-            case "rest" | "graphql" | "soap" | "fhir" | "grpc":
-                return SecureApiWrapper(source, credentials)
-            case "bedrock-kb" | "opensearch" | "elasticsearch":
-                return SecureKnowledgebaseWrapper(source, credentials)
-            case "s3" | "azure-blob" | "gcs":
-                return SecureStorageWrapper(source, credentials)
-            case _:
-                raise ValueError(f"Unsupported source type: {source_type}")
+try:
+    tool = factory.create_tool(signed_context)
+except ToolCreationError as exc:
+    # No tool at all: the context was forged, expired, carried no policy, named an
+    # unparseable source, or `can_query` was false. Failing here rather than handing
+    # back a wrapper that denies every call keeps a caller from reading the denial as a
+    # transient error and retrying.
+    raise
 ```
+
+### What the factory decides
+
+The wrapper you get is chosen by the **category** segment of the signed
+`source_connection_id` (`category:namespace:name`, connector-spec section 1):
+
+| Category | Wrapper | Why |
+| --- | --- | --- |
+| `db`, `kb`, `storage` | `SecureMcpToolWrapper` | All three return records — rows, chunks, listing entries — and share the post-execution pipeline. |
+| `api` | `SecureHttpToolWrapper` | HTTP-shaped: status lines, headers, redirects. |
+
+Reading the category from the *signed* identifier is deliberate. A category taken from
+unsigned configuration could disagree with the policy the context carries, and flipping
+`db` to `api` would select the wrapper that enforces the other category's rules —
+`endpoint_rules` do not constrain a SQL query. Inside the signed bytes, changing it
+invalidates the signature.
+
+### What the factory does not do
+
+- **No credentials.** The SDK never holds a connection: the record wrapper hands back
+  rewritten SQL for you to execute, and the HTTP wrapper is given its client by you.
+  Nothing on the enforcement path takes a secret as input, so the factory accepts none.
+- **No stored context.** Wrappers are **stateless**; the context is supplied per call and
+  re-validated every time. A context held on a shared wrapper could outlive the request
+  that supplied it and be reused for the next caller, who may be a different user. This
+  is why there is no `set_security_context()` — an earlier draft of this guide described
+  one, and it does not exist.
+- **One context, one source.** `SecurityContext` carries a single effective policy
+  (architecture.md section 1), so the factory returns one tool. Hold several contexts and
+  call it per context.
+
 
 ## Step 6: Wire It Together
 
@@ -999,57 +944,57 @@ Here is the complete flow from request to results:
 ```python
 from __future__ import annotations
 
-import asyncio
-from uuid import UUID
+from tolap_core import resolve, sign_context, build_security_context
+from tolap_mcp import SecureMcpServerOptions, SecureToolFactory
 
-# Assume these are initialized with your concrete implementations:
-# policy_store: PolicyStore
-# user_directory: UserDirectory
-# data_source_registry: DataSourceRegistry
-# credential_resolver: CredentialResolver
-# SIGNING_KEY: bytes
-
-SIGNING_KEY = b"your-secret-signing-key"
+SIGNING_KEY = "your-secret-signing-key"
 
 
 async def handle_agent_request(
     authenticated_user_id: str,
-    tenant_id: UUID,
+    tenant_id: str,
+    source_connection_id: str,
     request: str,
     *,
     policy_store: PolicyStore,
     user_directory: UserDirectory,
-    data_source_registry: DataSourceRegistry,
-    credential_resolver: CredentialResolver,
 ) -> str:
-    engine = PolicyResolutionEngine(policy_store, user_directory)
-
-    # 1. Resolve policies and build security context
-    accessible_sources = await get_accessible_sources(
-        authenticated_user_id, tenant_id
+    # 1. Resolve the effective policy for ONE source and sign it. One context governs
+    #    one data source, so an agent reaching several sources gets one context each.
+    policy = resolve(
+        user_id=authenticated_user_id,
+        tenant_id=tenant_id,
+        source_connection_id=source_connection_id,
+        assignments=await policy_store.load_assignments(authenticated_user_id),
+        definitions=await policy_store.load_definitions(),
+        get_groups=user_directory.groups_for,
+        get_roles=user_directory.roles_for,
     )
-    context = build_security_context(
-        authenticated_user_id, tenant_id, accessible_sources, engine
+    signed_context = sign_context(
+        build_security_context(authenticated_user_id, tenant_id, [policy]),
+        SIGNING_KEY,
     )
-    signed_context = sign_context(context, SIGNING_KEY)
 
-    # 2. If executing in a different process/service, serialize for transport
-    # serialized = serialize_for_transport(signed_context)
+    # 2. If executing in a different process/service, serialize for transport. The
+    #    signature covers the whole envelope including the expiry, so a captured
+    #    context cannot be given a longer life.
+    # serialized = serialize_context(signed_context)
     # ... send via queue, header, or RPC ...
-    # signed_context = deserialize_and_validate(serialized, SIGNING_KEY)
 
-    # 3. Create secure tools
-    factory = SecureToolFactory(engine, data_source_registry, credential_resolver)
-    tools = await factory.create_all_accessible_tools(signed_context)
+    # 3. Build the enforcing tool. The factory picks the wrapper from the signed
+    #    category and refuses outright if the context does not validate.
+    factory = SecureToolFactory(SecureMcpServerOptions(signing_key=SIGNING_KEY))
+    tool = factory.create_tool(signed_context)
 
-    # 4. Give tools to the agent runtime
-    agent = create_agent(tools)
-    result = await agent.execute(request)
-
-    return result
+    # 4. Give the tool to the agent runtime, passing the context on each call.
+    agent = create_agent(tool, signed_context)
+    return await agent.execute(request)
 ```
 
-The agent receives tools that can only return data the user is authorized to see. The agent does not need to know about security policies, check permissions, or filter results. Enforcement is invisible and non-bypassable.
+The agent receives a tool that can only return data the user is authorized to see. It does
+not need to know about security policies, check permissions, or filter results. Enforcement
+is invisible and non-bypassable — provided the tool came from the factory, which is the
+point of routing construction through it.
 
 ## Testing Recommendations
 

@@ -35,6 +35,12 @@ from tolap_core.serialization import (
 )
 from tolap_core.merger import merge
 from tolap_core.resolution import resolve
+from tolap_core.source_identity import (
+    SourceCategory,
+    SourceIdentity,
+    parse_source_identity,
+    source_category,
+)
 from tolap_core.context import (
     build_security_context,
     deserialize_context,
@@ -117,6 +123,11 @@ __all__ = [
     "merge",
     # Resolution
     "resolve",
+    # Source identity (connector-spec section 1)
+    "SourceCategory",
+    "SourceIdentity",
+    "parse_source_identity",
+    "source_category",
     # Context / Signing
     "build_security_context",
     "deserialize_context",

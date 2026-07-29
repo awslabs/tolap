@@ -51,6 +51,14 @@ export {
   type GetRolesFn,
 } from "./resolution.js";
 
+// Source identity (connector-spec §1)
+export {
+  SourceCategory,
+  parseSourceIdentity,
+  sourceCategory,
+  type SourceIdentity,
+} from "./source-identity.js";
+
 // Context
 export {
   buildSecurityContext,
