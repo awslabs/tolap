@@ -50,7 +50,7 @@ jobs:
       TOLAP_TEST_MYSQL_PASSWORD: mysql
       TOLAP_TEST_MYSQL_DB: tolap_integration_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
@@ -101,7 +101,7 @@ jobs:
       TOLAP_TEST_MYSQL_PASSWORD: mysql
       TOLAP_TEST_MYSQL_DB: tolap_integration_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -154,7 +154,7 @@ jobs:
       TOLAP_TEST_MYSQL_PASSWORD: mysql
       TOLAP_TEST_MYSQL_DB: tolap_integration_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
@@ -192,7 +192,7 @@ jobs:
     name: Cross-SDK signing conformance
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
