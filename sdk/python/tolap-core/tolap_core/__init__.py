@@ -41,6 +41,20 @@ from tolap_core.source_identity import (
     parse_source_identity,
     source_category,
 )
+from tolap_core.kb_filter import (
+    DEFAULT_KB_METADATA_KEYS,
+    KbFilterClause,
+    KbFilterOp,
+    KbFilterResult,
+    UnpushedRule,
+    build_kb_filter,
+)
+from tolap_core.kb_providers import (
+    KbFilterConfidence,
+    KbProvider,
+    RenderedKbFilter,
+    render_kb_filter,
+)
 from tolap_core.context import (
     build_security_context,
     deserialize_context,
@@ -128,6 +142,17 @@ __all__ = [
     "SourceIdentity",
     "parse_source_identity",
     "source_category",
+    # kb provider-side metadata filters (connector-spec section 7)
+    "DEFAULT_KB_METADATA_KEYS",
+    "KbFilterClause",
+    "KbFilterConfidence",
+    "KbFilterOp",
+    "KbFilterResult",
+    "KbProvider",
+    "RenderedKbFilter",
+    "UnpushedRule",
+    "build_kb_filter",
+    "render_kb_filter",
     # Context / Signing
     "build_security_context",
     "deserialize_context",

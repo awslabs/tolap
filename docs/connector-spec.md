@@ -483,6 +483,39 @@ replacement for the post pass.
 
 **Post-retrieval:** the full pipeline, including the relevance floor.
 
+#### Provider-side filters — implemented, and deliberately weaker
+
+All three SDKs build these (`buildKbFilter` / `build_kb_filter` / `KbFilter.Build`, then a
+renderer per provider: Bedrock, OpenSearch, Elasticsearch, Azure AI Search, Vertex AI
+Search, pgvector). Only the Bedrock shape has been exercised against the live service; the
+other five are written from published filter grammar and report themselves as such, because
+"looks right" is not the same evidence as "observed to filter".
+
+The pushdown is **structurally** weaker than the post pass, not merely redundant, and the
+asymmetry is what makes it safe:
+
+- Post-retrieval extraction reads tags from `tags`, `Tags`, `labels`, `classification` and
+  `metadata.tags` — at any depth, matched with the §3.2 matcher. A provider filter cannot
+  express that; it tests one indexed field.
+- So a filter that matches nothing costs efficiency and nothing else. The post pass is
+  unconditional and still drops the chunk.
+- The failure to avoid is the reverse: a filter that excludes a chunk the policy *permits*.
+  An implementation MUST NOT approximate a rule it cannot express exactly — it reports the
+  rule as unpushed and leaves it to the post pass.
+
+Two consequences worth stating, because both invite a wrong implementation:
+
+| Situation | Required behaviour |
+| --- | --- |
+| `allowedTags: []` (deny-all) | No portable metadata predicate means "match no document" — an empty `in` list is variously an error, a no-op, or match-nothing. An implementation MUST NOT render it as a no-op filter, which would fail open. It reports deny-all and the caller **skips retrieval**. |
+| `allowedTags` with several candidate metadata keys | The post pass admits a chunk carrying an allowed tag under **any** key — a disjunction. ANDing a positive clause per key would demand it under *every* key and drop permitted chunks. Report unpushed instead. |
+
+The metadata key a filter targets is **deployment configuration**, supplied per source, and
+is not the same thing as the fixed tag-key set extraction uses. Extraction's set decides
+what counts as security metadata and so must stay outside integrator control; a filter key
+only names what the provider happens to index, and a wrong one yields no filter rather than
+wrong access.
+
 ### Category requirements
 
 - **Tag extraction MUST be robust.** Tags appear under differently-cased keys, nested in a
