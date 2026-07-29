@@ -340,5 +340,83 @@ public class InMemoryPolicyStoreTests
 
         events.Should().HaveCount(1);
         events[0].EventType.Should().Be(PolicyAuditEventType.PolicyRevoked);
+
+        // Asserting only the audit event let a fail-open revocation pass: the event fired
+        // while the assignment stayed active. Per canonical-enforcement-spec.md section 9
+        // the assignment must actually stop resolving.
+        var remaining = await store.GetAssignmentsForUserAsync(assignment.Assignee.Identifier);
+        remaining.Should().BeEmpty();
+    }
+
+    // -- Revocation (canonical-enforcement-spec.md section 9) --
+
+    [Fact]
+    public async Task RevokePolicy_RemovesTheAssignment()
+    {
+        var store = new InMemoryPolicyStore();
+        var assignment = CreateTestAssignment();
+        await store.AssignPolicyAsync(assignment);
+
+        (await store.ListAssignmentsAsync()).Should().HaveCount(1);
+
+        var revoked = await store.RevokePolicyAsync(
+            assignment.PolicyName, assignment.Assignee, assignment.Scope);
+
+        revoked.Should().BeTrue();
+        (await store.ListAssignmentsAsync()).Should().BeEmpty();
+        (await store.GetAssignmentsForUserAsync("user-001")).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RevokePolicy_AccessIsGoneAfterRevocation()
+    {
+        // The fail-open bug's real consequence: a revoked user kept resolving the policy.
+        var store = new InMemoryPolicyStore();
+        await store.CreatePolicyAsync(CreateTestPolicy());
+        var assignment = CreateTestAssignment();
+        await store.AssignPolicyAsync(assignment);
+
+        var before = await store.ResolveEffectivePolicyAsync(
+            "user-001", "tenant-001", "ds-1", _ => Array.Empty<string>(), _ => Array.Empty<string>());
+        before.Permissions.CanQuery.Should().BeTrue();
+        before.SourceProfiles.Should().Contain("test-policy");
+
+        await store.RevokePolicyAsync(assignment.PolicyName, assignment.Assignee, assignment.Scope);
+
+        var after = await store.ResolveEffectivePolicyAsync(
+            "user-001", "tenant-001", "ds-1", _ => Array.Empty<string>(), _ => Array.Empty<string>());
+        after.Permissions.CanQuery.Should().BeFalse();
+        after.SourceProfiles.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RevokePolicy_LeavesNonMatchingAssignmentsIntact()
+    {
+        var store = new InMemoryPolicyStore();
+        var target = CreateTestAssignment(identifier: "user-001");
+        var other = CreateTestAssignment(identifier: "user-002");
+        await store.AssignPolicyAsync(target);
+        await store.AssignPolicyAsync(other);
+
+        await store.RevokePolicyAsync(target.PolicyName, target.Assignee, target.Scope);
+
+        (await store.GetAssignmentsForUserAsync("user-001")).Should().BeEmpty();
+        (await store.GetAssignmentsForUserAsync("user-002")).Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task RevokePolicy_NoMatchingAssignment_ReturnsFalseAndEmitsNoEvent()
+    {
+        var store = new InMemoryPolicyStore();
+        var events = new List<PolicyAuditEvent>();
+        store.OnAuditEvent(events.Add);
+
+        var revoked = await store.RevokePolicyAsync(
+            "test-policy",
+            new Assignee(AssigneeType.User, "nobody"),
+            new AssignmentScope(TenantId: "tenant-001"));
+
+        revoked.Should().BeFalse();
+        events.Should().BeEmpty();
     }
 }

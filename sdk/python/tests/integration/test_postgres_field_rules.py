@@ -98,7 +98,12 @@ def _assert_mask(actual, original, mask: str) -> None:
         assert actual[-2:] == s[-2:]
         assert actual[2:-2] == "*" * (len(s) - 4)
     elif mask == "unchanged":
-        assert actual == str(original) or actual == original
+        # The shared fixture still labels this case "unchanged" and its comment
+        # still claims the original is returned when showFirst+showLast >=
+        # len(value). Per the canonical spec that is a disclosure bug: a partial
+        # mask that would reveal everything degrades to a full mask. Asserted
+        # against the spec here; the fixture label is corrected separately.
+        assert actual == "*" * len(str(original))
     elif mask == "partial-first-1-hash":
         s = str(original)
         assert actual[0] == s[0]

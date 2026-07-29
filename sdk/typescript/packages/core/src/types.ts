@@ -222,13 +222,38 @@ export interface FieldAccessResult {
 // Mask Restrictiveness
 // ---------------------------------------------------------------------------
 
+/**
+ * Ranked by how much of the original value is disclosed (canonical spec §6):
+ * `partial` leaks real characters, `hash` is irreversible but joinable, `full`
+ * leaks the length, `redact` leaks nothing, `null` leaks not even the field's
+ * presence. Higher rank wins a merge, so `null`/`redact` beat `partial` rather
+ * than losing to it.
+ */
 export const MASK_RESTRICTIVENESS: Record<string, number> = {
-  full: 5,
-  hash: 4,
-  partial: 3,
-  redact: 2,
-  null: 1,
+  partial: 1,
+  hash: 2,
+  full: 3,
+  redact: 4,
+  null: 5,
 };
+
+/**
+ * An unrecognized mask type (a typo, or a type from a newer schema version)
+ * must never be beaten by a known-but-weaker type, so it ranks above every
+ * known value.
+ */
+export const UNKNOWN_MASK_RESTRICTIVENESS: number =
+  Math.max(...Object.values(MASK_RESTRICTIVENESS)) + 1;
+
+/**
+ * Rank a mask type by how little of the value it discloses (higher = stricter).
+ *
+ * Anything that is not a known mask type ranks most restrictive so that merging
+ * can never downgrade an unknown mask into a weaker known one.
+ */
+export function maskRestrictiveness(maskType: MaskType | string): number {
+  return MASK_RESTRICTIVENESS[maskType] ?? UNKNOWN_MASK_RESTRICTIVENESS;
+}
 
 // ---------------------------------------------------------------------------
 // Deny-all helper

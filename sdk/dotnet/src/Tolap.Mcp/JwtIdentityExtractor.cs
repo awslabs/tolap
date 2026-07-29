@@ -10,11 +10,19 @@ namespace Tolap.Mcp;
 /// </summary>
 /// <remarks>
 /// By default this extractor <b>verifies the JWT signature</b> (HMAC /
-/// HS256-384-512) and the <c>exp</c> claim before trusting any identity claim.
-/// A token that fails verification throws <see cref="SecurityException"/> so the
-/// caller fails closed rather than resolving an attacker-supplied identity. The
-/// <c>none</c> algorithm and any algorithm outside the allow-list are rejected,
-/// defeating <c>alg</c>-confusion and unsigned-token attacks.
+/// HS256-384-512) and the <c>exp</c>/<c>nbf</c> claims before trusting any identity
+/// claim. The <c>none</c> algorithm and any algorithm outside the allow-list are
+/// rejected, defeating <c>alg</c>-confusion and unsigned-token attacks.
+///
+/// <para>
+/// Failure semantics follow canonical-enforcement-spec.md section 9 and are
+/// identical in all three SDKs: a credential that is <b>presented but invalid</b>
+/// — malformed, non-allowlisted algorithm, <c>alg=none</c>, bad signature, expired
+/// (<c>exp</c>), not-yet-valid (<c>nbf</c>), or missing a required claim — throws
+/// <see cref="SecurityException"/>. Returning "no identity" instead would convert an
+/// authentication failure into an authorization decision, letting the request resolve
+/// whatever an anonymous or default assignment grants.
+/// </para>
 ///
 /// Use the unverified constructor (<see cref="CreateUnverified"/>) only when a
 /// trusted upstream layer has already verified the signature.
@@ -73,6 +81,12 @@ public sealed class JwtIdentityExtractor : IRequestIdentityExtractor
         int leewaySeconds = 0)
         => new(null, userIdClaim, tenantIdClaim, algorithms: null, allowUnverified: true, leewaySeconds);
 
+    /// <summary>
+    /// Extracts the identity from a presented JWT.
+    /// </summary>
+    /// <exception cref="SecurityException">
+    /// Thrown when a credential is presented but invalid (spec section 9).
+    /// </exception>
     public (string UserId, string TenantId) ExtractIdentity(object mcpRequest)
     {
         var token = mcpRequest as string
@@ -82,19 +96,31 @@ public sealed class JwtIdentityExtractor : IRequestIdentityExtractor
 
         var parts = token.Split('.');
         if (parts.Length != 3)
-            throw new InvalidOperationException("Invalid JWT format: expected 3 dot-separated parts");
+            throw new SecurityException("Invalid JWT format: expected 3 dot-separated parts");
 
         if (!_allowUnverified)
             VerifySignature(parts);
 
-        var payloadJson = DecodeBase64Url(parts[1]);
-        using var payload = JsonDocument.Parse(payloadJson);
+        JsonDocument payload;
+        try
+        {
+            payload = JsonDocument.Parse(DecodeBase64Url(parts[1]));
+        }
+        catch (Exception exception) when (exception is FormatException or JsonException)
+        {
+            // The token was presented, so a payload we cannot even parse is an invalid
+            // credential rather than a decoding detail that escapes to the caller.
+            throw new SecurityException("Malformed JWT encoding", exception);
+        }
 
-        VerifyExpiry(payload.RootElement);
+        using (payload)
+        {
+            VerifyTemporalClaims(payload.RootElement);
 
-        var userId = GetRequiredClaim(payload.RootElement, _userIdClaim);
-        var tenantId = GetRequiredClaim(payload.RootElement, _tenantIdClaim);
-        return (userId, tenantId);
+            var userId = GetRequiredClaim(payload.RootElement, _userIdClaim);
+            var tenantId = GetRequiredClaim(payload.RootElement, _tenantIdClaim);
+            return (userId, tenantId);
+        }
     }
 
     private void VerifySignature(string[] parts)
@@ -144,21 +170,78 @@ public sealed class JwtIdentityExtractor : IRequestIdentityExtractor
         }
     }
 
-    private void VerifyExpiry(JsonElement payload)
+    /// <summary>
+    /// Enforces the <c>exp</c> and <c>nbf</c> claims when present, with the same leeway.
+    /// </summary>
+    /// <remarks>
+    /// RFC 7519 defines both as NumericDate, which may carry a fractional part, and
+    /// issuers do emit <c>1699999999.0</c>. Checking only the integer form let a
+    /// floating-point value skip the check entirely, so an expired token was accepted;
+    /// both forms are now enforced.
+    ///
+    /// <para>
+    /// <c>nbf</c> is validated because a token presented before it becomes valid is
+    /// invalid, not anonymous (spec section 9). Leaving it unchecked let a post-dated
+    /// token — one an issuer minted for a future window — be used immediately.
+    /// </para>
+    /// </remarks>
+    private void VerifyTemporalClaims(JsonElement payload)
     {
-        if (payload.TryGetProperty("exp", out var expElement)
-            && expElement.TryGetInt64(out var exp))
-        {
-            var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            if (now > exp + _leewaySeconds)
-                throw new SecurityException("JWT has expired");
-        }
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        if (TryGetNumericDate(payload, "exp", out var exp) && now > exp + _leewaySeconds)
+            throw new SecurityException("JWT has expired");
+
+        if (TryGetNumericDate(payload, "nbf", out var nbf) && now < nbf - _leewaySeconds)
+            throw new SecurityException("JWT is not yet valid");
     }
 
+    /// <summary>
+    /// Reads a NumericDate claim, accepting both integral and fractional forms.
+    /// </summary>
+    private static bool TryGetNumericDate(JsonElement payload, string claim, out double value)
+    {
+        value = 0;
+        if (!payload.TryGetProperty(claim, out var element)
+            || element.ValueKind != JsonValueKind.Number)
+        {
+            return false;
+        }
+
+        if (element.TryGetInt64(out var seconds))
+        {
+            value = seconds;
+            return true;
+        }
+        if (element.TryGetDouble(out value))
+        {
+            return true;
+        }
+
+        throw new SecurityException($"JWT {claim} claim is not a valid NumericDate");
+    }
+
+    /// <summary>
+    /// Reads a required identity claim.
+    /// </summary>
+    /// <remarks>
+    /// A verified token missing a required claim throws <see cref="SecurityException"/>:
+    /// the issuer authenticated someone the policy engine cannot identify, which is an
+    /// invalid credential rather than an anonymous request (spec section 9).
+    /// </remarks>
     private static string GetRequiredClaim(JsonElement payload, string claim)
-        => payload.TryGetProperty(claim, out var element)
-            ? element.GetString() ?? throw new InvalidOperationException($"Null value for claim: {claim}")
-            : throw new InvalidOperationException($"Missing claim: {claim}");
+    {
+        if (!payload.TryGetProperty(claim, out var element)
+            || element.ValueKind != JsonValueKind.String)
+        {
+            throw new SecurityException($"Missing claim: {claim}");
+        }
+
+        var value = element.GetString();
+        return string.IsNullOrEmpty(value)
+            ? throw new SecurityException($"Missing claim: {claim}")
+            : value;
+    }
 
     private static string DecodeBase64Url(string base64Url)
         => Encoding.UTF8.GetString(DecodeBase64UrlBytes(base64Url));

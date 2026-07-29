@@ -230,7 +230,10 @@ def _assert_field_mask(actual, original, mask: str) -> None:
         assert actual[-2:] == s[-2:]
         assert actual[2:-2] == "*" * (len(s) - 4)
     elif mask == "unchanged":
-        assert str(actual) == str(original)
+        # See the note in test_postgres_field_rules._assert_mask: a partial mask
+        # that would show the whole value degrades to a full mask rather than
+        # returning the original, which the fixture's label predates.
+        assert str(actual) == "*" * len(str(original))
     elif mask == "partial-first-1-hash":
         s = str(original)
         assert actual[0] == s[0]

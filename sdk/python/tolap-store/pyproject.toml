@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tolap-store"
-version = "1.0.0"
+version = "2.0.0"
 requires-python = ">=3.10"
 description = "TOLAP SDK Store - Policy storage interfaces and in-memory implementation"
-dependencies = ["tolap-core>=1.0.0"]
+dependencies = ["tolap-core>=2.0.0"]

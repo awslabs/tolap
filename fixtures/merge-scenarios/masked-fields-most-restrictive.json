@@ -1,5 +1,5 @@
 {
-  "description": "Masked fields with different mask types -- most restrictive wins per field (full > hash > partial > redact > null)",
+  "description": "Masked fields with different mask types -- most restrictive wins per field, ranked by disclosure (null > redact > full > hash > partial). null/redact reveal nothing and must win over partial/hash which reveal real characters.",
   "inputs": [
     {
       "version": "1.0",
@@ -39,8 +39,8 @@
       "fieldRules": {
         "maskedFields": [
           { "field": "email", "maskType": "hash", "parameters": { "algorithm": "sha256" } },
-          { "field": "phone", "maskType": "partial", "parameters": { "showFirst": 0, "showLast": 4, "maskChar": "*" } },
-          { "field": "name", "maskType": "partial", "parameters": { "showFirst": 1, "showLast": 0, "maskChar": "*" } }
+          { "field": "phone", "maskType": "redact" },
+          { "field": "name", "maskType": "null" }
         ]
       }
     }

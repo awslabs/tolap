@@ -9,7 +9,12 @@ namespace Tolap.Store;
 public sealed class InMemoryPolicyStore : IPolicyStore
 {
     private readonly ConcurrentDictionary<string, PolicyDefinition> _policies = new();
-    private readonly ConcurrentBag<PolicyAssignment> _assignments = new();
+
+    // A lock-guarded List rather than a ConcurrentBag: revocation must actually remove
+    // the assignment, and ConcurrentBag supports no removal.
+    private readonly List<PolicyAssignment> _assignments = new();
+    private readonly object _assignmentLock = new();
+
     private readonly List<Action<PolicyAuditEvent>> _auditHandlers = new();
     private readonly object _auditLock = new();
 
@@ -71,7 +76,10 @@ public sealed class InMemoryPolicyStore : IPolicyStore
 
     public Task<PolicyAssignment> AssignPolicyAsync(PolicyAssignment assignment)
     {
-        _assignments.Add(assignment);
+        lock (_assignmentLock)
+        {
+            _assignments.Add(assignment);
+        }
 
         EmitAuditEvent(PolicyAuditEventType.PolicyAssigned, assignment.Audit.GrantedBy,
             new AuditTarget(assignment.Assignee.Type.ToString(), assignment.Assignee.Identifier),
@@ -80,22 +88,27 @@ public sealed class InMemoryPolicyStore : IPolicyStore
         return Task.FromResult(assignment);
     }
 
+    /// <summary>
+    /// Revokes matching assignments so they stop resolving.
+    /// </summary>
+    /// <remarks>
+    /// Per canonical-enforcement-spec.md section 10 the assignment is actually removed:
+    /// emitting a <c>PolicyRevoked</c> audit event while leaving the assignment active is
+    /// a fail-open control with a misleading audit trail.
+    /// </remarks>
     public Task<bool> RevokePolicyAsync(string policyName, Assignee assignee, AssignmentScope scope)
     {
-        // ConcurrentBag does not support removal, so we need to rebuild
-        // In a real implementation, you would use a different data structure
-        var toRemove = _assignments
-            .Where(a => a.PolicyName == policyName
-                        && a.Assignee == assignee
-                        && a.Scope == scope)
-            .ToList();
+        int removed;
+        lock (_assignmentLock)
+        {
+            removed = _assignments.RemoveAll(a => a.PolicyName == policyName
+                                                  && a.Assignee == assignee
+                                                  && a.Scope == scope);
+        }
 
-        if (toRemove.Count == 0)
+        if (removed == 0)
             return Task.FromResult(false);
 
-        // Mark as inactive by rebuilding the list (ConcurrentBag limitation)
-        // For simplicity in the in-memory store, we track revocations separately
-        // Actually, let's use a proper approach with a lock
         EmitAuditEvent(PolicyAuditEventType.PolicyRevoked, "system",
             new AuditTarget(assignee.Type.ToString(), assignee.Identifier),
             $"Policy '{policyName}' revoked from {assignee.Type} '{assignee.Identifier}'");
@@ -105,7 +118,7 @@ public sealed class InMemoryPolicyStore : IPolicyStore
 
     public Task<IReadOnlyList<PolicyAssignment>> GetAssignmentsForUserAsync(string userId)
     {
-        IReadOnlyList<PolicyAssignment> result = _assignments
+        IReadOnlyList<PolicyAssignment> result = SnapshotAssignments()
             .Where(a => a.Assignee.Type == AssigneeType.User && a.Assignee.Identifier == userId)
             .ToList();
         return Task.FromResult(result);
@@ -113,7 +126,7 @@ public sealed class InMemoryPolicyStore : IPolicyStore
 
     public Task<IReadOnlyList<PolicyAssignment>> GetAssignmentsForGroupAsync(string groupId)
     {
-        IReadOnlyList<PolicyAssignment> result = _assignments
+        IReadOnlyList<PolicyAssignment> result = SnapshotAssignments()
             .Where(a => a.Assignee.Type == AssigneeType.Group && a.Assignee.Identifier == groupId)
             .ToList();
         return Task.FromResult(result);
@@ -121,7 +134,7 @@ public sealed class InMemoryPolicyStore : IPolicyStore
 
     public Task<IReadOnlyList<PolicyAssignment>> GetAssignmentsForSourceAsync(string sourceConnectionId)
     {
-        IReadOnlyList<PolicyAssignment> result = _assignments
+        IReadOnlyList<PolicyAssignment> result = SnapshotAssignments()
             .Where(a => a.Scope.SourceConnectionId == sourceConnectionId)
             .ToList();
         return Task.FromResult(result);
@@ -129,8 +142,16 @@ public sealed class InMemoryPolicyStore : IPolicyStore
 
     public Task<IReadOnlyList<PolicyAssignment>> ListAssignmentsAsync()
     {
-        IReadOnlyList<PolicyAssignment> result = _assignments.ToList();
+        IReadOnlyList<PolicyAssignment> result = SnapshotAssignments();
         return Task.FromResult(result);
+    }
+
+    private List<PolicyAssignment> SnapshotAssignments()
+    {
+        lock (_assignmentLock)
+        {
+            return _assignments.ToList();
+        }
     }
 
     // Resolution
@@ -142,7 +163,7 @@ public sealed class InMemoryPolicyStore : IPolicyStore
         Func<string, string[]> getGroups,
         Func<string, string[]> getRoles)
     {
-        var allAssignments = _assignments.ToList();
+        var allAssignments = SnapshotAssignments();
         var allDefinitions = _policies.Values.ToList();
 
         var result = PolicyResolutionEngine.Resolve(
@@ -160,7 +181,7 @@ public sealed class InMemoryPolicyStore : IPolicyStore
         Func<string, string[]> getGroups,
         Func<string, string[]> getRoles)
     {
-        var allAssignments = _assignments.ToList();
+        var allAssignments = SnapshotAssignments();
         var allDefinitions = _policies.Values.ToList();
 
         IReadOnlyList<EffectivePolicy> results = sourceConnectionIds

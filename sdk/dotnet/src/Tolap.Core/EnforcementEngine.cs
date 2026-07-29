@@ -15,11 +15,47 @@ public sealed record AccessResult(bool Allowed, string? Reason = null);
 public sealed record FieldAccessResult(string[] Allowed, string[] Denied);
 
 /// <summary>
+/// Thrown when a tool result cannot have policy applied to it.
+/// </summary>
+/// <remarks>
+/// Derives from <see cref="UnauthorizedAccessException"/> so wrappers that already deny
+/// on unauthorized access fail closed without special-casing this type.
+/// </remarks>
+public sealed class UnenforceableResultException : UnauthorizedAccessException
+{
+    public UnenforceableResultException(string message) : base(message) { }
+}
+
+/// <summary>
+/// The classification of a tool result for enforcement purposes.
+/// </summary>
+public enum ResultShape
+{
+    /// <summary>A single record (a string-keyed map).</summary>
+    Record,
+
+    /// <summary>A materialized sequence of records.</summary>
+    RecordList,
+
+    /// <summary>
+    /// A shape the policy cannot be applied to: a POCO/DTO, a scalar, a stream, or an
+    /// unmaterialized iterator.
+    /// </summary>
+    Unenforceable
+}
+
+/// <summary>
 /// Enforces TOLAP policies at the data-object level. Provides validation,
-/// masking, filtering, and result limiting.
+/// masking, filtering, field removal/projection, and result limiting.
 /// </summary>
 public static class EnforcementEngine
 {
+    /// <summary>
+    /// Upper bound on a single regex evaluation. A ReDoS guard: an adversarial pattern
+    /// or subject must not be able to stall the result pass (spec section 7).
+    /// </summary>
+    private static readonly TimeSpan RegexMatchTimeout = TimeSpan.FromMilliseconds(100);
+
     /// <summary>
     /// Validates whether access to an object is permitted under the given policy.
     /// Hidden objects are rejected first, then allowed objects are checked.
@@ -87,9 +123,62 @@ public static class EnforcementEngine
         return new FieldAccessResult(allowed.ToArray(), denied.ToArray());
     }
 
+    // -- Field-name matching --
+    //
+    // A policy field reference and a record key may each be bare ("ssn") or
+    // table-qualified ("patients.ssn"), and the two do not have to agree: the rule
+    // "patients.ssn" must match a key "ssn" and the rule "ssn" must match a key
+    // "patients.ssn". Matching is case-insensitive and glob patterns are honoured
+    // (spec section 4).
+
+    /// <summary>
+    /// Every form a field reference may be compared in, lower-cased.
+    /// </summary>
+    /// <remarks>
+    /// Unqualified forms of a qualified name are included so the two sides need not
+    /// agree on qualification. This intentionally lets a table-scoped wildcard such as
+    /// <c>patients.*</c> match a bare key: rows reaching the pipeline have already been
+    /// projected by the tool, so the qualifier is implied by the result set rather than
+    /// repeated on every key.
+    /// </remarks>
+    private static IEnumerable<string> MatchForms(string name)
+    {
+        var lowered = name.ToLowerInvariant();
+        var forms = new HashSet<string>(StringComparer.Ordinal) { lowered };
+        var firstDot = lowered.IndexOf('.');
+        if (firstDot >= 0)
+        {
+            forms.Add(lowered[(firstDot + 1)..]);          // drop the leading qualifier
+            forms.Add(lowered[(lowered.LastIndexOf('.') + 1)..]); // bare leaf
+        }
+        return forms;
+    }
+
+    /// <summary>
+    /// Whether a policy field reference refers to a record key. Matching accepts bare and
+    /// table-qualified forms in both directions, is case-insensitive, and honours globs.
+    /// </summary>
+    public static bool FieldNameMatches(string ruleField, string key)
+    {
+        foreach (var ruleForm in MatchForms(ruleField))
+        {
+            foreach (var keyForm in MatchForms(key))
+            {
+                if (GlobMatch(ruleForm, keyForm))
+                    return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>
     /// Applies field masking rules to a data record.
     /// </summary>
+    /// <remarks>
+    /// Returns a copy; the caller's record is never mutated. Matching recurses into
+    /// nested objects and arrays so a rule for "patient.ssn" also masks
+    /// <c>{"patient": {"ssn": ...}}</c>.
+    /// </remarks>
     public static Dictionary<string, object?> ApplyFieldMasking(
         Dictionary<string, object?> record,
         EffectivePolicy policy)
@@ -98,22 +187,167 @@ public static class EnforcementEngine
         if (maskedFields is null || maskedFields.Length == 0)
             return new Dictionary<string, object?>(record);
 
-        var result = new Dictionary<string, object?>(record);
+        return (Dictionary<string, object?>)MaskNode(CloneNode(record), maskedFields)!;
+    }
 
-        foreach (var rule in maskedFields)
+    /// <summary>
+    /// The most restrictive masking rule matching a key, or null when none does.
+    /// </summary>
+    private static MaskingRule? RuleForKey(MaskingRule[] rules, string key)
+    {
+        MaskingRule? best = null;
+        foreach (var rule in rules)
         {
-            // Match against both simple field name and dot-notation
-            var matchingKeys = result.Keys
-                .Where(k => k == rule.Field || rule.Field.EndsWith("." + k))
-                .ToList();
+            if (!FieldNameMatches(rule.Field, key)) continue;
+            if (best is null || rule.MaskType.Restrictiveness() > best.MaskType.Restrictiveness())
+                best = rule;
+        }
+        return best;
+    }
 
-            foreach (var key in matchingKeys)
+    private static object? MaskNode(object? node, MaskingRule[] rules)
+    {
+        if (node is Dictionary<string, object?> dict)
+        {
+            foreach (var key in dict.Keys.ToList())
             {
-                result[key] = ApplyMask(result[key], rule);
+                var rule = RuleForKey(rules, key);
+                dict[key] = rule is not null
+                    ? ApplyMask(dict[key], rule)
+                    : MaskNode(dict[key], rules);
             }
+            return dict;
         }
 
-        return result;
+        if (node is List<object?> list)
+        {
+            for (var i = 0; i < list.Count; i++)
+            {
+                list[i] = MaskNode(list[i], rules);
+            }
+            return list;
+        }
+
+        return node;
+    }
+
+    /// <summary>
+    /// Removes every hiddenFields entry from a record, recursing into nested structures.
+    /// </summary>
+    /// <remarks>
+    /// Step 3 of the post-execution pipeline (spec section 4). A hidden field must never
+    /// reach the agent, and a pre-execution field check cannot deliver that on its own:
+    /// it only sees the fields a caller volunteered, so a tool that returns undeclared
+    /// columns (<c>SELECT *</c>) would leak them. Returns a copy.
+    /// </remarks>
+    public static Dictionary<string, object?> StripHiddenFields(
+        Dictionary<string, object?> record,
+        EffectivePolicy policy)
+    {
+        var hidden = policy.ObjectRules?.FieldRules?.HiddenFields;
+        if (hidden is null || hidden.Length == 0)
+            return new Dictionary<string, object?>(record);
+
+        return (Dictionary<string, object?>)DropNode(CloneNode(record), hidden)!;
+    }
+
+    /// <summary>
+    /// Removes every hiddenFields entry from each record in a result set.
+    /// </summary>
+    public static IReadOnlyList<Dictionary<string, object?>> StripHiddenFields(
+        IReadOnlyList<Dictionary<string, object?>> records,
+        EffectivePolicy policy)
+    {
+        var hidden = policy.ObjectRules?.FieldRules?.HiddenFields;
+        if (hidden is null || hidden.Length == 0)
+            return records;
+
+        return records.Select(r => StripHiddenFields(r, policy)).ToList();
+    }
+
+    /// <summary>
+    /// Removes every hiddenFields entry from an arbitrary JSON node tree, in place.
+    /// </summary>
+    /// <remarks>
+    /// The HTTP wrapper walks a mutable
+    /// <c>Dictionary&lt;string, object?&gt;</c>/<c>List&lt;object?&gt;</c> tree rather
+    /// than flat records; routing it through the same matcher keeps the HTTP and
+    /// database/MCP paths from drifting.
+    /// </remarks>
+    public static object? StripHiddenFieldsFromTree(object? node, EffectivePolicy policy)
+    {
+        var hidden = policy.ObjectRules?.FieldRules?.HiddenFields;
+        if (hidden is null || hidden.Length == 0)
+            return node;
+
+        return DropNode(node, hidden);
+    }
+
+    private static object? DropNode(object? node, string[] patterns)
+    {
+        if (node is Dictionary<string, object?> dict)
+        {
+            foreach (var key in dict.Keys.ToList())
+            {
+                if (patterns.Any(p => FieldNameMatches(p, key)))
+                {
+                    dict.Remove(key);
+                    continue;
+                }
+                dict[key] = DropNode(dict[key], patterns);
+            }
+            return dict;
+        }
+
+        if (node is List<object?> list)
+        {
+            for (var i = 0; i < list.Count; i++)
+            {
+                list[i] = DropNode(list[i], patterns);
+            }
+            return list;
+        }
+
+        return node;
+    }
+
+    /// <summary>
+    /// Projects a record down to allowedFields, dropping every other key.
+    /// </summary>
+    /// <remarks>
+    /// Step 4 of the post-execution pipeline (spec section 4). When allowedFields is
+    /// specified every other key is dropped, so a tool returning columns the policy
+    /// never listed cannot disclose them. A null allow-list is unrestricted; an empty
+    /// allow-list denies every field (spec section 3).
+    /// </remarks>
+    public static Dictionary<string, object?> ProjectAllowedFields(
+        Dictionary<string, object?> record,
+        EffectivePolicy policy)
+    {
+        var allowed = policy.ObjectRules?.FieldRules?.AllowedFields;
+        if (allowed is null)
+            return new Dictionary<string, object?>(record);
+
+        var projected = new Dictionary<string, object?>();
+        foreach (var (key, value) in record)
+        {
+            if (allowed.Any(a => FieldNameMatches(a, key)))
+                projected[key] = value;
+        }
+        return projected;
+    }
+
+    /// <summary>
+    /// Projects every record in a result set down to allowedFields.
+    /// </summary>
+    public static IReadOnlyList<Dictionary<string, object?>> ProjectAllowedFields(
+        IReadOnlyList<Dictionary<string, object?>> records,
+        EffectivePolicy policy)
+    {
+        if (policy.ObjectRules?.FieldRules?.AllowedFields is null)
+            return records;
+
+        return records.Select(r => ProjectAllowedFields(r, policy)).ToList();
     }
 
     /// <summary>
@@ -160,6 +394,145 @@ public static class EnforcementEngine
         return filtered;
     }
 
+    // -- Result shapes --
+
+    /// <summary>
+    /// Classifies a tool result as a record, a materialized list of records, or a shape
+    /// the policy cannot be applied to (spec section 5).
+    /// </summary>
+    public static ResultShape ClassifyResultShape(object? result)
+    {
+        if (result is Dictionary<string, object?>) return ResultShape.Record;
+        if (result is IReadOnlyDictionary<string, object?>) return ResultShape.Record;
+
+        // Only a materialized collection can be enforced: enumerating a lazy
+        // IEnumerable here would be a side effect, and the caller could enumerate the
+        // unfiltered original again.
+        if (result is IReadOnlyList<Dictionary<string, object?>>) return ResultShape.RecordList;
+        if (result is IReadOnlyList<object?> objectList
+            && objectList.All(item => item is Dictionary<string, object?>))
+        {
+            return ResultShape.RecordList;
+        }
+
+        return ResultShape.Unenforceable;
+    }
+
+    /// <summary>
+    /// A human-readable description of a result shape, for denial messages.
+    /// </summary>
+    public static string DescribeResultShape(object? result)
+    {
+        if (result is null) return "null";
+
+        var typeName = result.GetType().Name;
+
+        if (result is string) return $"{typeName} (scalar)";
+        if (result is bool or sbyte or byte or short or ushort or int or uint
+            or long or ulong or float or double or decimal)
+        {
+            return $"{typeName} (scalar)";
+        }
+        if (result is System.Text.Json.JsonElement je)
+            return $"JsonElement ({je.ValueKind})";
+        if (result is System.Collections.IEnumerable and not System.Collections.ICollection)
+            return $"{typeName} (unmaterialized sequence)";
+        if (result is System.Collections.IEnumerable enumerable)
+        {
+            var offenders = enumerable.Cast<object?>()
+                .Where(item => item is not Dictionary<string, object?>)
+                .Select(item => item?.GetType().Name ?? "null")
+                .Distinct()
+                .OrderBy(n => n, StringComparer.Ordinal)
+                .ToArray();
+            return offenders.Length > 0
+                ? $"{typeName} containing {string.Join(", ", offenders)} (not records)"
+                : $"{typeName} (list of records)";
+        }
+
+        return $"{typeName} (not a record or list of records)";
+    }
+
+    /// <summary>
+    /// Runs the full post-execution enforcement pipeline over a tool result.
+    /// </summary>
+    /// <remarks>
+    /// The canonical order (spec section 4), applied identically to a single record and
+    /// to a list of records:
+    /// <list type="number">
+    ///   <item><description>row filters — drop rows the policy excludes</description></item>
+    ///   <item><description>tag filters — drop records by allowedTags / deniedTags</description></item>
+    ///   <item><description>hidden fields — remove hiddenFields from every record</description></item>
+    ///   <item><description>allowed fields — project to allowedFields when specified</description></item>
+    ///   <item><description>masking — apply maskedFields transformations</description></item>
+    ///   <item><description>result limit — truncate to maxResults</description></item>
+    /// </list>
+    /// Hidden/allowed removal precedes masking so a field that is both hidden and masked
+    /// is removed rather than returned in masked form, and the limit runs last so
+    /// filtering never yields fewer rows than maxResults when more qualifying rows exist.
+    /// </remarks>
+    /// <exception cref="UnenforceableResultException">
+    /// Thrown for a shape the policy cannot be applied to.
+    /// </exception>
+    public static object? ApplyResultPipeline(object? result, EffectivePolicy policy)
+    {
+        var shape = ClassifyResultShape(result);
+
+        if (shape == ResultShape.Unenforceable)
+        {
+            throw new UnenforceableResultException(
+                "Access denied: tool result shape cannot be policy-enforced: "
+                + $"{DescribeResultShape(result)}. Return a Dictionary<string, object?> or an "
+                + "IReadOnlyList<Dictionary<string, object?>>, or opt out explicitly with "
+                + "AllowUnenforceableShapes = true.");
+        }
+
+        var records = shape == ResultShape.Record
+            ? new List<Dictionary<string, object?>> { ToRecord(result!) }
+            : ToRecordList(result!);
+
+        var processed = ApplyRecordPipeline(records, policy);
+
+        if (shape == ResultShape.Record)
+        {
+            // A single record the pipeline dropped is a denial, not an empty record:
+            // returning {} would imply the row existed but had no fields.
+            return processed.Count > 0 ? processed[0] : null;
+        }
+
+        return processed;
+    }
+
+    /// <summary>
+    /// Runs the canonical six-step pipeline over a materialized list of records.
+    /// </summary>
+    public static IReadOnlyList<Dictionary<string, object?>> ApplyRecordPipeline(
+        IReadOnlyList<Dictionary<string, object?>> records,
+        EffectivePolicy policy)
+    {
+        var working = ApplyRowFilters(records, policy);
+        working = FilterByTags(working, policy);
+        working = StripHiddenFields(working, policy);
+        working = ProjectAllowedFields(working, policy);
+        working = working.Select(r => ApplyFieldMasking(r, policy)).ToList();
+        return ApplyResultLimit(working, policy);
+    }
+
+    private static Dictionary<string, object?> ToRecord(object result)
+    {
+        if (result is Dictionary<string, object?> dict) return dict;
+        var readOnly = (IReadOnlyDictionary<string, object?>)result;
+        return new Dictionary<string, object?>(readOnly);
+    }
+
+    private static IReadOnlyList<Dictionary<string, object?>> ToRecordList(object result)
+    {
+        if (result is IReadOnlyList<Dictionary<string, object?>> typed) return typed;
+        return ((IReadOnlyList<object?>)result)
+            .Select(item => (Dictionary<string, object?>)item!)
+            .ToList();
+    }
+
     /// <summary>
     /// Drops rows that fail any policy row filter (filters AND together).
     /// Most-restrictive-wins: a row must satisfy every filter to be kept. Rows
@@ -182,21 +555,33 @@ public static class EnforcementEngine
         return output;
     }
 
+    /// <summary>
+    /// Sentinel distinguishing "field absent from the row" from "field present and null",
+    /// so the former can fail closed while the latter stays comparable.
+    /// </summary>
+    private static readonly object Missing = new();
+
     private static object? RowFieldValue(Dictionary<string, object?> row, string fieldName)
     {
         if (row.TryGetValue(fieldName, out var v)) return v;
-        var dot = fieldName.IndexOf('.');
-        if (dot >= 0)
+        foreach (var key in row.Keys)
         {
-            var leaf = fieldName[(dot + 1)..];
-            if (row.TryGetValue(leaf, out var v2)) return v2;
+            if (FieldNameMatches(fieldName, key)) return row[key];
         }
-        return null;
+        return Missing;
     }
 
     private static bool RowPassesFilter(Dictionary<string, object?> row, RowFilter rf)
     {
         var value = RowFieldValue(row, rf.Field);
+        if (ReferenceEquals(value, Missing))
+        {
+            // Fail closed for every operator, including the negative ones (spec
+            // section 7): a filter written to exclude classified rows must not retain
+            // every row that simply lacks the column.
+            return false;
+        }
+
         switch (rf.Operator)
         {
             case FilterOperator.Equals:
@@ -210,6 +595,8 @@ public static class EnforcementEngine
                 if (rf.Values is null) return false;
                 return !rf.Values.Any(v => ValuesEqual(value, v));
             case FilterOperator.GreaterThan:
+                // A non-comparable operand pair is a non-match, never an exception
+                // that aborts the whole result pass.
                 return CompareNullable(value, rf.Value) is int g && g > 0;
             case FilterOperator.LessThan:
                 return CompareNullable(value, rf.Value) is int l && l < 0;
@@ -221,17 +608,34 @@ public static class EnforcementEngine
                     && value.ToString()!.StartsWith(rf.Value.ToString()!);
             case FilterOperator.Matches:
                 if (value is null || rf.Value is null) return false;
-                try
-                {
-                    var pattern = "^" + rf.Value.ToString() + "$";
-                    return Regex.IsMatch(value.ToString()!, pattern);
-                }
-                catch (ArgumentException)
-                {
-                    return false;
-                }
+                return RegexMatches(rf.Value.ToString()!, value.ToString()!);
             default:
                 return false;
+        }
+    }
+
+    /// <summary>
+    /// Evaluates an anchored row-filter pattern under a bounded timeout.
+    /// </summary>
+    /// <remarks>
+    /// The non-capturing group is required (spec section 7): <c>^hr|finance$</c> would
+    /// otherwise bind <c>^</c> to <c>hr</c> alone and match "hr_secret_internal". A
+    /// pattern error or a timeout is a non-match — the row is dropped — never an
+    /// unhandled exception.
+    /// </remarks>
+    private static bool RegexMatches(string pattern, string value)
+    {
+        try
+        {
+            return Regex.IsMatch(value, $"^(?:{pattern})$", RegexOptions.None, RegexMatchTimeout);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
         }
     }
 
@@ -241,6 +645,10 @@ public static class EnforcementEngine
         b = Normalize(b);
         if (a is null && b is null) return true;
         if (a is null || b is null) return false;
+
+        // Booleans are not numbers: 1 != true (spec section 7).
+        if (a is bool != b is bool) return false;
+
         if (a.Equals(b)) return true;
         // Cross-type numeric: scenarios JSON deserializes ints/longs/doubles
         // depending on parser; coerce to a common form for the comparison.
@@ -248,6 +656,7 @@ public static class EnforcementEngine
         {
             return Convert.ToDouble(a) == Convert.ToDouble(b);
         }
+        if (IsNumeric(a) != IsNumeric(b)) return a.ToString() == b.ToString();
         return a.ToString() == b.ToString();
     }
 
@@ -256,13 +665,26 @@ public static class EnforcementEngine
         a = Normalize(a);
         b = Normalize(b);
         if (a is null || b is null) return null;
+        if (a is bool || b is bool) return null;
         if (IsNumeric(a) && IsNumeric(b))
         {
             return Convert.ToDouble(a).CompareTo(Convert.ToDouble(b));
         }
+        if (IsNumeric(a) || IsNumeric(b))
+        {
+            // A number against a non-number (age="notanumber" vs 30) is not ordered.
+            return null;
+        }
         if (a is IComparable ca && a.GetType() == b.GetType())
         {
-            return ca.CompareTo(b);
+            try
+            {
+                return ca.CompareTo(b);
+            }
+            catch (ArgumentException)
+            {
+                return null;
+            }
         }
         return null;
     }
@@ -328,7 +750,15 @@ public static class EnforcementEngine
         return new AccessResult(true);
     }
 
-    private static object? ApplyMask(object? value, MaskingRule rule)
+    /// <summary>
+    /// Applies a masking rule to a single value.
+    /// </summary>
+    /// <remarks>
+    /// Fails closed (spec section 6): an unrecognized mask type is treated as
+    /// <c>redact</c> rather than returning the caller's original value, so a typo or a
+    /// mask type from a newer schema version cannot silently disable masking.
+    /// </remarks>
+    public static object? ApplyMask(object? value, MaskingRule rule)
     {
         return rule.MaskType switch
         {
@@ -337,7 +767,7 @@ public static class EnforcementEngine
             MaskType.Full => ApplyFullMask(value, rule.Parameters),
             MaskType.Partial => ApplyPartialMask(value, rule.Parameters),
             MaskType.Hash => ApplyHashMask(value, rule.Parameters),
-            _ => value
+            _ => "[REDACTED]"
         };
     }
 
@@ -355,8 +785,10 @@ public static class EnforcementEngine
         var showLast = parameters?.ShowLast ?? 0;
         var maskChar = parameters?.MaskChar ?? '*';
 
-        if (str.Length <= showFirst + showLast)
-            return str;
+        // Showing the whole value is not masking; degrade to a full mask instead of
+        // handing back the unmasked original (spec section 6).
+        if (showFirst < 0 || showLast < 0 || showFirst + showLast >= str.Length)
+            return new string(maskChar, str.Length);
 
         var sb = new StringBuilder(str.Length);
 
@@ -391,6 +823,42 @@ public static class EnforcementEngine
         return hex[..16];
     }
 
+    /// <summary>
+    /// Shallow-clones a node tree so pipeline steps never mutate the caller's records.
+    /// </summary>
+    private static object? CloneNode(object? node)
+    {
+        if (node is Dictionary<string, object?> dict)
+        {
+            var copy = new Dictionary<string, object?>(dict.Count);
+            foreach (var (key, value) in dict)
+            {
+                copy[key] = CloneNode(value);
+            }
+            return copy;
+        }
+
+        if (node is List<object?> list)
+        {
+            return list.Select(CloneNode).ToList();
+        }
+
+        // Materialize other object collections into the mutable node shape so nested
+        // masking/removal can reach records inside them. Strings and typed primitive
+        // arrays (e.g. a "tags" string[]) hold no keys, so they are left alone.
+        if (node is object[] array)
+        {
+            return array.Select(CloneNode).ToList();
+        }
+
+        if (node is IEnumerable<Dictionary<string, object?>> records)
+        {
+            return records.Select(r => CloneNode(r)).ToList();
+        }
+
+        return node;
+    }
+
     private static string[] ExtractTags(Dictionary<string, object?> record)
     {
         if (!record.TryGetValue("tags", out var tagsObj) || tagsObj is null)
@@ -417,6 +885,10 @@ public static class EnforcementEngine
     /// Performs glob pattern matching where '*' matches any sequence of characters
     /// within a path segment and '**' would match across segments.
     /// </summary>
+    /// <remarks>
+    /// Evaluated under the same bounded timeout as row-filter regexes; a timeout is a
+    /// non-match rather than an unhandled exception (spec section 7).
+    /// </remarks>
     internal static bool GlobMatch(string pattern, string value)
     {
         // Convert glob pattern to regex
@@ -424,6 +896,17 @@ public static class EnforcementEngine
             .Replace("\\*", ".*")
             + "$";
 
-        return Regex.IsMatch(value, regexPattern, RegexOptions.IgnoreCase);
+        try
+        {
+            return Regex.IsMatch(value, regexPattern, RegexOptions.IgnoreCase, RegexMatchTimeout);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 }

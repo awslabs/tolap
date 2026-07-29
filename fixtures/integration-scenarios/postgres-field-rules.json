@@ -189,8 +189,8 @@
       }
     },
     {
-      "name": "partial-mask-show-everything-returns-original",
-      "comment": "When showFirst+showLast >= len(value), the original is returned unchanged. Defends against an off-by-one masking the whole string instead of preserving it.",
+      "name": "partial-mask-show-everything-degrades-to-full-mask",
+      "comment": "When showFirst+showLast >= len(value), the value MUST NOT be returned unmasked (that would be a fail-open disclosure). It degrades to a full mask. See canonical-enforcement-spec.md §6.",
       "policy": {
         "version": "1.0",
         "permissions": { "canQuery": true },
@@ -212,7 +212,7 @@
       "expected": {
         "pass": true,
         "rowCount": 6,
-        "maskedField": { "field": "region", "mask": "unchanged" }
+        "maskedField": { "field": "region", "mask": "full-stars" }
       }
     },
     {

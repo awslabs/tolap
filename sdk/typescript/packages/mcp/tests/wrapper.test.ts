@@ -2,7 +2,11 @@ import { createHmac } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { SecureMcpToolWrapper } from "../src/wrapper.js";
 import { EnforcementMode } from "../src/types.js";
-import { HeaderIdentityExtractor, JwtIdentityExtractor } from "../src/extractors.js";
+import {
+  HeaderIdentityExtractor,
+  IdentityExtractionError,
+  JwtIdentityExtractor,
+} from "../src/extractors.js";
 import type { EffectivePolicy } from "@tolap/core";
 import type { McpToolDefinition, EnforcementDecision } from "../src/types.js";
 
@@ -374,7 +378,13 @@ describe("JwtIdentityExtractor", () => {
     expect(() => new JwtIdentityExtractor()).toThrow(/secret/);
   });
 
-  it("should fail closed on a tampered signature", () => {
+  // A credential that was PRESENTED and found invalid must throw, not resolve as
+  // anonymous (canonical spec §9). Returning undefined here would let a caller
+  // treat an authentication failure as an anonymous request and resolve whatever a
+  // default assignment grants -- the divergence that had .NET throwing while
+  // Python and TypeScript silently degraded on the very same token.
+
+  it("should throw on a tampered signature", () => {
     const extractor = new JwtIdentityExtractor({ secret: SECRET });
     const token = signJwt(
       { sub: "attacker", tenant_id: "victim" },
@@ -385,11 +395,13 @@ describe("JwtIdentityExtractor", () => {
       headers: { Authorization: `Bearer ${token}` },
     };
 
-    expect(extractor.extractUserId(request)).toBeUndefined();
-    expect(extractor.extractTenantId(request)).toBeUndefined();
+    expect(() => extractor.extractUserId(request)).toThrow(
+      IdentityExtractionError,
+    );
+    expect(() => extractor.extractTenantId(request)).toThrow(/signature/);
   });
 
-  it("should reject the 'none' algorithm", () => {
+  it("should throw on the 'none' algorithm", () => {
     const extractor = new JwtIdentityExtractor({ secret: SECRET });
     const header = Buffer.from(
       JSON.stringify({ alg: "none", typ: "JWT" }),
@@ -402,10 +414,12 @@ describe("JwtIdentityExtractor", () => {
       headers: { Authorization: `Bearer ${header}.${body}.` },
     };
 
-    expect(extractor.extractUserId(request)).toBeUndefined();
+    expect(() => extractor.extractUserId(request)).toThrow(
+      /algorithm not allowed/,
+    );
   });
 
-  it("should fail closed on an expired token", () => {
+  it("should throw on an expired token", () => {
     const extractor = new JwtIdentityExtractor({ secret: SECRET });
     const token = signJwt(
       { sub: "user-001", tenant_id: "tenant-001", exp: 1 },
@@ -416,7 +430,7 @@ describe("JwtIdentityExtractor", () => {
       headers: { Authorization: `Bearer ${token}` },
     };
 
-    expect(extractor.extractUserId(request)).toBeUndefined();
+    expect(() => extractor.extractUserId(request)).toThrow(/expired/);
   });
 
   it("should skip verification in explicit unverified mode", () => {
@@ -441,13 +455,15 @@ describe("JwtIdentityExtractor", () => {
     expect(extractor.extractTenantId(request)).toBeUndefined();
   });
 
-  it("should return undefined for invalid JWT", () => {
+  it("should throw for a malformed JWT", () => {
+    // Presented but structurally invalid: an attacker sending garbage must not be
+    // treated the same as a caller sending no credential at all.
     const extractor = new JwtIdentityExtractor({ secret: SECRET });
     const request = {
       toolName: "test",
       headers: { Authorization: "Bearer invalid" },
     };
 
-    expect(extractor.extractUserId(request)).toBeUndefined();
+    expect(() => extractor.extractUserId(request)).toThrow(/Invalid JWT format/);
   });
 });

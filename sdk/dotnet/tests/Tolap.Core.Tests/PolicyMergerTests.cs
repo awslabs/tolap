@@ -130,20 +130,24 @@ public class PolicyMergerTests
         var maskedFields = result.ObjectRules.FieldRules!.MaskedFields!;
         maskedFields.Should().HaveCount(3);
 
-        // email: hash (4) > partial (3) -> hash wins
+        // Ranked by disclosure, most-restrictive-wins (canonical-enforcement-spec.md
+        // section 6): null (5) > redact (4) > full (3) > hash (2) > partial (1). The
+        // previous ranking placed null and redact *lowest*, so these assertions used to
+        // expect partial to beat both -- disclosing real characters that one policy had
+        // demanded be erased entirely.
+
+        // email: hash (2) > partial (1) -> hash wins
         var emailMask = maskedFields.First(m => m.Field == "email");
         emailMask.MaskType.Should().Be(MaskType.Hash);
         emailMask.Parameters!.Algorithm.Should().Be("sha256");
 
-        // phone: partial (3) > redact (2) -> partial wins
+        // phone: redact (4) > partial (1) -> redact wins
         var phoneMask = maskedFields.First(m => m.Field == "phone");
-        phoneMask.MaskType.Should().Be(MaskType.Partial);
-        phoneMask.Parameters!.ShowLast.Should().Be(4);
+        phoneMask.MaskType.Should().Be(MaskType.Redact);
 
-        // name: partial (3) > null (1) -> partial wins
+        // name: null (5) > partial (1) -> null wins
         var nameMask = maskedFields.First(m => m.Field == "name");
-        nameMask.MaskType.Should().Be(MaskType.Partial);
-        nameMask.Parameters!.ShowFirst.Should().Be(1);
+        nameMask.MaskType.Should().Be(MaskType.Null);
     }
 
     [Fact]

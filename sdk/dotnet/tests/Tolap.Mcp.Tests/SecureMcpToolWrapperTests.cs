@@ -69,9 +69,15 @@ public class SecureMcpToolWrapperTests
         var (_, wrapper) = await CreateTestSetup();
         var headers = CreateHeaders();
 
+        // The test policy sets allowedTags: ["public"], and the single-record path runs
+        // the same tag filter as the list path, so the record must carry an allowed tag.
         var result = await wrapper.ExecuteWithEnforcementAsync(
             headers, "query", "patients", "any-source",
-            () => Task.FromResult<object?>(new Dictionary<string, object?> { ["id"] = "1" }));
+            () => Task.FromResult<object?>(new Dictionary<string, object?>
+            {
+                ["id"] = "1",
+                ["tags"] = new[] { "public" }
+            }));
 
         result.Allowed.Should().BeTrue();
         result.Result.Should().NotBeNull();
@@ -130,7 +136,10 @@ public class SecureMcpToolWrapperTests
         {
             ["name"] = "John Smith",
             ["ssn"] = "123-45-6789",
-            ["region"] = "us-east"
+            ["region"] = "us-east",
+            // The test policy sets allowedTags: ["public"]; the single-record path runs
+            // the tag filter too, so an untagged record would be dropped.
+            ["tags"] = new[] { "public" }
         };
 
         var result = await wrapper.ExecuteWithEnforcementAsync(

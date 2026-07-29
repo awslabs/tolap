@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Tolap.Core;
 using Tolap.Store;
 
@@ -19,9 +20,43 @@ public sealed class SecureMcpToolWrapper
 {
     private readonly SecureMcpServerOptions _options;
 
+    /// <summary>
+    /// Constructs the wrapper, warning loudly when it is configured in a mode that
+    /// cannot deny.
+    /// </summary>
+    /// <remarks>
+    /// Threat-model remediation R-6: <see cref="EnforcementMode.Permissive"/> turns every
+    /// denial into an allow, so a deployment that reaches production still carrying it has
+    /// no enforcement at all while continuing to look configured. The warning fires at
+    /// construction rather than on the first denial, because a service whose policies
+    /// happen not to deny anything during a smoke test would otherwise ship silently.
+    /// <see cref="SecureMcpServerOptions.AllowUnenforceableShapes"/> already warns on the
+    /// same channel when it passes a result through.
+    /// </remarks>
     public SecureMcpToolWrapper(SecureMcpServerOptions options)
     {
         _options = options;
+        WarnIfEnforcementDisabled(options.EnforcementMode);
+    }
+
+    /// <summary>
+    /// Emits the startup warning once per wrapper when a non-denying mode is active.
+    /// </summary>
+    /// <remarks>
+    /// Warned once at construction rather than on every denial: a per-denial warning is
+    /// both noisy enough to be filtered out and absent from a service that simply has not
+    /// denied anything yet.
+    /// </remarks>
+    public static void WarnIfEnforcementDisabled(EnforcementMode mode)
+    {
+        if (mode != EnforcementMode.Permissive)
+            return;
+
+        Trace.TraceWarning(
+            "TOLAP enforcement is NOT enforcing: EnforcementMode.Permissive turns every "
+            + "policy denial into an allow, so access is granted regardless of policy. "
+            + "This is intended for migration only and MUST NOT be used in production. "
+            + "Set EnforcementMode.Strict to enforce policy.");
     }
 
     /// <summary>
@@ -72,31 +107,29 @@ public sealed class SecureMcpToolWrapper
         // Execute the tool
         var result = await execute();
 
-        // Post-execution: apply masking and filtering
-        if (result is Dictionary<string, object?> record)
+        // Post-execution: the canonical six-step pipeline
+        // (row filters -> tag filters -> hidden fields -> allowed fields ->
+        //  masking -> result limit), applied identically to a single record and to a
+        //  list of records. A shape the policy cannot be applied to is denied.
+        return new ToolExecutionResult(true, null, EnforceResult(result, policy));
+    }
+
+    /// <summary>
+    /// Applies the post-execution pipeline, honouring the opt-out for unenforceable shapes.
+    /// </summary>
+    private object? EnforceResult(object? result, EffectivePolicy policy)
+    {
+        if (EnforcementEngine.ClassifyResultShape(result) == ResultShape.Unenforceable
+            && _options.AllowUnenforceableShapes)
         {
-            result = EnforcementEngine.ApplyFieldMasking(record, policy);
+            Trace.TraceWarning(
+                "TOLAP enforcement bypassed: AllowUnenforceableShapes is enabled and the tool "
+                + $"returned {EnforcementEngine.DescribeResultShape(result)}, which is passed "
+                + "through unfiltered.");
+            return result;
         }
 
-        if (result is IReadOnlyList<Dictionary<string, object?>> records)
-        {
-            // Order: row filters -> tag filters -> masking -> result limit
-            // (mirrors Python and TypeScript SDK ordering)
-            records = EnforcementEngine.ApplyRowFilters(records, policy);
-            records = EnforcementEngine.FilterByTags(records, policy);
-
-            var maskedRecords = new List<Dictionary<string, object?>>();
-            foreach (var r in records)
-            {
-                maskedRecords.Add(EnforcementEngine.ApplyFieldMasking(r, policy));
-            }
-            records = maskedRecords;
-
-            records = EnforcementEngine.ApplyResultLimit(records, policy);
-            result = records;
-        }
-
-        return new ToolExecutionResult(true, null, result);
+        return EnforcementEngine.ApplyResultPipeline(result, policy);
     }
 
     /// <summary>

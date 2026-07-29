@@ -15,7 +15,9 @@ public static class PolicyMerger
     /// - AllowedObjects/AllowedFields/AllowedEndpoints/AllowedMethods/AllowedTags: Intersection (null = unrestricted)
     /// - HiddenObjects/HiddenFields/HiddenEndpoints/DeniedTags/ReadOnlyFields: Union
     /// - RowFilters: Concatenate all
-    /// - MaskedFields: Group by field name, pick highest MaskType int value (most restrictive)
+    /// - MaskedFields: Group by field name, pick the most restrictive by disclosure
+    ///   ranking (null &gt; redact &gt; full &gt; hash &gt; partial); an unknown mask type
+    ///   ranks most restrictive
     /// - Limits: Min for maxResults/maxQueryTimeSeconds/maxObjectSizeBytes, Max for minSimilarityScore
     /// </remarks>
     public static EffectivePolicy Merge(IReadOnlyList<PolicyDefinition> policies)
@@ -118,14 +120,13 @@ public static class PolicyMerger
         if (allMasked.Count == 0)
             return null;
 
-        // Group by field name, pick most restrictive (highest int value)
+        // Group by field name, pick most restrictive by disclosure ranking. null/redact
+        // reveal nothing and therefore beat partial/hash, which reveal real characters;
+        // an unrecognized mask type ranks above every known value so it cannot be
+        // downgraded (canonical-enforcement-spec.md section 6).
         var merged = allMasked
             .GroupBy(m => m.Field)
-            .Select(g =>
-            {
-                var mostRestrictive = g.OrderByDescending(m => (int)m.MaskType).First();
-                return mostRestrictive;
-            })
+            .Select(g => g.OrderByDescending(m => m.MaskType.Restrictiveness()).First())
             .ToArray();
 
         return merged;

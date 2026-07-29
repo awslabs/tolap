@@ -77,9 +77,12 @@ public sealed class SecureHttpToolWrapper
         var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
         // Parse → mutate → reserialize → reparse so we hand back an immutable JsonElement.
+        // Pipeline order per canonical-enforcement-spec.md section 4: hidden fields ->
+        // allowed fields -> masking -> result limit.
         using var doc = JsonDocument.Parse(raw);
         var node = JsonNodeFromElement(doc.RootElement);
         node = StripHiddenFields(node, policy);
+        node = ProjectAllowedFields(node, args.CollectionPath, policy);
         node = ApplyMaskingToBody(node, policy);
         node = LimitCollection(node, args.CollectionPath, policy);
 
@@ -87,6 +90,9 @@ public sealed class SecureHttpToolWrapper
         return JsonDocument.Parse(json).RootElement.Clone();
     }
 
+    /// <summary>
+    /// Validates signature then expiry; a missing expiry is a denial, never a skipped check.
+    /// </summary>
     private AccessResult ValidateSecurityContext(SecurityContext context)
     {
         if (_options.EnforceSignatures
@@ -94,9 +100,13 @@ public sealed class SecureHttpToolWrapper
         {
             return new AccessResult(false, "invalid signature");
         }
-        if (_options.EnforceExpiry && context.ExpiresAt < DateTimeOffset.UtcNow)
+        if (_options.EnforceExpiry)
         {
-            return new AccessResult(false, "security context expired");
+            var expiryReason = SecurityContextSigner.ValidateExpiry(context);
+            if (expiryReason is not null)
+            {
+                return new AccessResult(false, expiryReason);
+            }
         }
         return new AccessResult(true);
     }
@@ -140,39 +150,18 @@ public sealed class SecureHttpToolWrapper
         }
     }
 
+    /// <summary>
+    /// Removes hidden fields from a JSON response tree.
+    /// </summary>
+    /// <remarks>
+    /// Mirrors the SQL-side promise: a hidden field never reaches the agent. Delegates to
+    /// the shared core implementation so the HTTP and MCP paths cannot drift; the core
+    /// walks nested objects and arrays and matches a rule's bare and dotted forms against
+    /// a key's bare and dotted forms, so "results.patient.ssn" still reaches a nested
+    /// <c>ssn</c> key.
+    /// </remarks>
     private static object? StripHiddenFields(object? node, EffectivePolicy policy)
-    {
-        var hidden = policy.ObjectRules?.FieldRules?.HiddenFields;
-        if (hidden is null || hidden.Length == 0) return node;
-        foreach (var pattern in hidden)
-        {
-            WalkAndDrop(node, pattern.Split('.'));
-        }
-        return node;
-    }
-
-    private static void WalkAndDrop(object? node, string[] parts)
-    {
-        if (parts.Length == 0) return;
-        if (node is List<object?> list)
-        {
-            foreach (var item in list) WalkAndDrop(item, parts);
-            return;
-        }
-        if (node is Dictionary<string, object?> dict)
-        {
-            var head = parts[0];
-            if (!dict.ContainsKey(head)) return;
-            if (parts.Length == 1)
-            {
-                dict.Remove(head);
-            }
-            else
-            {
-                WalkAndDrop(dict[head], parts[1..]);
-            }
-        }
-    }
+        => EnforcementEngine.StripHiddenFieldsFromTree(node, policy);
 
     private static object? ApplyMaskingToBody(object? node, EffectivePolicy policy)
     {
@@ -208,43 +197,78 @@ public sealed class SecureHttpToolWrapper
         }
     }
 
+    /// <summary>
+    /// Applies a masking rule to a JSON leaf value.
+    /// </summary>
+    /// <remarks>
+    /// Delegates to <see cref="EnforcementEngine"/> so the HTTP path cannot drift from
+    /// the database/MCP path: an unknown mask type redacts rather than returning the raw
+    /// value, and a partial mask that would reveal the whole value degrades to a full
+    /// mask (canonical-enforcement-spec.md section 6).
+    /// </remarks>
     private static object? ApplyMask(object? value, MaskingRule rule)
+        => EnforcementEngine.ApplyMask(value, rule);
+
+    /// <summary>
+    /// Projects the response's records down to allowedFields.
+    /// </summary>
+    /// <remarks>
+    /// Step 4 of the pipeline. Projection targets the records themselves — the array at
+    /// <paramref name="collectionPath"/>, or the body when the body <i>is</i> the
+    /// collection — rather than the transport envelope, so an API's <c>meta</c>/paging
+    /// block survives while a record returning columns the policy never listed is
+    /// trimmed. A null allow-list is unrestricted; an empty allow-list denies every field.
+    /// </remarks>
+    private static object? ProjectAllowedFields(
+        object? body,
+        string? collectionPath,
+        EffectivePolicy policy)
     {
-        switch (rule.MaskType)
+        var allowed = policy.ObjectRules?.FieldRules?.AllowedFields;
+        if (allowed is null) return body;
+
+        if (collectionPath is null)
         {
-            case MaskType.Null:
-                return null;
-            case MaskType.Redact:
-                return "[REDACTED]";
-            case MaskType.Full:
-            {
-                var s = value?.ToString() ?? "";
-                var mc = rule.Parameters?.MaskChar ?? '*';
-                return new string(mc, s.Length);
-            }
-            case MaskType.Partial:
-            {
-                var s = value?.ToString() ?? "";
-                var sf = rule.Parameters?.ShowFirst ?? 0;
-                var sl = rule.Parameters?.ShowLast ?? 0;
-                var mc = rule.Parameters?.MaskChar ?? '*';
-                if (sf + sl >= s.Length) return s;
-                var sb = new StringBuilder(s.Length);
-                if (sf > 0) sb.Append(s[..sf]);
-                sb.Append(new string(mc, s.Length - sf - sl));
-                if (sl > 0) sb.Append(s[^sl..]);
-                return sb.ToString();
-            }
-            case MaskType.Hash:
-            {
-                var s = value?.ToString() ?? "";
-                using var sha = SHA256.Create();
-                var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(s));
-                return Convert.ToHexString(hash).ToLowerInvariant()[..16];
-            }
-            default:
-                return value;
+            return ProjectNode(body, allowed);
         }
+
+        var parts = collectionPath.Split('.');
+        object? cursor = body;
+        for (var i = 0; i < parts.Length - 1; i++)
+        {
+            if (cursor is not Dictionary<string, object?> d || !d.ContainsKey(parts[i]))
+                return body;
+            cursor = d[parts[i]];
+        }
+        var leaf = parts[^1];
+        if (cursor is Dictionary<string, object?> leafDict
+            && leafDict.TryGetValue(leaf, out var listObj)
+            && listObj is List<object?>)
+        {
+            leafDict[leaf] = ProjectNode(listObj, allowed);
+        }
+        return body;
+    }
+
+    private static object? ProjectNode(object? node, string[] allowed)
+    {
+        if (node is List<object?> list)
+        {
+            return list.Select(item => ProjectNode(item, allowed)).ToList();
+        }
+
+        if (node is Dictionary<string, object?> dict)
+        {
+            var projected = new Dictionary<string, object?>();
+            foreach (var (key, value) in dict)
+            {
+                if (allowed.Any(a => EnforcementEngine.FieldNameMatches(a, key)))
+                    projected[key] = value;
+            }
+            return projected;
+        }
+
+        return node;
     }
 
     private static object? LimitCollection(object? body, string? collectionPath, EffectivePolicy policy)

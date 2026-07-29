@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
-FIXTURES_DIR = Path(__file__).parent.parent.parent.parent / "fixtures"
+SDK_ROOT = Path(__file__).parent.parent
+FIXTURES_DIR = SDK_ROOT.parent.parent / "fixtures"
+
+# Import the packages from this checkout, not from whatever `pip install -e`
+# wired into site-packages. Without this the suite can silently exercise a
+# different working tree, so a passing run proves nothing about these sources.
+for _package_dir in ("tolap-core", "tolap-mcp", "tolap-store"):
+    _path = str(SDK_ROOT / _package_dir)
+    if _path in sys.path:
+        sys.path.remove(_path)
+    sys.path.insert(0, _path)
 
 
 @pytest.fixture

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import load_all_fixtures
+from tolap_core.enums import MaskType
 from tolap_core.merger import merge
 from tolap_core.serialization import deserialize_policy_definition
 
@@ -110,35 +111,33 @@ class TestMerger:
         assert _normalize_list(result.object_rules.field_rules.hidden_fields) == _normalize_list(exp_obj["fieldRules"]["hiddenFields"])
 
     def test_masked_fields_most_restrictive(self) -> None:
+        """Most restrictive mask wins per field: null > redact > full > hash > partial.
+
+        The shared fixture's `expected` block still encodes the old, inverted
+        ranking (it expects `partial` to beat `null` and `redact`), which would
+        disclose real characters of a value another policy demanded be erased.
+        Asserted here against the canonical ranking instead; the fixture is
+        shared across SDKs and is corrected in a separate step.
+        """
         _, data = next(
             (name, d) for name, d in load_all_fixtures("merge-scenarios")
             if name == "masked-fields-most-restrictive"
         )
         inputs = [deserialize_policy_definition(p) for p in data["inputs"]]
         result = merge(inputs)
-        expected = data["expected"]
 
-        exp_masked = expected["objectRules"]["fieldRules"]["maskedFields"]
-        result_masked = result.object_rules.field_rules.masked_fields
+        result_by_field = {m.field: m for m in result.object_rules.field_rules.masked_fields}
+        assert len(result_by_field) == 3
 
-        assert len(result_masked) == len(exp_masked)
+        # email: partial (policy A) vs hash (policy B) -> hash discloses less.
+        assert result_by_field["email"].mask_type == MaskType.hash
+        assert result_by_field["email"].parameters.algorithm == "sha256"
 
-        # Build lookup by field name
-        result_by_field = {m.field: m for m in result_masked}
-        for exp in exp_masked:
-            field_name = exp["field"]
-            assert field_name in result_by_field, f"Missing masked field: {field_name}"
-            actual = result_by_field[field_name]
-            assert actual.mask_type.value == exp["maskType"], f"Wrong mask type for {field_name}"
+        # phone: redact (A) vs partial (B) -> redact wins, no digits survive.
+        assert result_by_field["phone"].mask_type == MaskType.redact
 
-            if "parameters" in exp:
-                assert actual.parameters is not None
-                if "showFirst" in exp["parameters"]:
-                    assert actual.parameters.show_first == exp["parameters"]["showFirst"]
-                if "showLast" in exp["parameters"]:
-                    assert actual.parameters.show_last == exp["parameters"]["showLast"]
-                if "algorithm" in exp["parameters"]:
-                    assert actual.parameters.algorithm == exp["parameters"]["algorithm"]
+        # name: null (A) vs partial (B) -> null wins, the field is erased.
+        assert result_by_field["name"].mask_type == MaskType.null
 
     def test_row_filters_concatenate(self) -> None:
         _, data = next(

@@ -391,6 +391,7 @@ Schema version: **v1.0** (strict versioning, no extension points)
 ## Documentation
 
 - [Architecture Guide](docs/architecture.md) -- Components, data flow, sequence diagrams
+- [Canonical Enforcement Spec](docs/canonical-enforcement-spec.md) -- Normative cross-language behavior: canonical signing, enforcement pipeline order, fail-closed rules
 - Implementation Guides:
   - [.NET / C#](docs/implementation-guide-dotnet.md)
   - [Python](docs/implementation-guide-python.md)

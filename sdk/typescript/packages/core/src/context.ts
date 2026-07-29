@@ -17,7 +17,12 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Recursively sort all object keys for deterministic JSON output.
+ * Recursively sort all object keys and drop explicit nulls for deterministic
+ * JSON output (canonical spec §1).
+ *
+ * Nulls must be dropped during the sort walk rather than passed through:
+ * `null` and "absent" are indistinguishable in the canonical form, and the
+ * three SDKs only agree on the signed bytes if each omits both.
  */
 function deepSortKeys(value: unknown): unknown {
   if (value === null || value === undefined) return value;
@@ -26,7 +31,9 @@ function deepSortKeys(value: unknown): unknown {
     const obj = value as Record<string, unknown>;
     const sorted: Record<string, unknown> = {};
     for (const key of Object.keys(obj).sort()) {
-      sorted[key] = deepSortKeys(obj[key]);
+      const child = obj[key];
+      if (child === null || child === undefined) continue;
+      sorted[key] = deepSortKeys(child);
     }
     return sorted;
   }
@@ -34,13 +41,98 @@ function deepSortKeys(value: unknown): unknown {
 }
 
 /**
- * Produce a canonical JSON representation of the policy for signing.
- * This excludes the `integrity` block and uses compact JSON with
- * recursively sorted keys for deterministic output.
+ * Normalize an RFC 3339 timestamp to UTC with a `Z` suffix.
+ *
+ * Signing must not distinguish `+00:00` from `Z`, so both forms fold to the
+ * same bytes. Sub-second digits are **truncated to milliseconds** per spec §2
+ * rule 5 — omitted entirely when zero, otherwise exactly three digits. An
+ * unparseable value is passed through verbatim: the signature then covers
+ * exactly what was transported, and `validateExpiry` (which rejects unparseable
+ * values) is the control that stops it.
+ *
+ * Exported (but deliberately absent from the package's public index) so the
+ * conformance suite can assert the normalization table directly rather than only
+ * observing it through a signature, which cannot tell a precision bug from a key
+ * mismatch.
+ */
+export function normalizeTimestamp(value: string | undefined): string {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+
+  // Spec section 2 rule 5: truncate to milliseconds. `Date` already truncates
+  // anything finer on parse, so `toISOString()` is exactly the canonical form
+  // once a zero fractional part is dropped. Do NOT pad to six digits: Python and
+  // .NET truncate to three, so padding would reintroduce a cross-SDK mismatch on
+  // any timestamp carrying sub-second precision.
+  const iso = parsed.toISOString(); // always "....sssZ"
+  return parsed.getUTCMilliseconds() === 0
+    ? iso.replace(/\.\d{3}Z$/, "Z")
+    : iso;
+}
+
+/**
+ * Produce a canonical JSON representation of a single policy for signing.
+ * This excludes the `integrity` block (it cannot sign itself) and uses compact
+ * JSON with recursively sorted keys and explicit nulls dropped.
  */
 function canonicalize(policy: EffectivePolicy): string {
+  return JSON.stringify(deepSortKeys(stripIntegrity(policy)));
+}
+
+function stripIntegrity(policy: EffectivePolicy): Record<string, unknown> {
   const { integrity: _integrity, ...rest } = policy;
-  return JSON.stringify(deepSortKeys(rest));
+  return rest as Record<string, unknown>;
+}
+
+/** Timestamp-valued keys on a projected policy (canonical spec §2 rule 5). */
+const POLICY_TIMESTAMP_KEYS = ["resolvedAt", "expiresAt"] as const;
+
+/**
+ * Normalize the timestamps carried *inside* a projected policy.
+ *
+ * The envelope's `issuedAt`/`expiresAt` are not the only instants in the signed
+ * bytes: each policy repeats its own `resolvedAt`/`expiresAt`. .NET normalizes
+ * those through a canonical `DateTimeOffset` converter, so leaving them as the
+ * verbatim transport strings here made TypeScript sign `.123456Z` where .NET
+ * signed `.123Z` — the same context, two different signatures, and a cross-SDK
+ * verification failure the whole-second fixture could not detect.
+ */
+function normalizePolicyTimestamps(
+  policy: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...policy };
+  for (const key of POLICY_TIMESTAMP_KEYS) {
+    const value = out[key];
+    if (typeof value === "string") out[key] = normalizeTimestamp(value);
+  }
+  return out;
+}
+
+/**
+ * Project a SecurityContext into the canonical signing shape and serialize it.
+ *
+ * The HMAC covers the whole envelope, not just the policy (canonical spec §2):
+ *
+ *     {version, userId, tenantId, issuedAt, expiresAt, policies[]}
+ *
+ * `issuedAt` and `expiresAt` are *inside* the signed bytes, so rewriting an
+ * expiry on a captured context invalidates the signature instead of extending
+ * its life. The TypeScript SecurityContext holds one policy and calls its issue
+ * instant `resolvedAt`; both project into the canonical envelope so the bytes
+ * match the multi-policy SDKs while the public model stays unchanged.
+ */
+function canonicalPayload(context: SecurityContext): string {
+  const policy = context.effectivePolicy;
+  const payload: Record<string, unknown> = {
+    version: policy.version,
+    userId: policy.userId ?? "",
+    tenantId: policy.tenantId ?? "",
+    issuedAt: normalizeTimestamp(context.resolvedAt),
+    expiresAt: normalizeTimestamp(context.expiresAt),
+    policies: [normalizePolicyTimestamps(stripIntegrity(policy))],
+  };
+  return JSON.stringify(deepSortKeys(payload));
 }
 
 // ---------------------------------------------------------------------------
@@ -94,12 +186,18 @@ export function signContext(
   secretKey: string,
   algorithm: string = SigningAlgorithm.HmacSha256,
 ): SecurityContext {
-  const payload = canonicalize(context.effectivePolicy);
+  const payload = canonicalPayload(context);
   const signature = computeHmac(payload, secretKey, algorithm);
 
-  context.effectivePolicy.integrity = { algorithm, signature };
   context.signature = signature;
   context.algorithm = algorithm;
+  // The policy's own integrity block signs the policy alone, so that a policy
+  // extracted from the envelope is still independently verifiable. It is
+  // excluded from the envelope payload above and set after it is computed.
+  context.effectivePolicy.integrity = {
+    algorithm,
+    signature: computeHmac(canonicalize(context.effectivePolicy), secretKey, algorithm),
+  };
 
   return context;
 }
@@ -107,6 +205,9 @@ export function signContext(
 /**
  * Validate the integrity signature of a SecurityContext.
  * Uses timing-safe comparison to prevent timing attacks.
+ *
+ * The signature covers the whole envelope, so rewriting `expiresAt` or
+ * `resolvedAt` on a captured context invalidates it.
  */
 export function validateContext(
   context: SecurityContext,
@@ -114,8 +215,14 @@ export function validateContext(
 ): boolean {
   if (!context.signature || !context.algorithm) return false;
 
-  const payload = canonicalize(context.effectivePolicy);
-  const expected = computeHmac(payload, secretKey, context.algorithm);
+  let expected: string;
+  try {
+    expected = computeHmac(canonicalPayload(context), secretKey, context.algorithm);
+  } catch {
+    // Unknown algorithm on an attacker-supplied context: a validation failure,
+    // never a thrown error that escapes an enforcement check.
+    return false;
+  }
 
   const sigBuf = Buffer.from(context.signature, "base64");
   const expectedBuf = Buffer.from(expected, "base64");
@@ -123,6 +230,23 @@ export function validateContext(
   if (sigBuf.length !== expectedBuf.length) return false;
 
   return timingSafeEqual(sigBuf, expectedBuf);
+}
+
+/**
+ * Check a context's expiry, returning a denial reason or `undefined` when valid.
+ *
+ * Fails closed on both ends (canonical spec §2): a missing or empty expiry is
+ * never "never expires", and an unparseable expiry is never a silently skipped
+ * check. `new Date("never") <= new Date()` is `false` in JavaScript, which
+ * previously granted an unbounded lifetime to any context carrying a malformed
+ * timestamp.
+ */
+export function validateExpiry(context: SecurityContext): string | undefined {
+  if (!context.expiresAt) return "security context has no expiry";
+  const expires = new Date(context.expiresAt);
+  if (Number.isNaN(expires.getTime())) return "invalid expiry format";
+  if (expires.getTime() <= Date.now()) return "security context expired";
+  return undefined;
 }
 
 /**
@@ -135,9 +259,12 @@ export function serializeContext(context: SecurityContext): string {
 
 /**
  * Deserialize a SecurityContext from a base64-encoded string.
- * Validates the signature if a secret key is provided.
  *
- * @throws Error if deserialization fails, the context is expired, or signature is invalid.
+ * The signature is verified **before** expiry, so a tampered context reports a
+ * signature failure rather than leaking whether a valid context merely expired.
+ *
+ * @throws Error if deserialization fails, the signature is invalid, or the
+ * context is expired / carries a missing or unparseable expiry.
  */
 export function deserializeContext(
   serialized: string,
@@ -151,17 +278,15 @@ export function deserializeContext(
     throw new Error("Failed to deserialize security context");
   }
 
-  // Validate expiry
-  if (context.expiresAt) {
-    const expires = new Date(context.expiresAt);
-    if (expires <= new Date()) {
-      throw new Error("Security context has expired");
-    }
-  }
-
-  // Validate signature
+  // Validate signature first: expiry is inside the signed payload, so a
+  // rewritten expiry surfaces here rather than passing an expiry check.
   if (!validateContext(context, secretKey)) {
     throw new Error("Security context signature validation failed");
+  }
+
+  const expiryReason = validateExpiry(context);
+  if (expiryReason !== undefined) {
+    throw new Error(`Security context rejected: ${expiryReason}`);
   }
 
   return context;

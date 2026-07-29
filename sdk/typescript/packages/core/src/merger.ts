@@ -23,7 +23,7 @@ import {
   type PolicyPermissions,
   type MaskingRule,
   type RowFilter,
-  MASK_RESTRICTIVENESS,
+  maskRestrictiveness,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -106,8 +106,10 @@ function mergeMaskedFields(
       if (!existing) {
         byField.set(rule.field, { ...rule });
       } else {
-        const existingScore = MASK_RESTRICTIVENESS[existing.maskType] ?? 0;
-        const newScore = MASK_RESTRICTIVENESS[rule.maskType] ?? 0;
+        // An unknown mask type ranks most-restrictive (see maskRestrictiveness)
+        // so a typo cannot be downgraded into a weaker known type.
+        const existingScore = maskRestrictiveness(existing.maskType);
+        const newScore = maskRestrictiveness(rule.maskType);
         if (newScore > existingScore) {
           byField.set(rule.field, { ...rule });
         }

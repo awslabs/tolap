@@ -98,6 +98,14 @@ export interface SecureMcpServerOptions {
   identityExtractor?: RequestIdentityExtractor;
   /** Callback invoked on enforcement decisions (for logging/audit). */
   onEnforcementDecision?: (decision: EnforcementDecision) => void;
+  /**
+   * Pass through tool results the policy cannot be applied to.
+   *
+   * Off by default: a scalar, null, or an arbitrary object is denied rather than
+   * returned unfiltered (canonical spec §5). Integrators mid-migration may opt
+   * in per wrapper, which is logged every time it lets a result through.
+   */
+  allowUnenforceableShapes?: boolean;
 }
 
 // ---------------------------------------------------------------------------

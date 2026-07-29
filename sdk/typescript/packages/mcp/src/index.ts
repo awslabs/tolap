@@ -16,6 +16,7 @@ export {
 export { SecureMcpToolWrapper } from "./wrapper.js";
 export {
   HeaderIdentityExtractor,
+  IdentityExtractionError,
   JwtIdentityExtractor,
   type JwtExtractorOptions,
 } from "./extractors.js";

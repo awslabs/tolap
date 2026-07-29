@@ -7,8 +7,150 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Security
+
+A security review of all three SDKs found that several policy controls were not
+actually enforced on returned data, and that signed contexts were not
+tamper-evident in the way the documentation claimed. All findings are fixed
+across .NET, Python, and TypeScript, with a regression test per defect and a new
+normative specification — [`docs/canonical-enforcement-spec.md`](docs/canonical-enforcement-spec.md)
+— that all three SDKs implement and are tested against.
+
+**Enforcement gaps (data could reach the agent in violation of policy):**
+
+- **`hiddenFields` was never removed from results** on the database/MCP path in
+  any language. It was only pre-checked against the field list a caller
+  volunteered, so a tool returning undeclared columns (e.g. `SELECT *`) returned
+  hidden fields in cleartext. Only the HTTP wrappers stripped them. Hidden-field
+  removal is now part of the post-execution pipeline in every wrapper.
+- **`allowedFields` was never enforced on results** in any wrapper. Results are
+  now projected to the allow-list.
+- **Single-record results skipped most enforcement.** The single-record branch
+  applied masking only, bypassing row filters, tag filters, and the result limit
+  — so a record excluded by `deniedTags` was still returned by a get-by-id tool.
+  Single records now run the identical pipeline.
+- **Unenforceable result shapes passed through unfiltered.** Shapes the engine
+  cannot inspect are now denied by default, with an explicit, logged
+  `allowUnenforceableShapes` opt-out (threat-model remediation R-3).
+- **Negative row-filter operators failed open.** `notEquals`/`notIn` retained
+  rows that were missing the filtered field entirely, contradicting the
+  documented fail-closed contract. All operators now drop such rows.
+- **Unknown mask types returned the raw value.** A typo'd or newer `maskType`
+  silently disabled masking. Unknown types are now treated as `redact`.
+- **`partial` masking returned the original value** when
+  `showFirst + showLast >= len(value)`; it now degrades to a full mask.
+- **Nested fields were not masked** on the MCP path (only top-level keys were
+  matched). Masking and hidden-field removal now recurse, and field references
+  match bare and table-qualified forms in both directions, case-insensitively.
+
+**Merge correctness (policies could combine to grant *more* access):**
+
+- **Intersecting two disjoint allow-lists granted unrestricted access**
+  (Python). An empty intersection is the most restrictive possible outcome, but
+  an emptiness check discarded the rule object, which enforcement then read as
+  "no restriction". `null` (unrestricted) and `[]` (deny-all) are now distinct
+  everywhere.
+- **Mask restrictiveness was ranked inverted** in all three SDKs, so merging
+  `null` with `partial` produced `partial` — disclosing real characters a policy
+  had demanded be erased. Ranking is now by disclosure:
+  `partial < hash < full < redact < null`.
+- **Absent boolean permissions merged inconsistently** (Python vs .NET/TS):
+  a policy silent on `readOnly` combined with `readOnly: false` yielded
+  `false` in Python and `true` elsewhere. Absent values now take their schema
+  default before folding in all three.
+
+**Signing and replay:**
+
+- **Context expiry was outside the signature** (Python, TypeScript). Because the
+  HMAC covered only the policy, a captured context's `expiresAt` could be
+  rewritten — or removed entirely — without the signing key, and it would still
+  verify. Expiry was the only replay bound. The signature now covers the full
+  envelope.
+- **Invalid and missing expiry values were treated as "never expires."** An
+  unparseable timestamp made every comparison false, granting an unbounded
+  lifetime. Missing/unparseable expiry now rejects, in signed contexts and in
+  stored assignment activity checks.
+- **Revocation did nothing** (.NET). `RevokePolicyAsync` emitted a
+  `PolicyRevoked` audit event and returned `true` without removing the
+  assignment, so revoked principals kept resolving the policy while the audit
+  trail reported success. Revocation now removes the assignment, and the test
+  asserts access is gone rather than only that an event fired.
+
+**Cross-SDK signing precision.** The canonical form now mandates timestamps
+truncated to **millisecond** precision. Python and .NET natively serialized
+microseconds while JavaScript's `Date` cannot represent them at all, so the same
+instant signed in different languages produced different bytes and failed to
+verify across SDKs. The whole-second known-answer fixture could not detect this,
+so `fixtures/signing/hmac-sha256-subsecond.json` was added to pin it. Truncation
+(never rounding) is specified so an expiry cannot be moved later than the issuer
+intended.
+
+**Identity extraction now fails loudly and identically.** .NET threw on an invalid
+JWT while Python and TypeScript silently returned no identity, so the same expired
+token produced a hard error in one SDK and an anonymous request — resolving
+whatever a default assignment granted — in the other two. All three now distinguish
+*absent* credentials (legitimately anonymous) from *presented and invalid*
+(malformed, bad algorithm, `alg=none`, bad signature, expired, not-yet-valid, or
+missing a required claim), and raise on the latter. `nbf` (not-before) is now
+validated in all three; it was previously unchecked everywhere.
+
+**Other hardening:** JWT `exp` with a floating-point value no longer skips the
+expiry check (.NET); `matches` patterns are compiled as `^(?:…)$` so top-level
+alternation cannot escape the anchors (TypeScript); regex evaluation and
+comparison operators are bounded and fail closed instead of raising; masking no
+longer aliases the caller's nested objects; prototype-polluting keys are skipped
+when walking response bodies; a denylist-only `tagRules` policy no longer drops
+untagged records.
+
+### Changed — BREAKING
+
+- **Version is now `2.0.0`** across all three SDKs, reflecting the wire-format and
+  merge-semantics changes below. Inter-package dependencies were repinned
+  (`tolap-core>=2.0.0`, `@tolap/core@2.0.0`) so a 1.x core cannot be resolved
+  alongside a 2.x wrapper — mixing them across a signing boundary would fail every
+  verification. The .NET projects now declare an explicit `<Version>`; previously
+  they would have packed as `1.0.0` regardless of this file.
+- **An invalid credential now raises instead of resolving as anonymous** in Python
+  and TypeScript (see above). Integrators who relied on a rejected token silently
+  falling through to a default/anonymous policy will now see an exception. This is
+  the intended behavior: an authentication failure must not become an authorization
+  decision.
+- **Timestamps are truncated to milliseconds in the signed payload.** A context
+  signed with sub-millisecond precision by an earlier build will not verify.
+- **The signed-context wire format changed.** Signatures now cover the whole
+  canonical envelope (`{version, userId, tenantId, issuedAt, expiresAt,
+  policies[]}`) serialized in one canonical JSON form — recursively sorted keys,
+  compact separators, no unicode escaping, null fields omitted. **Contexts signed
+  by an earlier version will not verify, and vice versa.** Re-issue any
+  long-lived signed contexts when upgrading. In exchange, a context signed by
+  one SDK now verifies in the other two, which previously was not possible: the
+  three implementations signed different payloads in different canonical forms.
+- **`fixtures/signing/hmac-sha256-known-answer.json` now carries a real
+  `expectedSignature`** (and the canonical byte string). Previously the fixture
+  contained no expected value, and the .NET suite never loaded it at all, so the
+  cross-language signature guarantee it documented was never actually asserted —
+  which is why the divergence above went unnoticed. All three suites now assert
+  against it byte-for-byte.
+- **Mask restrictiveness ordering changed** (see above). Policies that relied on
+  `partial`/`hash` winning a merge against `null`/`redact` will now resolve to
+  the stricter mask.
+
 ### Added
 
+- **`docs/canonical-enforcement-spec.md`** — the normative cross-language
+  specification for canonical signing, the enforcement pipeline and its order,
+  null-vs-empty semantics, mask ranking, identity-failure semantics, timestamp
+  precision, fail-closed rules, and known limitations.
+- **Continuous integration** (`.github/workflows/ci.yml`). None of the fixes above
+  were caught by automation because the repository had no CI at all. Every push and
+  pull request now runs all three suites — with Postgres and MySQL service
+  containers, so the database integration tests actually execute rather than
+  skipping — plus a dedicated cross-SDK conformance job that verifies all three
+  SDKs produce identical canonical signing bytes, and a guard that fails if a
+  known-answer fixture ever loses its expected values. Also adds Dependabot and a
+  pull-request template with a cross-SDK parity checklist.
+- **`fixtures/signing/hmac-sha256-subsecond.json`** — known-answer fixture with
+  microsecond input timestamps, pinning the millisecond-truncation rule.
 - **`tolap_core.enforcement.apply_row_filters`** — runtime application of
   `RowFilter` rules. Drops rows that fail any filter (filters AND together).
   Supports every `FilterOperator` variant: `equals`, `notEquals`, `in`,

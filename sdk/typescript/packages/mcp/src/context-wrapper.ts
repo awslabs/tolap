@@ -11,16 +11,15 @@
  */
 
 import {
-  applyFieldMasking,
-  applyResultLimit,
-  applyRowFilters,
-  filterByTags,
+  applyResultPipeline,
+  classifyResultShape,
+  describeResultShape,
   validateAccess,
   validateContext,
   validateEndpoint,
+  validateExpiry,
   validateFieldAccess,
   type AccessResult,
-  type EffectivePolicy,
   type SecurityContext,
 } from "@tolap/core";
 
@@ -29,6 +28,14 @@ export interface SecureContextWrapperOptions {
   enforceSignatures?: boolean;
   enforceExpiry?: boolean;
   allowedTools?: string[];
+  /**
+   * Pass through tool results the policy cannot be applied to.
+   *
+   * Off by default: a scalar, null, or an arbitrary object is denied rather than
+   * returned unfiltered (canonical spec §5). Integrators mid-migration may opt
+   * in per wrapper, which is logged every time it lets a result through.
+   */
+  allowUnenforceableShapes?: boolean;
 }
 
 export interface PreExecuteArgs {
@@ -41,7 +48,10 @@ export interface PreExecuteArgs {
 
 export class SecureContextToolWrapper {
   private options: Required<
-    Pick<SecureContextWrapperOptions, "enforceSignatures" | "enforceExpiry">
+    Pick<
+      SecureContextWrapperOptions,
+      "enforceSignatures" | "enforceExpiry" | "allowUnenforceableShapes"
+    >
   > &
     SecureContextWrapperOptions;
 
@@ -49,20 +59,28 @@ export class SecureContextToolWrapper {
     this.options = {
       enforceSignatures: true,
       enforceExpiry: true,
+      allowUnenforceableShapes: false,
       ...options,
     };
   }
 
+  /**
+   * Validate signature then expiry.
+   *
+   * Signature first: a tampered context must report a signature failure rather
+   * than reveal whether a valid context had merely expired. A missing or
+   * unparseable expiry is a denial, never a skipped check.
+   */
   validateSecurityContext(context: SecurityContext): AccessResult {
     if (this.options.enforceSignatures) {
       if (!validateContext(context, this.options.signingKey)) {
         return { allowed: false, reason: "invalid signature" };
       }
     }
-    if (this.options.enforceExpiry && context.expiresAt) {
-      const expiry = new Date(context.expiresAt);
-      if (expiry.getTime() < Date.now()) {
-        return { allowed: false, reason: "security context expired" };
+    if (this.options.enforceExpiry) {
+      const expiryReason = validateExpiry(context);
+      if (expiryReason !== undefined) {
+        return { allowed: false, reason: expiryReason };
       }
     }
     return { allowed: true };
@@ -99,15 +117,34 @@ export class SecureContextToolWrapper {
     return { allowed: true };
   }
 
+  /**
+   * Post-execution enforcement over a tool result.
+   *
+   * Applies the canonical pipeline in order (spec §4): row filters -> tag
+   * filters -> hidden fields -> allowed fields -> masking -> result limit.
+   *
+   * Accepts a single record or an array of records; a single record runs the
+   * identical pipeline. Any other shape is denied unless the wrapper was
+   * configured with `allowUnenforceableShapes`.
+   */
   postExecute(
     context: SecurityContext,
     results: Array<Record<string, unknown>>,
-  ): Array<Record<string, unknown>> {
-    const policy: EffectivePolicy = context.effectivePolicy;
-    let out: Array<Record<string, unknown>> = applyRowFilters(results, policy);
-    out = filterByTags(out, policy);
-    out = out.map((row) => applyFieldMasking(row, policy));
-    return applyResultLimit(out, policy);
+  ): Array<Record<string, unknown>>;
+  postExecute(context: SecurityContext, results: unknown): unknown;
+  postExecute(context: SecurityContext, results: unknown): unknown {
+    if (
+      classifyResultShape(results) === undefined &&
+      this.options.allowUnenforceableShapes
+    ) {
+      console.warn(
+        "TOLAP enforcement bypassed: allowUnenforceableShapes is enabled and " +
+          `the tool returned ${describeResultShape(results)}, which is passed ` +
+          "through unfiltered.",
+      );
+      return results;
+    }
+    return applyResultPipeline(results, context.effectivePolicy);
   }
 
   async executeWithEnforcement(

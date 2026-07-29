@@ -1,6 +1,6 @@
 {
   "name": "@tolap/mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -8,7 +8,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@tolap/core": "1.0.0"
+    "@tolap/core": "2.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",

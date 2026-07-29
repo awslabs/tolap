@@ -1,0 +1,21 @@
+# Code owners are requested for review automatically on every pull request.
+#
+# ACTION REQUIRED: replace the placeholder below with the real GitHub team or
+# user handles before relying on this file. An unresolvable owner silently
+# results in no review request at all, which is worse than having no CODEOWNERS.
+#
+# Suggested shape once the owning team is known:
+#
+#   *                            @awslabs/tolap-maintainers
+#
+#   # Security-critical surfaces warrant a second, security-focused reviewer.
+#   /docs/canonical-enforcement-spec.md   @awslabs/tolap-maintainers
+#   /fixtures/signing/                    @awslabs/tolap-maintainers
+#   /sdk/*/src/**/SecurityContextSigner*  @awslabs/tolap-maintainers
+#   /sdk/*/**/context.*                   @awslabs/tolap-maintainers
+#   /sdk/*/**/extractors.*                @awslabs/tolap-maintainers
+#   /sdk/*/**/merger.*                    @awslabs/tolap-maintainers
+#   /sdk/*/**/enforcement.*               @awslabs/tolap-maintainers
+#   /.github/workflows/                   @awslabs/tolap-maintainers
+
+* @phspies

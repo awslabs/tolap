@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tolap_core.enums import MaskType
+from tolap_core.enums import mask_restrictiveness
 from tolap_core.models import (
     EffectivePolicy,
     EndpointRules,
@@ -20,8 +20,11 @@ def merge(policies: list[PolicyDefinition]) -> EffectivePolicy:
 
     Merge rules:
     - Empty list -> deny_all()
-    - Permissions: AND for can_query/can_export, OR for read_only
-    - Allowed sets: Intersection (None means unrestricted from that policy)
+    - Permissions: absent booleans take their schema default first (can_query
+      True, can_export False, read_only True), then AND for can_query/can_export
+      and OR for read_only
+    - Allowed sets: Intersection (None means unrestricted from that policy; an
+      empty result means deny-all and is retained, never discarded)
     - Hidden/denied sets: Union
     - Row filters: Concatenate
     - Masked fields: Group by field, pick highest restrictiveness
@@ -45,21 +48,21 @@ def merge(policies: list[PolicyDefinition]) -> EffectivePolicy:
 
 
 def _merge_permissions(policies: list[PolicyDefinition]) -> PolicyPermissions:
-    # AND for can_query and can_export, OR for read_only
-    can_query = all(p.permissions.can_query for p in policies)
+    """Fold permission flags, defaulting absent values before folding.
 
-    # For can_export: AND of all policies that specify it; if none specify it, None
-    can_export_values = [p.permissions.can_export for p in policies if p.permissions.can_export is not None]
-    can_export: bool | None = all(can_export_values) if can_export_values else None
-
-    # For read_only: OR of all policies that specify it; if none specify it, None
-    read_only_values = [p.permissions.read_only for p in policies if p.permissions.read_only is not None]
-    read_only: bool | None = any(read_only_values) if read_only_values else None
+    Excluding an absent flag from the fold inverts the outcome: policy A silent
+    on read_only plus policy B with read_only=False must yield True (the
+    restrictive reading of "A did not grant write access"), not False.
+    """
+    # Schema defaults for absent flags, applied BEFORE folding.
+    can_query_values = [p.permissions.can_query if p.permissions.can_query is not None else True for p in policies]
+    can_export_values = [p.permissions.can_export if p.permissions.can_export is not None else False for p in policies]
+    read_only_values = [p.permissions.read_only if p.permissions.read_only is not None else True for p in policies]
 
     return PolicyPermissions(
-        can_query=can_query,
-        can_export=can_export,
-        read_only=read_only,
+        can_query=all(can_query_values),
+        can_export=all(can_export_values),
+        read_only=any(read_only_values),
     )
 
 
@@ -115,7 +118,7 @@ def _merge_masked_fields(policies: list[PolicyDefinition]) -> list[MaskingRule] 
             continue
         for rule in p.object_rules.field_rules.masked_fields:
             existing = by_field.get(rule.field)
-            if existing is None or rule.mask_type.restrictiveness > existing.mask_type.restrictiveness:
+            if existing is None or mask_restrictiveness(rule.mask_type) > mask_restrictiveness(existing.mask_type):
                 by_field[rule.field] = rule
     if not by_field:
         return None
@@ -223,14 +226,19 @@ def _max_of_minima(values: list[int | float | None]) -> float | None:
     return max(non_none) if non_none else None
 
 
+# Retention checks test `is not None`, never truthiness. An empty allow-list is
+# the most restrictive possible outcome (deny everything); discarding the rules
+# object because [] is falsy would silently convert it into no restriction at all.
+
+
 def _has_object_rules(rules: ObjectRules | None) -> bool:
     if rules is None:
         return False
     return any([
-        rules.allowed_objects,
-        rules.hidden_objects,
+        rules.allowed_objects is not None,
+        rules.hidden_objects is not None,
         _has_field_rules(rules.field_rules),
-        rules.row_filters,
+        rules.row_filters is not None,
         _has_tag_rules(rules.tag_rules),
         _has_endpoint_rules(rules.endpoint_rules),
     ])
@@ -240,23 +248,27 @@ def _has_field_rules(rules: FieldRules | None) -> bool:
     if rules is None:
         return False
     return any([
-        rules.allowed_fields,
-        rules.hidden_fields,
-        rules.masked_fields,
-        rules.read_only_fields,
+        rules.allowed_fields is not None,
+        rules.hidden_fields is not None,
+        rules.masked_fields is not None,
+        rules.read_only_fields is not None,
     ])
 
 
 def _has_tag_rules(rules: TagRules | None) -> bool:
     if rules is None:
         return False
-    return any([rules.allowed_tags, rules.denied_tags])
+    return any([rules.allowed_tags is not None, rules.denied_tags is not None])
 
 
 def _has_endpoint_rules(rules: EndpointRules | None) -> bool:
     if rules is None:
         return False
-    return any([rules.allowed_endpoints, rules.hidden_endpoints, rules.allowed_methods])
+    return any([
+        rules.allowed_endpoints is not None,
+        rules.hidden_endpoints is not None,
+        rules.allowed_methods is not None,
+    ])
 
 
 def _has_limits(limits: PolicyLimits | None) -> bool:

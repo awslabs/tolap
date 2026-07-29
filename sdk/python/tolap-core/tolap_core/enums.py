@@ -12,16 +12,35 @@ class MaskType(Enum):
 
     @property
     def restrictiveness(self) -> int:
-        return _MASK_RESTRICTIVENESS[self]
+        return mask_restrictiveness(self)
 
 
+# Ranked by how much of the original value is disclosed (canonical spec section 6):
+# partial leaks real characters, hash is irreversible but joinable, full leaks the
+# length, redact leaks nothing, null leaks not even the field's presence. Higher
+# rank wins a merge, so null/redact beat partial rather than losing to it.
 _MASK_RESTRICTIVENESS: dict[MaskType, int] = {
-    MaskType.full: 5,
-    MaskType.hash: 4,
-    MaskType.partial: 3,
-    MaskType.redact: 2,
-    MaskType.null: 1,
+    MaskType.partial: 1,
+    MaskType.hash: 2,
+    MaskType.full: 3,
+    MaskType.redact: 4,
+    MaskType.null: 5,
 }
+
+# An unrecognized mask type (typo, or a newer schema version) must never be beaten
+# by a known-but-weaker type, so it ranks above every value above.
+_UNKNOWN_MASK_RESTRICTIVENESS = max(_MASK_RESTRICTIVENESS.values()) + 1
+
+
+def mask_restrictiveness(mask_type: object) -> int:
+    """Rank a mask type by how little of the value it discloses (higher = stricter).
+
+    Anything that is not a known MaskType ranks most restrictive so that merging
+    can never downgrade an unknown mask into a weaker known one.
+    """
+    if isinstance(mask_type, MaskType):
+        return _MASK_RESTRICTIVENESS[mask_type]
+    return _UNKNOWN_MASK_RESTRICTIVENESS
 
 
 class FilterOperator(Enum):

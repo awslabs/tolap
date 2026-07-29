@@ -21,6 +21,15 @@ public enum EnforcementMode
 /// <summary>
 /// Configuration options for the secure MCP server wrapper.
 /// </summary>
+/// <param name="AllowUnenforceableShapes">
+/// Pass through tool results the policy cannot be applied to.
+/// <para>
+/// Off by default: a POCO/DTO, a scalar, a stream, or an unmaterialized iterator is
+/// denied rather than returned unfiltered (canonical-enforcement-spec.md section 5).
+/// Integrators mid-migration may opt in per wrapper, which is logged every time it
+/// lets a result through.
+/// </para>
+/// </param>
 public sealed record SecureMcpServerOptions(
     IPolicyStore PolicyStore,
     IIdentityResolver IdentityResolver,
@@ -28,4 +37,5 @@ public sealed record SecureMcpServerOptions(
     string SigningKey,
     TimeSpan? ContextTtl = null,
     Dictionary<string, string>? SourceMapping = null,
-    EnforcementMode EnforcementMode = EnforcementMode.Strict);
+    EnforcementMode EnforcementMode = EnforcementMode.Strict,
+    bool AllowUnenforceableShapes = false);

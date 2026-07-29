@@ -32,6 +32,8 @@ export {
   type AccessResult,
   type FieldAccessResult,
   MASK_RESTRICTIVENESS,
+  UNKNOWN_MASK_RESTRICTIVENESS,
+  maskRestrictiveness,
   createDenyAllPolicy,
 } from "./types.js";
 
@@ -52,6 +54,7 @@ export {
   buildSecurityContext,
   signContext,
   validateContext,
+  validateExpiry,
   serializeContext,
   deserializeContext,
   signPolicy,
@@ -62,9 +65,17 @@ export {
 export {
   validateAccess,
   validateFieldAccess,
+  applyMask,
   applyFieldMasking,
+  stripHiddenFields,
+  projectAllowedFields,
   applyResultLimit,
+  applyResultPipeline,
   applyRowFilters,
   filterByTags,
+  classifyResultShape,
+  describeResultShape,
+  UnenforceableResultError,
+  type ResultShape,
   validateEndpoint,
 } from "./enforcement.js";

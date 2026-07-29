@@ -143,8 +143,10 @@ describe("Security Context", () => {
       signContext(ctx, TEST_SECRET);
       const serialized = serializeContext(ctx);
 
+      // The denial reason is now carried in the message so that "expired",
+      // "no expiry", and "invalid expiry format" are distinguishable.
       expect(() => deserializeContext(serialized, TEST_SECRET)).toThrow(
-        "Security context has expired",
+        /security context expired/,
       );
     });
 

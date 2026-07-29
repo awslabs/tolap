@@ -3,21 +3,19 @@
  *
  * Wraps MCP tool calls with TOLAP policy enforcement:
  * - Pre-execution: validate access, field access, endpoint access
- * - Post-execution: apply field masking, result limits, tag filtering
+ * - Post-execution: the canonical pipeline (row filters -> tag filters ->
+ *   hidden fields -> allowed fields -> masking -> result limit)
  */
 
 import {
   validateAccess,
   validateFieldAccess,
   validateEndpoint,
-  applyFieldMasking,
-  applyResultLimit,
-  applyRowFilters,
-  filterByTags,
+  applyResultPipeline,
+  classifyResultShape,
+  describeResultShape,
   validatePolicy,
-  validateContext,
   type EffectivePolicy,
-  type SecurityContext,
 } from "@tolap/core";
 import {
   EnforcementMode,
@@ -27,6 +25,28 @@ import {
   type EnforcementDecision,
 } from "./types.js";
 
+/**
+ * Emit the startup warning when a non-denying enforcement mode is active
+ * (threat-model R-6).
+ *
+ * Exported so the context wrapper shares one message, and so the warning is
+ * testable without constructing a full MCP wrapper.
+ */
+export function warnIfEnforcementDisabled(mode: EnforcementMode): void {
+  if (mode === EnforcementMode.Strict) return;
+
+  const detail =
+    mode === EnforcementMode.Disabled
+      ? "enforcement is skipped entirely and tool results are returned unfiltered"
+      : "policy violations are logged but access is allowed";
+
+  console.warn(
+    `TOLAP enforcement is NOT enforcing: mode "${mode}" means ${detail}. ` +
+      "This is intended for migration only and MUST NOT be used in production. " +
+      "Set EnforcementMode.Strict to enforce policy.",
+  );
+}
+
 export class SecureMcpToolWrapper {
   private tools = new Map<string, McpToolDefinition>();
   private options: Required<
@@ -34,11 +54,25 @@ export class SecureMcpToolWrapper {
   > &
     SecureMcpServerOptions;
 
+  /**
+   * Construct the wrapper, warning loudly when configured in a mode that cannot
+   * deny.
+   *
+   * Threat-model remediation R-6: {@link EnforcementMode.Disabled} skips
+   * enforcement entirely and {@link EnforcementMode.AuditOnly} is documented as
+   * "log violations but allow access", so a deployment that reaches production
+   * still carrying either has no enforcement at all while continuing to look
+   * configured. The warning fires at construction rather than on the first
+   * denial, because a service whose policies happen not to deny anything during a
+   * smoke test would otherwise ship silently. `allowUnenforceableShapes` already
+   * warns on the same channel when it passes a result through.
+   */
   constructor(options: SecureMcpServerOptions = {}) {
     this.options = {
       mode: EnforcementMode.Strict,
       ...options,
     };
+    warnIfEnforcementDisabled(this.options.mode);
   }
 
   /** Register a tool for secure wrapping. */
@@ -169,66 +203,39 @@ export class SecureMcpToolWrapper {
   // Post-execution enforcement
   // -----------------------------------------------------------------------
 
+  /**
+   * Run the canonical post-execution pipeline over a tool result.
+   *
+   * Delegates to the shared core implementation so the MCP, context, and HTTP
+   * wrappers cannot drift: all three run row filters -> tag filters -> hidden
+   * fields -> allowed fields -> masking -> result limit, over a single record
+   * and an array of records alike.
+   *
+   * A shape the policy cannot be applied to is denied rather than returned
+   * unfiltered (canonical spec §5), unless the wrapper opted out explicitly.
+   */
   private enforcePostExecution(
     result: unknown,
     policy: EffectivePolicy,
   ): unknown {
-    if (result === null || result === undefined) return result;
-
-    // If result is an array of records, apply row filters, tag filtering,
-    // masking, then result limits (mirrors Python ordering exactly).
-    if (Array.isArray(result)) {
-      let filtered: unknown[] = result;
-
-      if (policy.objectRules?.rowFilters && this.isRecordArray(filtered)) {
-        filtered = applyRowFilters(
-          filtered as Array<Record<string, unknown>>,
-          policy,
-        );
-      }
-
-      if (policy.objectRules?.tagRules && this.isRecordArray(filtered)) {
-        filtered = filterByTags(
-          filtered as Array<Record<string, unknown>>,
-          policy,
-        );
-      }
-
-      if (
-        policy.objectRules?.fieldRules?.maskedFields &&
-        this.isRecordArray(filtered)
-      ) {
-        filtered = (filtered as Array<Record<string, unknown>>).map((record) =>
-          applyFieldMasking(record, policy),
-        );
-      }
-
-      filtered = applyResultLimit(filtered, policy);
-      return filtered;
+    if (
+      classifyResultShape(result) === undefined &&
+      this.options.allowUnenforceableShapes
+    ) {
+      console.warn(
+        "TOLAP enforcement bypassed: allowUnenforceableShapes is enabled and " +
+          `the tool returned ${describeResultShape(result)}, which is passed ` +
+          "through unfiltered.",
+      );
+      return result;
     }
 
-    // If result is a single record, apply field masking
-    if (typeof result === "object" && !Array.isArray(result)) {
-      if (policy.objectRules?.fieldRules?.maskedFields) {
-        return applyFieldMasking(
-          result as Record<string, unknown>,
-          policy,
-        );
-      }
-    }
-
-    return result;
+    return applyResultPipeline(result, policy);
   }
 
   // -----------------------------------------------------------------------
   // Helpers
   // -----------------------------------------------------------------------
-
-  private isRecordArray(
-    value: unknown[],
-  ): value is Array<Record<string, unknown>> {
-    return value.length > 0 && typeof value[0] === "object" && value[0] !== null;
-  }
 
   private handleDecision(
     request: McpRequestContext,

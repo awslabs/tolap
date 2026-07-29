@@ -1,6 +1,12 @@
 """TOLAP Core - Models, merge algorithm, signing, and enforcement."""
 
-from tolap_core.enums import AssigneeType, FilterOperator, MaskType, SigningAlgorithm
+from tolap_core.enums import (
+    AssigneeType,
+    FilterOperator,
+    MaskType,
+    SigningAlgorithm,
+    mask_restrictiveness,
+)
 from tolap_core.models import (
     Assignee,
     AssignmentScope,
@@ -34,13 +40,21 @@ from tolap_core.context import (
     serialize_context,
     sign_context,
     validate_context,
+    validate_expiry,
 )
 from tolap_core.enforcement import (
     AccessResult,
     FieldAccessResult,
+    UnenforceableResultError,
     apply_field_masking,
     apply_result_limit,
+    apply_result_pipeline,
+    apply_row_filters,
+    classify_result_shape,
+    describe_result_shape,
     filter_by_tags,
+    project_allowed_fields,
+    strip_hidden_fields,
     validate_access,
     validate_endpoint,
     validate_field_access,
@@ -52,6 +66,7 @@ __all__ = [
     "FilterOperator",
     "MaskType",
     "SigningAlgorithm",
+    "mask_restrictiveness",
     # Models
     "Assignee",
     "AssignmentScope",
@@ -85,12 +100,20 @@ __all__ = [
     "serialize_context",
     "sign_context",
     "validate_context",
+    "validate_expiry",
     # Enforcement
     "AccessResult",
     "FieldAccessResult",
+    "UnenforceableResultError",
     "apply_field_masking",
     "apply_result_limit",
+    "apply_result_pipeline",
+    "apply_row_filters",
+    "classify_result_shape",
+    "describe_result_shape",
     "filter_by_tags",
+    "project_allowed_fields",
+    "strip_hidden_fields",
     "validate_access",
     "validate_endpoint",
     "validate_field_access",

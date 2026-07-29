@@ -123,9 +123,19 @@ def _deser_masking_parameters(data: dict | None) -> MaskingParameters | None:
 
 def _deser_masking_rule(data: dict) -> MaskingRule:
     d = _convert_keys_to_snake(data)
+    raw_mask_type = d["mask_type"]
+    if raw_mask_type not in _MASK_TYPE_MAP:
+        # Fail closed at the boundary rather than admitting a rule whose
+        # semantics we cannot honour. The runtime masking path also fails closed
+        # on an unknown type (it redacts), but a policy should never load with a
+        # mask type this SDK does not implement.
+        valid = ", ".join(sorted(_MASK_TYPE_MAP))
+        raise ValueError(
+            f"unknown maskType {raw_mask_type!r} for field {d.get('field')!r}; expected one of: {valid}"
+        )
     return MaskingRule(
         field=d["field"],
-        mask_type=_MASK_TYPE_MAP[d["mask_type"]],
+        mask_type=_MASK_TYPE_MAP[raw_mask_type],
         parameters=_deser_masking_parameters(d.get("parameters")),
     )
 

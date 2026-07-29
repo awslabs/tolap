@@ -80,11 +80,23 @@ export type GetRolesFn = (userId: string) => string[] | Promise<string[]>;
 // Assignment filtering
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether an assignment is still active.
+ *
+ * Expiry fails closed (canonical spec §2): an unparseable `expiresAt` is
+ * treated as expired rather than skipped. `new Date("never") <= new Date()` is
+ * `false` in JavaScript, so a comparison-only check silently granted a
+ * malformed assignment an unbounded lifetime — and unlike a security context,
+ * an assignment carries no signature at all, so its expiry string is whatever
+ * the store hands back.
+ */
 function isAssignmentActive(assignment: PolicyAssignment): boolean {
   if (!assignment.active) return false;
-  if (assignment.expiresAt) {
+  if (assignment.expiresAt !== undefined) {
+    if (assignment.expiresAt === "") return false;
     const expires = new Date(assignment.expiresAt);
-    if (expires <= new Date()) return false;
+    if (Number.isNaN(expires.getTime())) return false;
+    if (expires.getTime() <= Date.now()) return false;
   }
   return true;
 }
