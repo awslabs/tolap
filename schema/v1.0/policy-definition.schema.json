@@ -79,11 +79,6 @@
           "default": false,
           "description": "Whether the user can remove records or objects. Defaults to false. Merged with AND, and denied outright when readOnly is true. A delete is additionally denied unless the target row satisfies the policy's rowFilters. See docs/connector-spec.md section 4."
         },
-        "canExport": {
-          "type": "boolean",
-          "default": false,
-          "description": "ADVISORY ONLY -- not enforced by any SDK, because no SDK can define what 'export' means for an arbitrary tool. Integrators with an export path must check this flag themselves. See docs/connector-spec.md section 9."
-        },
         "readOnly": {
           "type": "boolean",
           "default": true,
@@ -221,11 +216,6 @@
           "type": "integer",
           "minimum": 0,
           "description": "Maximum number of rows, results, or items returned per query. Zero is valid and means return nothing -- a coherent deny-all that a minimum of 1 would forbid expressing. Applies per call, not as a budget across paginated calls."
-        },
-        "maxQueryTimeSeconds": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "ADVISORY ONLY -- not enforced by any SDK, because the SDK never holds the database connection and so cannot set a statement timeout. Integrators must apply this via their own driver. See docs/connector-spec.md section 9."
         },
         "minSimilarityScore": {
           "type": "number",

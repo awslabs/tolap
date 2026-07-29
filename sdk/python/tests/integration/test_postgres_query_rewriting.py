@@ -50,7 +50,7 @@ def _policy(
         user_id="u",
         tenant_id="t",
         source_profiles=["rewrite-integration"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=ObjectRules(
             field_rules=FieldRules(allowed_fields=allowed_fields, hidden_fields=hidden_fields)
             if has_field_rules

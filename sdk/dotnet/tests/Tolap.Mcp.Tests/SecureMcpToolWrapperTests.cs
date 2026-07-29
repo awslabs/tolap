@@ -14,7 +14,7 @@ public class SecureMcpToolWrapperTests
         await store.CreatePolicyAsync(new PolicyDefinition(
             Version: "1.0",
             Name: "test-policy",
-            Permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true),
+            Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true),
             Priority: 10,
             AppliesToAll: true,
             ObjectRules: new ObjectRules(

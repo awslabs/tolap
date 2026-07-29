@@ -43,7 +43,7 @@ def _definition(
     return PolicyDefinition(
         version="1.0",
         name=name,
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         priority=priority,
         applies_to_all=applies_to_all,
         source_patterns=source_patterns,
@@ -266,7 +266,7 @@ class TestFilteringInteractsWithMerging:
         api_only_deny = PolicyDefinition(
             version="1.0",
             name="api-readonly",
-            permissions=PolicyPermissions(can_query=False, can_export=False, read_only=True),
+            permissions=PolicyPermissions(can_query=False, read_only=True),
             priority=10,
             source_patterns=["api:internal:*"],
         )

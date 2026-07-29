@@ -12,12 +12,11 @@
     "sourceProfiles": ["subsecond-precision"],
     "permissions": {
       "canQuery": true,
-      "canExport": false,
       "readOnly": true
     }
   },
-  "canonicalPayload": "{\"expiresAt\":\"2026-03-01T09:30:15.987Z\",\"issuedAt\":\"2026-03-01T08:30:15.123Z\",\"policies\":[{\"expiresAt\":\"2026-03-01T09:30:15.987Z\",\"permissions\":{\"canExport\":false,\"canQuery\":true,\"readOnly\":true},\"resolvedAt\":\"2026-03-01T08:30:15.123Z\",\"sourceConnectionId\":\"ds-subsecond\",\"sourceProfiles\":[\"subsecond-precision\"],\"tenantId\":\"tenant-subsecond\",\"userId\":\"user-002\",\"version\":\"1.0\"}],\"tenantId\":\"tenant-subsecond\",\"userId\":\"user-002\",\"version\":\"1.0\"}",
-  "expectedSignature": "Dgage1Y2tjqQVNXn9O3y90riPpfnOZFe6R2TsWDr/xc=",
-  "expectedSignatureSha512": "IKX8zYAeX3BxET3/gOouAJA707WETb1+ki1uUjMZXRhojlTnyJ+ICBSutgHN+XFtxoA7pH92Mpm8blSYMbsXLg==",
+  "canonicalPayload": "{\"expiresAt\":\"2026-03-01T09:30:15.987Z\",\"issuedAt\":\"2026-03-01T08:30:15.123Z\",\"policies\":[{\"expiresAt\":\"2026-03-01T09:30:15.987Z\",\"permissions\":{\"canQuery\":true,\"readOnly\":true},\"resolvedAt\":\"2026-03-01T08:30:15.123Z\",\"sourceConnectionId\":\"ds-subsecond\",\"sourceProfiles\":[\"subsecond-precision\"],\"tenantId\":\"tenant-subsecond\",\"userId\":\"user-002\",\"version\":\"1.0\"}],\"tenantId\":\"tenant-subsecond\",\"userId\":\"user-002\",\"version\":\"1.0\"}",
+  "expectedSignature": "vDfzMtjrfPoIw+cP3wpswKCtOS9z9Wqd88j/mPLCeBk=",
+  "expectedSignatureSha512": "O5KCFfLIGlzAQn25ojmSE/D1W6Onvli21wZzBpBO6Af6VnrrUJo33o4JE7q5bP+yJr3znfCnKVIu9ti/EUiPSw==",
   "notes": "Regression fixture for spec section 2 rule 5. The input timestamps carry MICROSECOND precision (.123456Z / .987654Z) but the canonical form truncates them to MILLISECONDS (.123Z / .987Z). This case exists because the whole-second fixture cannot detect a precision mismatch: Python and .NET natively serialize microseconds while JavaScript's Date cannot represent them at all, so without a mandated precision the same instant signed in different languages produced different bytes and failed to verify cross-SDK. Truncation (not rounding) is required so an expiry is never moved later than the issuer intended."
 }

@@ -109,14 +109,12 @@ class ObjectRules:
 @dataclass
 class Permissions:
     can_query: bool = True
-    can_export: bool = True
     read_only: bool = False
 
 
 @dataclass
 class Limits:
     max_results: Optional[int] = None
-    max_query_time_seconds: Optional[int] = None
     min_similarity_score: Optional[float] = None
     max_object_size_bytes: Optional[int] = None
 
@@ -208,7 +206,6 @@ class EffectivePolicy:
 
     # Permissions (merged via AND / OR)
     can_query: bool = False
-    can_export: bool = False
     read_only: bool = True
 
     # Allowed sets (merged via intersection)
@@ -232,7 +229,6 @@ class EffectivePolicy:
 
     # Numeric limits (most restrictive)
     max_results: Optional[int] = None
-    max_query_time_seconds: Optional[int] = None
     max_object_size_bytes: Optional[int] = None
     min_similarity_score: Optional[float] = None
 
@@ -240,7 +236,6 @@ class EffectivePolicy:
 # Sentinel representing a deny-all policy when no policies apply.
 DENY_ALL_POLICY = EffectivePolicy(
     can_query=False,
-    can_export=False,
     read_only=True,
 )
 
@@ -332,7 +327,6 @@ def merge_policies(policies: list[PolicyDefinition]) -> EffectivePolicy:
 
     # Permissions: AND (all must allow) / OR (any sets read-only)
     result.can_query = all(p.permissions.can_query for p in policies)
-    result.can_export = all(p.permissions.can_export for p in policies)
     result.read_only = any(p.permissions.read_only for p in policies)
 
     # Allowed sets: INTERSECTION (only policies that define the field participate)
@@ -377,9 +371,6 @@ def merge_policies(policies: list[PolicyDefinition]) -> EffectivePolicy:
     # Numeric limits: minimum (most restrictive)
     result.max_results = _min_optional(
         [p.limits.max_results for p in policies]
-    )
-    result.max_query_time_seconds = _min_optional(
-        [p.limits.max_query_time_seconds for p in policies]
     )
     result.max_object_size_bytes = _min_optional(
         [p.limits.max_object_size_bytes for p in policies]
@@ -634,7 +625,6 @@ def _dict_to_security_context(data: dict[str, Any]) -> SecurityContext:
         ep = EffectivePolicy(
             source_connection_id=UUID(p["source_connection_id"]) if p.get("source_connection_id") else None,
             can_query=p.get("can_query", False),
-            can_export=p.get("can_export", False),
             read_only=p.get("read_only", True),
             allowed_objects=p.get("allowed_objects", []),
             hidden_objects=p.get("hidden_objects", []),
@@ -657,7 +647,6 @@ def _dict_to_security_context(data: dict[str, Any]) -> SecurityContext:
                 for m in p.get("masked_fields", [])
             ],
             max_results=p.get("max_results"),
-            max_query_time_seconds=p.get("max_query_time_seconds"),
             max_object_size_bytes=p.get("max_object_size_bytes"),
             min_similarity_score=p.get("min_similarity_score"),
         )
@@ -1150,7 +1139,6 @@ def test_row_filters_concatenated() -> None:
 def test_no_policies_returns_deny_all() -> None:
     result = merge_policies([])
     assert result.can_query is False
-    assert result.can_export is False
     assert result.read_only is True
 ```
 

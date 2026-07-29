@@ -34,7 +34,7 @@ function policy(overrides: Partial<EffectivePolicy> = {}): EffectivePolicy {
     resolvedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 3_600_000).toISOString(),
     sourceProfiles: ["context-branches"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     integrity: { algorithm: "none", signature: "" },
     ...overrides,
   };
@@ -409,7 +409,7 @@ describe("validateContext: every rejection path", () => {
   it("EXPLOIT: escalating the policy inside the envelope invalidates the signature", () => {
     const ctx = signedContext({ permissions: { canQuery: true, readOnly: true } });
     ctx.effectivePolicy.permissions.readOnly = false;
-    ctx.effectivePolicy.permissions.canExport = true;
+    ctx.effectivePolicy.permissions.canInsert = true;
     expect(validateContext(ctx, KEY)).toBe(false);
   });
 
@@ -456,7 +456,7 @@ describe("validatePolicy: every rejection path", () => {
     expect(validatePolicy(signPolicy(policy(), KEY), "wrong")).toBe(false);
 
     const tampered = signPolicy(policy(), KEY);
-    tampered.permissions.canExport = true;
+    tampered.permissions.canInsert = true;
     expect(validatePolicy(tampered, KEY)).toBe(false);
   });
 

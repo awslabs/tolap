@@ -2,7 +2,7 @@
   "description": "End-to-end TOLAP enforcement for the README's healthcare-analyst policy against the seeded Postgres schema. The same policy is reused across scenarios; only the query and expected result vary.",
   "basePolicy": {
     "version": "1.0",
-    "permissions": { "canQuery": true, "canExport": false, "readOnly": true },
+    "permissions": { "canQuery": true, "readOnly": true },
     "objectRules": {
       "allowedObjects": ["patients", "encounters", "diagnoses"],
       "hiddenObjects": ["billing_internal", "audit_log"],
@@ -26,7 +26,7 @@
         { "field": "status", "operator": "notEquals", "value": "deleted" }
       ]
     },
-    "limits": { "maxResults": 5000, "maxQueryTimeSeconds": 30 }
+    "limits": { "maxResults": 5000 }
   },
   "scenarios": [
     {

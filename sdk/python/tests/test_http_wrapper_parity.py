@@ -66,7 +66,7 @@ def _policy(object_rules: ObjectRules) -> EffectivePolicy:
         user_id="parity-user",
         tenant_id="parity-tenant",
         source_profiles=["http-wrapper-parity"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=object_rules,
     )
 

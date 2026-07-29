@@ -141,7 +141,7 @@ function policyOf(filters: RowFilter[]): EffectivePolicy {
     resolvedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     sourceProfiles: ["collation"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     objectRules: { rowFilters: filters },
     integrity: { algorithm: "none", signature: "" },
   };

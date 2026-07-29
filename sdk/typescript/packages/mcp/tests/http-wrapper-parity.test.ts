@@ -51,7 +51,7 @@ function policyOf(objectRules: EffectivePolicy["objectRules"]): EffectivePolicy 
     resolvedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 3_600_000).toISOString(),
     sourceProfiles: ["http-wrapper-parity"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     objectRules,
     integrity: { algorithm: "none", signature: "" },
   };

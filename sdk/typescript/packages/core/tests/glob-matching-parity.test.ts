@@ -63,7 +63,7 @@ function policy(objectRules: ObjectRules): EffectivePolicy {
     resolvedAt: "2026-01-01T00:00:00Z",
     expiresAt: "2027-01-01T00:00:00Z",
     sourceProfiles: [],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     objectRules,
     integrity: { algorithm: "none", signature: "" },
   };

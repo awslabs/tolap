@@ -46,7 +46,7 @@ function createPolicy(overrides?: Partial<EffectivePolicy>): EffectivePolicy {
     resolvedAt: "2026-01-15T10:00:00Z",
     expiresAt: "2026-01-15T11:00:00Z",
     sourceProfiles: ["healthcare-analyst-db"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     integrity: { algorithm: "none", signature: "" },
     ...overrides,
   };
@@ -206,9 +206,9 @@ describe("cross-SDK known-answer conformance", () => {
   // assertion (sign twice, compare to itself) passes even when all three SDKs
   // disagree with each other, which is exactly how the divergence went
   // unnoticed -- so these are asserted as literals.
-  const EXPECTED_SHA256 = "mpKFMZqD3NvddMUZJMIJBcvDF28Q/WRwDzpDLe4pHGY=";
+  const EXPECTED_SHA256 = "YekLSTYYqzpgSxi9hFOsOWjYLo2qMwwRHc7D4MdGVG4=";
   const EXPECTED_SHA512 =
-    "EZ1/QbixgohMFZsmI+K0Xq50T0lGtFToJlEkVi+uCf8SvHYJSj2/ShmpI/3XsJ5pu4DlUcwMjXI0JGipY46SpA==";
+    "HkNTGpI6OzMolyYW7KcOqqc116kMArdjLEA5VNgX/QsOM2lThZY9OCfrHPg7Hi8IFokHe8M3XoU7IVdnw+ZEgw==";
 
   it("HMAC-SHA256 matches the cross-SDK expected signature", () => {
     const fixture = loadFixture("hmac-sha256-known-answer.json");
@@ -299,9 +299,9 @@ describe("cross-SDK known-answer conformance", () => {
      */
     const SUBSECOND_FIXTURE = "hmac-sha256-subsecond.json";
     const EXPECTED_SUBSECOND_SHA256 =
-      "Dgage1Y2tjqQVNXn9O3y90riPpfnOZFe6R2TsWDr/xc=";
+      "vDfzMtjrfPoIw+cP3wpswKCtOS9z9Wqd88j/mPLCeBk=";
     const EXPECTED_SUBSECOND_SHA512 =
-      "IKX8zYAeX3BxET3/gOouAJA707WETb1+ki1uUjMZXRhojlTnyJ+ICBSutgHN+XFtxoA7pH92Mpm8blSYMbsXLg==";
+      "O5KCFfLIGlzAQn25ojmSE/D1W6Onvli21wZzBpBO6Af6VnrrUJo33o4JE7q5bP+yJr3znfCnKVIu9ti/EUiPSw==";
 
     it("HMAC-SHA256 over microsecond input matches the cross-SDK signature", () => {
       const fixture = loadFixture(SUBSECOND_FIXTURE);

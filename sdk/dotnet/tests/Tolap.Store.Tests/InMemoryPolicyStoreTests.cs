@@ -11,7 +11,7 @@ public class InMemoryPolicyStoreTests
         return new PolicyDefinition(
             Version: "1.0",
             Name: name,
-            Permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true),
+            Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true),
             Priority: 10,
             AppliesToAll: true);
     }

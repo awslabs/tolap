@@ -101,9 +101,9 @@ The merge strategy ensures that the *intersection* of permissions is enforced. I
 | Hidden/denied sets (objects, fields, endpoints, tags) | Union | ANY profile can hide an object |
 | Row filters | AND (all must be satisfied) | Every filter condition applies |
 | Masked fields | Most restrictive mask type per field | ranked by disclosure: `null` > `redact` > `full` > `hash` > `partial` |
-| Numeric limits (maxResults, maxQueryTime, maxObjectSize) | Minimum value | Most restrictive limit wins |
+| Numeric limits (maxResults, maxObjectSize) | Minimum value | Most restrictive limit wins |
 | Similarity thresholds (minSimilarityScore) | Maximum value | Higher threshold = more restrictive |
-| Boolean permissions (canQuery, canExport) | AND | ALL profiles must allow |
+| Boolean permissions (canQuery, canInsert, canUpdate, canDelete) | AND | ALL profiles must allow |
 | Read-only flag | OR | ANY profile can enforce read-only |
 
 **Mask type restrictiveness order (most to least).** Ranked by how much of the
@@ -695,7 +695,6 @@ The administrator creates a single policy definition that covers both source typ
 
   "permissions": {
     "canQuery": true,
-    "canExport": false,
     "readOnly": true
   },
 
@@ -776,8 +775,7 @@ The administrator creates a single policy definition that covers both source typ
   },
 
   "limits": {
-    "maxResults": 5000,
-    "maxQueryTimeSeconds": 30
+    "maxResults": 5000
   }
 }
 ```
@@ -829,7 +827,7 @@ separately — a context carries one policy, and the agent holds one per source:
     {
       "sourceConnectionId": "conn-pg-clinical",
       "sourceProfiles": ["clinical-researcher"],
-      "permissions": { "canQuery": true, "canExport": false, "readOnly": true },
+      "permissions": { "canQuery": true, "readOnly": true },
       "objectRules": {
         "allowedObjects": ["patients", "encounters", "diagnoses"],
         "hiddenObjects": ["billing", "billing_codes", "admin_audit"],
@@ -871,12 +869,12 @@ separately — a context carries one policy, and the agent holds one per source:
           }
         ]
       },
-      "limits": { "maxResults": 5000, "maxQueryTimeSeconds": 30 }
+      "limits": { "maxResults": 5000 }
     },
     {
       "sourceConnectionId": "conn-api-clinical",
       "sourceProfiles": ["clinical-researcher"],
-      "permissions": { "canQuery": true, "canExport": false, "readOnly": true },
+      "permissions": { "canQuery": true, "readOnly": true },
       "objectRules": {
         "allowedObjects": [
           "/api/v1/patients", "/api/v1/patients/*",

@@ -76,7 +76,6 @@ public sealed class PolicyDefinition
 public sealed class PolicyPermissions
 {
     public bool CanQuery { get; init; } = true;
-    public bool CanExport { get; init; }
     public bool ReadOnly { get; init; } = true;
 }
 
@@ -127,7 +126,6 @@ public sealed class EndpointRules
 public sealed class PolicyLimits
 {
     public int? MaxResults { get; init; }
-    public int? MaxQueryTimeSeconds { get; init; }
     public double? MinSimilarityScore { get; init; }
     public long? MaxObjectSizeBytes { get; init; }
 }
@@ -199,7 +197,6 @@ public sealed class EffectivePolicy
 
     // Permissions
     public bool CanQuery { get; set; }
-    public bool CanExport { get; set; }
     public bool ReadOnly { get; set; }
 
     // Allowed sets (null means unrestricted)
@@ -223,7 +220,6 @@ public sealed class EffectivePolicy
 
     // Limits
     public int? MaxResults { get; set; }
-    public int? MaxQueryTimeSeconds { get; set; }
     public long? MaxObjectSizeBytes { get; set; }
     public double? MinSimilarityScore { get; set; }
 
@@ -233,7 +229,6 @@ public sealed class EffectivePolicy
     public static EffectivePolicy DenyAll => new()
     {
         CanQuery = false,
-        CanExport = false,
         ReadOnly = true,
         AllowedObjects = [],
         AllowedFields = [],
@@ -368,7 +363,6 @@ public static class PolicyMerger
         {
             // Permissions: AND (all must allow)
             CanQuery = policies.All(p => p.Permissions.CanQuery),
-            CanExport = policies.All(p => p.Permissions.CanExport),
             ReadOnly = policies.Any(p => p.Permissions.ReadOnly),
 
             // Allowed sets: INTERSECTION (null means "no restriction from this policy")
@@ -411,7 +405,6 @@ public static class PolicyMerger
 
             // Numeric limits: minimum (most restrictive)
             MaxResults = MinNullable(policies.Select(p => p.Limits.MaxResults)),
-            MaxQueryTimeSeconds = MinNullable(policies.Select(p => p.Limits.MaxQueryTimeSeconds)),
             MaxObjectSizeBytes = MinNullable(policies.Select(p => p.Limits.MaxObjectSizeBytes)),
 
             // Similarity score: maximum (most restrictive)

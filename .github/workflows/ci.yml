@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A stale run on a superseded commit tells you nothing useful.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# One job, one run per push. The three SDKs are tested together because the
+# guarantees they carry are cross-SDK: a context signed by one must verify in the
+# others, and the shared fixtures assert byte-identical output across all three.
+# Splitting them into parallel jobs (or version matrices) multiplied the run count
+# without testing anything the single run does not, and nothing then asserted the
+# three agree *with each other* rather than merely each with itself.
+jobs:
+  test:
+    name: All SDKs + cross-SDK conformance
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tolap_integration_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: mysql
+          MYSQL_DATABASE: tolap_integration_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pmysql"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      # Postgres uses the .NET connection-string form for the .NET suite and the
+      # URL form for Python/TypeScript; both point at the same service container.
+      TOLAP_TEST_DB_DSN_DOTNET: Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=tolap_integration_test;Include Error Detail=true
+      TOLAP_TEST_DB_DSN: postgresql://postgres:postgres@localhost:5432/tolap_integration_test
+      TOLAP_TEST_MYSQL_HOST: 127.0.0.1
+      TOLAP_TEST_MYSQL_PORT: '3306'
+      TOLAP_TEST_MYSQL_USER: root
+      TOLAP_TEST_MYSQL_PASSWORD: mysql
+      TOLAP_TEST_MYSQL_DB: tolap_integration_test
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the versions the SDKs target: net9.0, requires-python >=3.10 (run
+      # on current), Node 18+ (run on current LTS). The dropped 3.10/3.13 and
+      # 20/22 matrices tested the language runtimes, not this code; a single current
+      # version per language catches the regressions this suite exists to catch.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+
+      # -- .NET --
+      - name: .NET restore
+        run: dotnet restore sdk/dotnet/Tolap.sln
+      - name: .NET build (warnings as errors)
+        run: dotnet build sdk/dotnet/Tolap.sln --no-restore -warnaserror
+      - name: .NET test
+        env:
+          TOLAP_TEST_DB_DSN: ${{ env.TOLAP_TEST_DB_DSN_DOTNET }}
+        run: dotnet test sdk/dotnet/Tolap.sln --no-build --verbosity normal
+
+      # -- Python --
+      - name: Python install
+        working-directory: sdk/python
+        run: |
+          python -m pip install --upgrade pip
+          pip install ./tolap-core ./tolap-store ./tolap-mcp
+          pip install pytest httpx "psycopg[binary]" PyMySQL jsonschema
+      - name: Python test
+        working-directory: sdk/python
+        run: python -m pytest tests/ -v
+
+      # -- TypeScript --
+      - name: TypeScript install
+        working-directory: sdk/typescript
+        run: npm ci
+      - name: TypeScript typecheck
+        working-directory: sdk/typescript
+        run: |
+          for pkg in core store mcp; do
+            echo "::group::tsc @tolap/$pkg"
+            # mcp resolves @tolap/core through packages/core/dist, so core must be
+            # built before the mcp typecheck and tests run against a fresh build.
+            (cd "packages/$pkg" && npx tsc --noEmit)
+            echo "::endgroup::"
+          done
+      - name: TypeScript build core (mcp resolves @tolap/core from dist)
+        working-directory: sdk/typescript/packages/core
+        run: npx tsc -p tsconfig.json
+      - name: TypeScript test
+        working-directory: sdk/typescript
+        run: |
+          fail=0
+          for pkg in core store mcp; do
+            echo "::group::vitest @tolap/$pkg"
+            (cd "packages/$pkg" && npx vitest run) || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail
+
+      # The cross-SDK signing conformance lives inside the suites above (each SDK's
+      # signing-regression tests assert the shared known-answer fixture byte-for-byte,
+      # so a divergence fails there). This step guards the fixtures themselves: a
+      # known-answer fixture that loses its expected values would let those tests pass
+      # while checking nothing — the exact defect that let the original signing
+      # divergence ship (canonical-enforcement-spec §12).
+      - name: Signing fixtures carry their expected values
+        run: |
+          python - <<'PY'
+          import json, pathlib, sys
+          required = ("secretKey", "payload", "canonicalPayload",
+                      "expectedSignature", "expectedSignatureSha512")
+          bad = []
+          for path in sorted(pathlib.Path("fixtures/signing").glob("*.json")):
+              data = json.loads(path.read_text())
+              missing = [k for k in required if not data.get(k)]
+              if missing:
+                  bad.append(f"{path}: missing {', '.join(missing)}")
+          if bad:
+              print("\n".join(bad))
+              sys.exit("signing fixtures must carry expected values (spec §12)")
+          print("all signing fixtures carry expected values")
+          PY

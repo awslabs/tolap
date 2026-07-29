@@ -28,7 +28,7 @@ function definition(
     version: "1.0",
     name,
     sourcePatterns: ["db:production:*"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     objectRules: { allowedObjects: ["patients"] },
     ...extra,
   };

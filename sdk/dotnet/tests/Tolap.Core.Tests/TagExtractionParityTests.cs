@@ -141,7 +141,7 @@ public class TagExtractionParityTests
         ResolvedAt: null,
         ExpiresAt: null,
         SourceProfiles: new[] { "tag-extraction-parity" },
-        Permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true),
+        Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true),
         ObjectRules: new ObjectRules(TagRules: tagRules),
         Limits: null);
 

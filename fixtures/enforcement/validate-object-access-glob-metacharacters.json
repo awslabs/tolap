@@ -1,0 +1,132 @@
+{
+  "description": "Enforcement glob metacharacters (connector-spec §3.1): '*' and '?' are the only wildcards; '[abc]' and every other character are literal. One corpus, identical allow/deny and reasons in .NET, Python, and TypeScript. Every expectation was produced by executing all three matchers over these cases (EnforcementEngine.GlobMatch, _pattern_matches, globMatch), not hand-derived. Guards the parity fix that gave .NET '?' as a wildcard and made Python treat '[abc]' literally.",
+  "action": "validateAccess",
+  "cases": [
+    {
+      "objectName": "reports",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["report?"] }
+      },
+      "expected": { "allowed": true },
+      "note": "? matches exactly one character (the trailing 's')"
+    },
+    {
+      "objectName": "report",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["report?"] }
+      },
+      "expected": { "allowed": false, "reason": "object not in allowed set" },
+      "note": "? requires one character; zero characters does not match"
+    },
+    {
+      "objectName": "reports2",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["report?"] }
+      },
+      "expected": { "allowed": false, "reason": "object not in allowed set" },
+      "note": "? is exactly one character, not one-or-more"
+    },
+    {
+      "objectName": "v1/anything/deep",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["v?/*"] }
+      },
+      "expected": { "allowed": true },
+      "note": "? crosses no boundary of its own but matches the single '1'; '*' then spans separators"
+    },
+    {
+      "objectName": "v12/x",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["v?/*"] }
+      },
+      "expected": { "allowed": false, "reason": "object not in allowed set" },
+      "note": "? consumes exactly one char, so 'v12/' leaves the literal '/' unmatched"
+    },
+    {
+      "objectName": "log[abc]",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["log[abc]"] }
+      },
+      "expected": { "allowed": true },
+      "note": "the brackets are literal text and match themselves"
+    },
+    {
+      "objectName": "loga",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["log[abc]"] }
+      },
+      "expected": { "allowed": false, "reason": "object not in allowed set" },
+      "note": "NOT a character class; 'loga' does not match the literal 'log[abc]'. This is the case Python's fnmatch got wrong."
+    },
+    {
+      "objectName": "logb",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["log[abc]"] }
+      },
+      "expected": { "allowed": false, "reason": "object not in allowed set" },
+      "note": "same as loga, second class member, still denied under literal brackets"
+    },
+    {
+      "objectName": "data[!x]",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["data[!x]"] }
+      },
+      "expected": { "allowed": true },
+      "note": "a negated class '[!x]' is also literal text"
+    },
+    {
+      "objectName": "dataq",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["data[!x]"] }
+      },
+      "expected": { "allowed": false, "reason": "object not in allowed set" },
+      "note": "not a negated class, so 'dataq' is denied"
+    },
+    {
+      "objectName": "a[a-z]c",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["a[a-z]c"] }
+      },
+      "expected": { "allowed": true },
+      "note": "a range '[a-z]' is literal text and matches itself"
+    },
+    {
+      "objectName": "abc",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["a[a-z]c"] }
+      },
+      "expected": { "allowed": false, "reason": "object not in allowed set" },
+      "note": "not a range, so a single 'b' between 'a' and 'c' is denied"
+    },
+    {
+      "objectName": "logb",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "hiddenObjects": ["log[abc]"] }
+      },
+      "expected": { "allowed": true },
+      "note": "control: brackets are literal on the HIDDEN path too, so 'logb' is not hidden. Pairs with the allowed-set case to prove the literal reading is not silently hiding rows."
+    },
+    {
+      "objectName": "log[abc]",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": { "hiddenObjects": ["log[abc]"] }
+      },
+      "expected": { "allowed": false, "reason": "object is hidden" },
+      "note": "control's sibling: the literal name IS hidden, so the hidden rule is not vacuous"
+    }
+  ]
+}

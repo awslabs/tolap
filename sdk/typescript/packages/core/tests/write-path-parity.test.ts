@@ -61,7 +61,6 @@ const FULL_WRITE = policy(
     canInsert: true,
     canUpdate: true,
     canDelete: true,
-    canExport: false,
     readOnly: false,
   },
   {
@@ -93,7 +92,6 @@ const READ_ONLY_CEILING = policy({
   canInsert: true,
   canUpdate: true,
   canDelete: true,
-  canExport: false,
   readOnly: true,
 });
 
@@ -102,7 +100,7 @@ const READ_ONLY_CEILING = policy({
  * filters, so the row check has nothing to verify and must not deny.
  */
 const ALLOW_LIST = policy(
-  { canQuery: true, canInsert: true, canUpdate: true, canExport: false, readOnly: false },
+  { canQuery: true, canInsert: true, canUpdate: true, readOnly: false },
   { fieldRules: { allowedFields: ["full_name", "status"] } },
 );
 
@@ -111,7 +109,7 @@ const ALLOW_LIST = policy(
  * lifting the restriction. The most restrictive possible field rule.
  */
 const EMPTY_ALLOW_LIST = policy(
-  { canQuery: true, canInsert: true, canExport: false, readOnly: false },
+  { canQuery: true, canInsert: true, readOnly: false },
   { fieldRules: { allowedFields: [] } },
 );
 
@@ -122,7 +120,6 @@ const EMPTY_ALLOW_LIST = policy(
 const INSERT_ONLY = policy({
   canQuery: true,
   canInsert: true,
-  canExport: false,
   readOnly: false,
 });
 

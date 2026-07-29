@@ -41,7 +41,7 @@ import type {
 function policy(
   objectRules?: ObjectRules,
   limits?: PolicyLimits,
-  permissions: PolicyPermissions = { canQuery: true, canExport: false, readOnly: true },
+  permissions: PolicyPermissions = { canQuery: true, readOnly: true },
 ): EffectivePolicy {
   return {
     version: "1.0",
@@ -1354,7 +1354,6 @@ describe("validateEndpoint: both outcomes of each guard", () => {
     // writes were already blocked while permitting DELETE/POST/PUT/PATCH.
     const p = policy({ endpointRules: { allowedEndpoints: ["/api/*"] } }, undefined, {
       canQuery: true,
-      canExport: false,
       readOnly: false,
     });
 
@@ -1421,7 +1420,6 @@ describe("validateEndpoint: both outcomes of each guard", () => {
     // §3: [] is deny-all for an allow-list, and that is unaffected by readOnly.
     const p = policy({ endpointRules: { allowedMethods: [] } }, undefined, {
       canQuery: true,
-      canExport: false,
       readOnly: false,
     });
 
@@ -1437,7 +1435,7 @@ describe("validateEndpoint: both outcomes of each guard", () => {
     const writable = policy(
       { endpointRules: { allowedMethods: ["delete"] } },
       undefined,
-      { canQuery: true, canExport: false, readOnly: false },
+      { canQuery: true, readOnly: false },
     );
 
     // Lower-case policy entry, upper-case request, and the reverse.
@@ -1455,7 +1453,6 @@ describe("validateEndpoint: both outcomes of each guard", () => {
     // the path being unconstrained is not a grant of DELETE.
     const p = policy(undefined, undefined, {
       canQuery: true,
-      canExport: false,
       readOnly: false,
     });
 

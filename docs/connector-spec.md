@@ -58,7 +58,6 @@ is not an error, and it is not protection.
 | `permissions.canUpdate` | ✅ | ✅ | ✅ | ✅ |
 | `permissions.canDelete` | ✅ | ✅ | ✅ | ✅ |
 | `permissions.readOnly` | ✅ | ✅ | ✅ | ✅ |
-| `permissions.canExport` | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
 | `objectRules.allowedObjects` | ✅ tables/views | ⚠️ resource names | ➖ | ✅ key prefixes |
 | `objectRules.hiddenObjects` | ✅ tables/views | ⚠️ resource names | ➖ | ✅ key prefixes |
 | `fieldRules.allowedFields` | ✅ columns | ✅ response fields | ➖ | ✅ metadata keys |
@@ -71,9 +70,8 @@ is not an error, and it is not protection.
 | `limits.maxResults` | ✅ | ✅ | ✅ | ✅ |
 | `limits.minSimilarityScore` | ➖ | ➖ | ✅ | ➖ |
 | `limits.maxObjectSizeBytes` | ➖ | ➖ | ➖ | ✅ |
-| `limits.maxQueryTimeSeconds` | ⚠️ | ⚠️ | ⚠️ | ⚠️ |
 
-✅ enforced · ➖ not applicable · ⚠️ advisory, see §9
+✅ enforced · ➖ not applicable
 
 ## 3. Shared semantics
 
@@ -113,6 +111,42 @@ implementation MUST NOT use a matcher whose case folding depends on the host OS
 `hiddenObjects: ["Billing"]` deny on Windows and allow on Linux for the same signed
 policy).
 
+#### The complete set of metacharacters
+
+`*` and `?` are the **only** metacharacters. Every other character in a pattern is
+literal, and an implementation MUST NOT assign a special meaning to any of them:
+
+| Construct | Meaning | Notes |
+| --- | --- | --- |
+| `*` | Any run of characters, including empty | Crosses every separator (above). `**` is an alias for `*`; runs of stars collapse to one |
+| `?` | Exactly **one** character | Also crosses separators, so `/a?c` matches `/a/c` |
+| `[abc]`, `[!a]`, `[a-z]` | **Literal characters** | NOT a character class. `[abc]` matches the four-character text `[abc]` |
+| `.` `+` `^` `$` `(` `)` `{` `}` `\|` `\` | Literal | A pattern is a glob, never a regex |
+
+Bracket expressions are literal because that is the fail-closed reading: a literal
+`[abc]` matches strictly fewer names than a character class would, so an
+`allowedObjects` entry cannot silently reach objects the administrator never spelled
+out. An implementation MUST NOT use a matcher that treats them as classes —
+`fnmatch`/`fnmatchcase` in Python does, and MUST therefore be escaped or replaced.
+
+Since neither construct is a wildcard, a pattern that needs a literal `*` or `?`
+cannot express it. That is a known limitation; use a broader pattern plus
+`hiddenObjects`.
+
+```
+allowedObjects: ["report?"]
+  reports              -> allowed     <-- ? matched the single trailing 's'
+  report               -> denied      <-- ? requires exactly one character
+  reports2             -> denied
+
+allowedObjects: ["log[abc]"]
+  log[abc]             -> allowed     <-- the brackets are literal text
+  loga                 -> DENIED      <-- NOT a character class
+```
+
+`sourcePatterns` (resolution, §10) uses the same metacharacter set, with the single
+difference already noted above: its `*` does not cross `:`.
+
 ### 3.2 Field-name matching
 
 A policy field reference and a record key may each be bare (`ssn`) or qualified
@@ -138,6 +172,16 @@ values are produced:
 | `endpoint is hidden` | Path matched `hiddenEndpoints` |
 | `endpoint not in allowed set` | `allowedEndpoints` specified and path did not match |
 | `method not allowed` | Method not in `allowedMethods` (or its read-only default) |
+| `method not allowed on a read-only policy` | A write method while `readOnly` is true |
+
+**Precedence.** When a request fails more than one check, the reason is the first that
+denies, evaluated in this order: `query not permitted` → `endpoint is hidden` →
+`endpoint not in allowed set` → `method not allowed` → `method not allowed on a read-only
+policy`. The order is contract, not just the set of strings: an integrator branching on the
+reason sees exactly one, and which one is fixed. In particular, because endpoint matching is
+case-insensitive (§3.1), a path that differs from an `allowedEndpoints` entry only by case
+*matches* the allow-list and is then judged on its method — so a denied method yields
+`method not allowed`, not `endpoint not in allowed set`.
 
 Write denials add the reasons in §4.4. Reasons are deliberately coarse: they name the rule
 that denied, not the data. A reason MUST NOT disclose a value, a row count, or whether a
@@ -508,20 +552,30 @@ may do either.
 `maxObjectSizeBytes` applies to writes as well as reads: an object exceeding the ceiling
 MUST NOT be uploaded.
 
-## 9. Advisory fields — parsed, merged, not enforced
+## 9. No advisory fields
 
-These are schema-validated and merged most-restrictively, and then no enforcement step
-reads them. Listed so nobody mistakes them for controls.
+Every field the schema carries is enforced by at least one SDK (see the §2 matrix).
+There are deliberately **no** parsed-but-unenforced fields, and a new one MUST NOT be
+added: a field that is schema-validated, signed, and merged, and then read by no
+enforcement step, reads as a control while being none. That is how an integrator comes to
+rely on a guarantee the SDK never made.
 
-| Field | Why unenforced | Integrator obligation |
-| --- | --- | --- |
-| `permissions.canExport` | No SDK defines what "export" is, so none can block it | Check the flag yourself at your export path |
-| `limits.maxQueryTimeSeconds` | The SDK never holds the connection, so it cannot set a statement timeout | Apply via your driver's command timeout |
+So a proposed field must clear one bar before it enters the schema — **some SDK enforces
+it.** A capability the SDK cannot reach is not a policy field. Two disqualifying shapes
+in particular:
 
-A field in this table MUST NOT be described as enforced in any documentation. It either
-gains enforcement and leaves this table, or it leaves the schema.
+- **The concept has no meaning at the tool boundary.** If no SDK has an operation to
+  gate, there is nothing for the field to deny.
+- **The SDK does not own the resource.** Enforcement it cannot perform belongs to the
+  layer that holds the connection, the process, or the credential — not to a field here
+  that merely describes a wish.
 
-`fieldRules.readOnlyFields` was in this table and is no longer: §4.3 specifies it.
+Either case is an **integrator-layer concern**, documented as such, rather than a schema
+field that looks like a control.
+
+`fieldRules.readOnlyFields` is the worked precedent for the other direction: it sat
+unenforced for a time, and was resolved by *gaining* enforcement (§4.3) rather than by
+staying advisory.
 
 ## 10. Adding a connector category
 

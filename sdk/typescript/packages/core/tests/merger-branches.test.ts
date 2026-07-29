@@ -23,7 +23,7 @@ function definition(
   return {
     version: "1.0",
     name,
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     ...extra,
   };
 }
@@ -38,7 +38,7 @@ describe("§8: permissions default before folding", () => {
   it("an empty policy list is deny-all", () => {
     expect(merge([])).toEqual({
       sourceProfiles: [],
-      permissions: { canQuery: false, canExport: false, readOnly: true },
+      permissions: { canQuery: false, readOnly: true },
     });
   });
 
@@ -54,26 +54,6 @@ describe("§8: permissions default before folding", () => {
         definition("a", { permissions: { canQuery: true } }),
         definition("b", { permissions: { canQuery: true } }),
       ]).permissions.canQuery,
-    ).toBe(true);
-  });
-
-  it("canExport ANDs and defaults to false when absent", () => {
-    // An absent canExport is the restrictive default, so a policy silent on export
-    // cannot grant it.
-    expect(
-      merge([definition("a", { permissions: { canQuery: true } })]).permissions.canExport,
-    ).toBe(false);
-    expect(
-      merge([
-        definition("a", { permissions: { canQuery: true, canExport: true } }),
-        definition("b", { permissions: { canQuery: true } }),
-      ]).permissions.canExport,
-    ).toBe(false);
-    expect(
-      merge([
-        definition("a", { permissions: { canQuery: true, canExport: true } }),
-        definition("b", { permissions: { canQuery: true, canExport: true } }),
-      ]).permissions.canExport,
     ).toBe(true);
   });
 
@@ -112,7 +92,6 @@ describe("§8: permissions default before folding", () => {
     // rather than a default -- and folding `undefined` yields a falsy canQuery,
     // which is the fail-closed reading.
     expect(result.permissions.canQuery).toBeFalsy();
-    expect(result.permissions.canExport).toBe(false);
     expect(result.permissions.readOnly).toBe(true);
   });
 });
@@ -488,19 +467,18 @@ describe("limits: min for maxima, max for minima", () => {
     expect(merge([definition("a", { limits: {} })]).limits).toBeUndefined();
   });
 
-  it("maxResults, maxQueryTimeSeconds, and maxObjectSizeBytes all take the minimum", () => {
+  it("maxResults and maxObjectSizeBytes all take the minimum", () => {
     const limits = merge([
       definition("a", {
-        limits: { maxResults: 100, maxQueryTimeSeconds: 60, maxObjectSizeBytes: 5000 },
+        limits: { maxResults: 100, maxObjectSizeBytes: 5000 },
       }),
       definition("b", {
-        limits: { maxResults: 10, maxQueryTimeSeconds: 30, maxObjectSizeBytes: 1000 },
+        limits: { maxResults: 10, maxObjectSizeBytes: 1000 },
       }),
     ]).limits;
 
     expect(limits).toEqual({
       maxResults: 10,
-      maxQueryTimeSeconds: 30,
       maxObjectSizeBytes: 1000,
     });
   });
@@ -518,9 +496,9 @@ describe("limits: min for maxima, max for minima", () => {
     expect(
       merge([
         definition("a", { limits: { maxResults: 10 } }),
-        definition("b", { limits: { maxQueryTimeSeconds: 30 } }),
+        definition("b", { limits: { maxObjectSizeBytes: 30 } }),
       ]).limits,
-    ).toEqual({ maxResults: 10, maxQueryTimeSeconds: 30 });
+    ).toEqual({ maxResults: 10, maxObjectSizeBytes: 30 });
   });
 
   it("maxResults 0 survives rather than being dropped as falsy", () => {

@@ -15,7 +15,7 @@ function definition(name = "p", extra: Partial<PolicyDefinition> = {}): PolicyDe
   return {
     version: "1.0",
     name,
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     ...extra,
   };
 }
@@ -426,7 +426,6 @@ describe("definition lookup and the resolved envelope", () => {
     const result = await resolveWith([]);
     expect(result.permissions).toEqual({
       canQuery: false,
-      canExport: false,
       readOnly: true,
     });
     expect(result.sourceProfiles).toEqual([]);

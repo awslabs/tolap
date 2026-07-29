@@ -157,7 +157,6 @@ export interface ObjectRules {
 
 export interface PolicyLimits {
   maxResults?: number;
-  maxQueryTimeSeconds?: number;
   minSimilarityScore?: number;
   maxObjectSizeBytes?: number;
 }
@@ -180,7 +179,6 @@ export interface PolicyPermissions {
   canInsert?: boolean;
   canUpdate?: boolean;
   canDelete?: boolean;
-  canExport?: boolean;
   readOnly?: boolean;
 }
 
@@ -336,7 +334,6 @@ export function createDenyAllPolicy(
     sourceProfiles: [],
     permissions: {
       canQuery: false,
-      canExport: false,
       readOnly: true,
     },
     integrity: {

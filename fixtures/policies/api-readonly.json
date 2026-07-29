@@ -7,7 +7,6 @@
   "sourcePatterns": ["api:internal:*"],
   "permissions": {
     "canQuery": true,
-    "canExport": false,
     "readOnly": true
   },
   "objectRules": {

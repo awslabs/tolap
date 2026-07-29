@@ -45,7 +45,6 @@ function policy(
     sourceProfiles: ["write-wrapper"],
     permissions: {
       canQuery: true,
-      canExport: false,
       readOnly: false,
       ...permissions,
     },

@@ -40,7 +40,6 @@ describe("createDenyAllPolicy", () => {
     expect(policy.version).toBe("1.0");
     expect(policy.permissions).toEqual({
       canQuery: false,
-      canExport: false,
       readOnly: true,
     });
     expect(policy.sourceProfiles).toEqual([]);
@@ -145,7 +144,7 @@ function policy(objectRules?: EffectivePolicy["objectRules"]): EffectivePolicy {
     resolvedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     sourceProfiles: [],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     ...(objectRules !== undefined ? { objectRules } : {}),
     integrity: { algorithm: "none", signature: "" },
   };
@@ -277,7 +276,7 @@ describe("AssigneeType: every member resolves through the assignee switch", () =
   const definition: PolicyDefinition = {
     version: "1.0",
     name: "policy-a",
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
   };
 
   function assignment(type: string, identifier: string): PolicyAssignment {

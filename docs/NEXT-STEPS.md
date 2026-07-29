@@ -9,6 +9,35 @@ rewrite it freely — it is scaffolding, not documentation.
 
 ---
 
+## Status update (session of 2026-07-29, later)
+
+All five tasks below are **done**, plus both escalated decisions:
+
+- **Task 1 (CI):** re-enabled as a single trimmed job at `.github/workflows/ci.yml`
+  (one run per push, matrices dropped, conformance folded in). `workflows-disabled/`
+  removed. Verified the fixture guard runs and that mutating `expectedSignature`
+  fails all three suites.
+- **Task 2 (ports):** .NET and TypeScript fixtures now bind port 0; a startup
+  failure that is not an absent dependency now throws instead of silently skipping.
+  Verified with two concurrent suite runs (previously the hang/silent-skip case).
+- **Task 3 (advisory fields):** both left the schema (owner decision). Nothing has
+  shipped, so this is not a compatibility event — the fields never existed
+  publicly. The signing fixtures and their cross-SDK expected signatures were
+  regenerated for the new canonical form, and connector-spec §9 now carries the
+  rule that prevents a repeat rather than a record of the removal.
+- **Task 4 (globs):** `?` wildcard / literal brackets specified in connector-spec
+  §3.1 and aligned across all three SDKs, pinned by a new shared fixture
+  `fixtures/enforcement/validate-object-access-glob-metacharacters.json`.
+- **Task 5 (denial reason):** kept the new `method not allowed` reason; precedence
+  now specified in connector-spec §3.3.
+
+Baselines after the change: .NET 1,675 · Python 1,750 (+3 skipped) · TypeScript
+core 1,226 / store 44 / mcp 557. CHANGELOG updated under `[Unreleased]`.
+
+The remaining open items are under "Larger work, only if wanted" below.
+
+---
+
 ## Verified baseline
 
 Measured immediately before writing this, not recalled:
@@ -143,25 +172,15 @@ lines alone, without widening it to the whole repository.
 
 ---
 
-## Task 4 — Decide the two advisory-only policy fields
+## ~~Task 4 — Decide the two advisory-only policy fields~~ — DONE
 
-Both are parsed, schema-validated, merged most-restrictively, and then read by no
-enforcement code. Both are currently labelled `ADVISORY ONLY` in their schema
-descriptions and listed in [`connector-spec.md`](connector-spec.md) §9:
+Resolved: both left the schema. See the status update at the top, and
+[`connector-spec.md`](connector-spec.md) §9, which now states the rule that keeps
+the situation from recurring — a field enters the schema only if some SDK enforces
+it, and anything the SDK cannot reach is an integrator-layer concern instead.
 
-| Field | Why unenforced |
-| --- | --- |
-| `permissions.canExport` | No SDK can define what "export" means for an arbitrary tool |
-| `limits.maxQueryTimeSeconds` | The SDK never holds the connection, so it cannot set a statement timeout |
-
-**The decision:** either they gain enforcement and leave §9, or they leave the
-schema. Leaving them ambiguous is exactly how `minSimilarityScore` and
-`maxObjectSizeBytes` sat parsed-and-ignored while the README advertised them as
-security controls.
-
-`fieldRules.readOnlyFields` was in this same position and is now specified and
-enforced (connector-spec §4.3), so there is a worked precedent for the first
-option.
+`fieldRules.readOnlyFields` is the precedent for the other resolution: it was in
+the same position and gained enforcement (§4.3).
 
 ---
 

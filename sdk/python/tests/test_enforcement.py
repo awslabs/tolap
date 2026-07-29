@@ -46,6 +46,24 @@ class TestValidateObjectAccess:
             if not case["expected"]["allowed"]:
                 assert result.reason == case["expected"]["reason"]
 
+    def test_glob_metacharacter_cases(self) -> None:
+        # Shared corpus: '*' and '?' are the only wildcards, '[abc]' is literal
+        # (spec section 3.1). The .NET and TypeScript suites read the same file, case
+        # for case, so a divergence over '?' or brackets fails somewhere.
+        data = load_fixture(
+            "enforcement/validate-object-access-glob-metacharacters.json"
+        )
+        for case in data["cases"]:
+            policy = _build_effective_policy(case["policy"])
+            result = validate_access(case["objectName"], policy)
+            assert result.allowed == case["expected"]["allowed"], (
+                f"{case['objectName']}: {case.get('note', '')}"
+            )
+            if not case["expected"]["allowed"]:
+                assert result.reason == case["expected"]["reason"], (
+                    f"{case['objectName']}: {case.get('note', '')}"
+                )
+
 
 class TestValidateFieldAccess:
     """Test field-level access validation."""

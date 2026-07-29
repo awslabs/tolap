@@ -28,7 +28,7 @@ public class SecurityContextSignerTests
                     ResolvedAt: now,
                     ExpiresAt: now + ttl,
                     SourceProfiles: new[] { "healthcare-analyst-db" },
-                    Permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true))
+                    Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true))
             });
     }
 

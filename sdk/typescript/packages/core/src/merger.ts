@@ -4,9 +4,9 @@
  * Merges multiple PolicyDefinitions into a single EffectivePolicy.
  *
  * Merge rules:
- *   - Permissions: AND for canQuery/canInsert/canUpdate/canDelete/canExport,
+ *   - Permissions: AND for canQuery/canInsert/canUpdate/canDelete,
  *     OR for readOnly. Absent booleans take their schema default first
- *     (canQuery true, the write permissions and canExport false, readOnly true).
+ *     (canQuery true, the write permissions false, readOnly true).
  *   - Allowed sets (objects, fields, endpoints, tags, methods): intersection
  *   - Hidden/denied sets: union
  *   - Row filters: concatenation (AND logic)
@@ -98,7 +98,6 @@ function mergePermissions(policies: PolicyDefinition[]): PolicyPermissions {
   let canInsert = true;
   let canUpdate = true;
   let canDelete = true;
-  let canExport = true;
   let readOnly = false;
 
   for (const p of policies) {
@@ -106,11 +105,10 @@ function mergePermissions(policies: PolicyDefinition[]): PolicyPermissions {
     canInsert = canInsert && (p.permissions.canInsert ?? false);
     canUpdate = canUpdate && (p.permissions.canUpdate ?? false);
     canDelete = canDelete && (p.permissions.canDelete ?? false);
-    canExport = canExport && (p.permissions.canExport ?? false);
     readOnly = readOnly || (p.permissions.readOnly ?? true);
   }
 
-  return { canQuery, canInsert, canUpdate, canDelete, canExport, readOnly };
+  return { canQuery, canInsert, canUpdate, canDelete, readOnly };
 }
 
 function mergeMaskedFields(
@@ -297,12 +295,6 @@ function mergeLimits(policies: PolicyDefinition[]): PolicyLimits | undefined {
     .filter((v): v is number => v !== undefined);
   if (maxResults.length > 0) result.maxResults = Math.min(...maxResults);
 
-  const maxQueryTimeSeconds = defined
-    .map((l) => l.maxQueryTimeSeconds)
-    .filter((v): v is number => v !== undefined);
-  if (maxQueryTimeSeconds.length > 0)
-    result.maxQueryTimeSeconds = Math.min(...maxQueryTimeSeconds);
-
   const maxObjectSizeBytes = defined
     .map((l) => l.maxObjectSizeBytes)
     .filter((v): v is number => v !== undefined);
@@ -343,7 +335,6 @@ export function merge(policies: PolicyDefinition[]): MergeResult {
       sourceProfiles: [],
       permissions: {
         canQuery: false,
-        canExport: false,
         readOnly: true,
       },
     };

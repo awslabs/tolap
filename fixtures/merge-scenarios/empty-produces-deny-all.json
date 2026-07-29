@@ -3,6 +3,6 @@
   "inputs": [],
   "expected": {
     "sourceProfiles": [],
-    "permissions": { "canQuery": false, "canExport": false, "readOnly": true }
+    "permissions": { "canQuery": false, "readOnly": true }
   }
 }

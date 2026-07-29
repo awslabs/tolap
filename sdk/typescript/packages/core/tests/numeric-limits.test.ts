@@ -25,7 +25,7 @@ function policy(limits: Record<string, unknown>): EffectivePolicy {
   return {
     version: "1.0",
     sourceProfiles: ["p"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     limits,
   } as unknown as EffectivePolicy;
 }
@@ -209,7 +209,7 @@ describe("pipeline integration", () => {
     const withMask = {
       version: "1.0",
       sourceProfiles: ["p"],
-      permissions: { canQuery: true, canExport: false, readOnly: true },
+      permissions: { canQuery: true, readOnly: true },
       objectRules: {
         fieldRules: { maskedFields: [{ field: "secret", maskType: "redact" }] },
       },

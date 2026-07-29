@@ -134,6 +134,26 @@ untagged records.
 - **Mask restrictiveness ordering changed** (see above). Policies that relied on
   `partial`/`hash` winning a merge against `null`/`redact` will now resolve to
   the stricter mask.
+- **Enforcement globs define `?` and treat bracket expressions as literal.** `*` and
+  `?` are the only metacharacters (`?` matches exactly one character); `[abc]` and
+  every other character are literal (connector-spec §3.1). This closes a cross-SDK
+  divergence: `?` was a wildcard in Python and TypeScript but a literal in .NET, and
+  `[abc]` was a character class in Python (via `fnmatch`) but literal in the other
+  two — so a single signed `allowedObjects` entry granted different access per
+  language. Literal brackets are the fail-closed reading, matching strictly fewer
+  names than a character class would. Pinned by a shared cross-SDK fixture.
+
+### Changed
+
+- **Endpoint denial-reason precedence is now specified** (connector-spec §3.3).
+  The reason string is contract, so which one wins when a request fails several
+  checks has to be fixed rather than incidental: reasons are evaluated in a stated
+  order and the first to deny is returned. In particular, because endpoint matching
+  is case-insensitive, a path differing from an `allowedEndpoints` entry only by
+  case matches the allow-list and is then judged on its method — so a denied method
+  reports `method not allowed`, not `endpoint not in allowed set`. All three SDKs
+  already behaved this way; the order is now documented and pinned by the cross-SDK
+  endpoint parity corpus.
 
 ### Added
 

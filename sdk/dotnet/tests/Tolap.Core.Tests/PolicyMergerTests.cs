@@ -29,7 +29,6 @@ public class PolicyMergerTests
 
         result.SourceProfiles.Should().BeEmpty();
         result.Permissions.CanQuery.Should().BeFalse();
-        result.Permissions.CanExport.Should().BeFalse();
         result.Permissions.ReadOnly.Should().BeTrue();
     }
 
@@ -43,7 +42,6 @@ public class PolicyMergerTests
 
         result.SourceProfiles.Should().BeEquivalentTo(new[] { "only-policy" });
         result.Permissions.CanQuery.Should().BeTrue();
-        result.Permissions.CanExport.Should().BeTrue();
         result.Permissions.ReadOnly.Should().BeFalse();
 
         // Object rules
@@ -77,7 +75,6 @@ public class PolicyMergerTests
         // Limits
         result.Limits.Should().NotBeNull();
         result.Limits!.MaxResults.Should().Be(1000);
-        result.Limits.MaxQueryTimeSeconds.Should().Be(30);
         result.Limits.MinSimilarityScore.Should().Be(0.7);
         result.Limits.MaxObjectSizeBytes.Should().Be(52428800);
     }
@@ -91,7 +88,6 @@ public class PolicyMergerTests
 
         result.SourceProfiles.Should().BeEquivalentTo(new[] { "policy-allows", "policy-denies" });
         result.Permissions.CanQuery.Should().BeFalse();
-        result.Permissions.CanExport.Should().BeTrue();
         result.Permissions.ReadOnly.Should().BeFalse();
     }
 
@@ -104,7 +100,6 @@ public class PolicyMergerTests
 
         result.SourceProfiles.Should().BeEquivalentTo(new[] { "policy-a", "policy-b" });
         result.Permissions.CanQuery.Should().BeTrue();
-        result.Permissions.CanExport.Should().BeFalse();
         result.Permissions.ReadOnly.Should().BeTrue();
 
         result.ObjectRules.Should().NotBeNull();
@@ -160,7 +155,6 @@ public class PolicyMergerTests
         result.SourceProfiles.Should().BeEquivalentTo(new[] { "policy-generous", "policy-strict" });
         result.Limits.Should().NotBeNull();
         result.Limits!.MaxResults.Should().Be(500); // min
-        result.Limits.MaxQueryTimeSeconds.Should().Be(15); // min
         result.Limits.MinSimilarityScore.Should().Be(0.8); // max
         result.Limits.MaxObjectSizeBytes.Should().Be(52428800); // min
     }

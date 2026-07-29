@@ -334,7 +334,7 @@ function policy(): EffectivePolicy {
     resolvedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 3_600_000).toISOString(),
     sourceProfiles: ["schema-conformance"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     integrity: { algorithm: "none", signature: "" },
   };
 }

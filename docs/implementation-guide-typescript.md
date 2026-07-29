@@ -105,13 +105,11 @@ interface ObjectRules {
 
 interface Permissions {
   canQuery: boolean;
-  canExport: boolean;
   readOnly: boolean;
 }
 
 interface Limits {
   maxResults?: number;
-  maxQueryTimeSeconds?: number;
   minSimilarityScore?: number;
   maxObjectSizeBytes?: number;
 }
@@ -162,7 +160,6 @@ interface EffectivePolicy {
 
   // Permissions (AND across all policies)
   canQuery: boolean;
-  canExport: boolean;
   readOnly: boolean;
 
   // Allowed sets (intersection)
@@ -186,7 +183,6 @@ interface EffectivePolicy {
 
   // Numeric limits (most restrictive)
   maxResults?: number;
-  maxQueryTimeSeconds?: number;
   maxObjectSizeBytes?: number;
   minSimilarityScore?: number;
 }
@@ -219,7 +215,6 @@ const DENY_ALL_POLICY: EffectivePolicy = {
   resolvedAt: new Date(),
   expiresAt: new Date(),
   canQuery: false,
-  canExport: false,
   readOnly: true,
   allowedObjects: [],
   allowedFields: [],
@@ -323,7 +318,6 @@ function mergePolicies(policies: PolicyDefinition[]): EffectivePolicy {
 
   // Permissions: AND (all must allow)
   const canQuery = policies.every((p) => p.permissions.canQuery);
-  const canExport = policies.every((p) => p.permissions.canExport);
   const readOnly = policies.some((p) => p.permissions.readOnly);
 
   // Allowed sets: INTERSECTION (only policies that define the field participate)
@@ -369,9 +363,6 @@ function mergePolicies(policies: PolicyDefinition[]): EffectivePolicy {
   const maxResults = minDefined(
     policies.map((p) => p.limits.maxResults),
   );
-  const maxQueryTimeSeconds = minDefined(
-    policies.map((p) => p.limits.maxQueryTimeSeconds),
-  );
   const maxObjectSizeBytes = minDefined(
     policies.map((p) => p.limits.maxObjectSizeBytes),
   );
@@ -386,7 +377,6 @@ function mergePolicies(policies: PolicyDefinition[]): EffectivePolicy {
     resolvedAt: now,
     expiresAt: now,
     canQuery,
-    canExport,
     readOnly,
     allowedObjects,
     allowedFields,
@@ -400,7 +390,6 @@ function mergePolicies(policies: PolicyDefinition[]): EffectivePolicy {
     rowFilters,
     maskedFields,
     maxResults,
-    maxQueryTimeSeconds,
     maxObjectSizeBytes,
     minSimilarityScore,
   };
@@ -1177,7 +1166,6 @@ describe("mergePolicies", () => {
   it("should return DENY_ALL when no policies apply", () => {
     const result = mergePolicies([]);
     expect(result.canQuery).toBe(false);
-    expect(result.canExport).toBe(false);
     expect(result.readOnly).toBe(true);
   });
 });

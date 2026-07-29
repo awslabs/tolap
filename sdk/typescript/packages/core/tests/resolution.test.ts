@@ -148,7 +148,9 @@ describe("resolve", () => {
     );
 
     expect(result.sourceProfiles).toContain("data-lake-analyst");
-    expect(result.permissions.canExport).toBe(true);
+    // The role match folded storage-analyst in, so its limits reached the result.
+    expect(result.permissions.canQuery).toBe(true);
+    expect(result.limits?.maxObjectSizeBytes).toBe(104857600);
   });
 
   it("should not resolve an assignment for the wrong tenant", async () => {
@@ -253,8 +255,6 @@ describe("resolve", () => {
 
     expect(result.sourceProfiles.length).toBe(2);
     expect(result.permissions.canQuery).toBe(true);
-    // AND: both are false for canExport
-    expect(result.permissions.canExport).toBe(false);
     // OR: both are true for readOnly
     expect(result.permissions.readOnly).toBe(true);
   });

@@ -59,7 +59,7 @@ def _make_signed_context(
         user_id="user-001",
         tenant_id="tenant-001",
         source_profiles=["test-policy"],
-        permissions=PolicyPermissions(can_query=can_query, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=can_query, read_only=True),
         object_rules=object_rules,
         limits=limits,
     )

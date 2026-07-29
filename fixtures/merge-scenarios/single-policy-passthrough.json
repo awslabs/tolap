@@ -5,7 +5,7 @@
       "version": "1.0",
       "name": "only-policy",
       "priority": 10,
-      "permissions": { "canQuery": true, "canExport": true, "readOnly": false },
+      "permissions": { "canQuery": true, "readOnly": false },
       "objectRules": {
         "allowedObjects": ["patients", "encounters"],
         "hiddenObjects": ["admin"],
@@ -31,7 +31,6 @@
       },
       "limits": {
         "maxResults": 1000,
-        "maxQueryTimeSeconds": 30,
         "minSimilarityScore": 0.7,
         "maxObjectSizeBytes": 52428800
       }
@@ -39,7 +38,7 @@
   ],
   "expected": {
     "sourceProfiles": ["only-policy"],
-    "permissions": { "canQuery": true, "canExport": true, "readOnly": false },
+    "permissions": { "canQuery": true, "readOnly": false },
     "objectRules": {
       "allowedObjects": ["patients", "encounters"],
       "hiddenObjects": ["admin"],
@@ -65,7 +64,6 @@
     },
     "limits": {
       "maxResults": 1000,
-      "maxQueryTimeSeconds": 30,
       "minSimilarityScore": 0.7,
       "maxObjectSizeBytes": 52428800
     }

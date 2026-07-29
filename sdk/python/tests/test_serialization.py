@@ -24,7 +24,6 @@ class TestDeserializePolicyDefinition:
         assert policy.name == "healthcare-analyst-db"
         assert policy.priority == 10
         assert policy.permissions.can_query is True
-        assert policy.permissions.can_export is False
         assert policy.permissions.read_only is True
         assert policy.source_patterns == ["db:production:patient_*", "db:production:encounter_*"]
 
@@ -53,7 +52,6 @@ class TestDeserializePolicyDefinition:
         assert policy.object_rules.row_filters[0].values == ["us-east", "us-west"]
 
         assert policy.limits.max_results == 5000
-        assert policy.limits.max_query_time_seconds == 30
 
     def test_api_readonly(self) -> None:
         data = load_fixture("policies/api-readonly.json")
@@ -80,7 +78,6 @@ class TestDeserializePolicyDefinition:
         policy = deserialize_policy_definition(data)
 
         assert policy.name == "data-lake-analyst"
-        assert policy.permissions.can_export is True
         assert policy.limits.max_object_size_bytes == 104857600
 
     def test_from_json_string(self) -> None:

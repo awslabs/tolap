@@ -74,17 +74,16 @@ public class CoreApiCoverageTests
     }
 
     [Fact]
-    public void Merge_ReadOnlyOrsAndCanQueryCanExportAnd()
+    public void Merge_ReadOnlyOrsAndCanQueryAnds()
     {
-        // Spec section 8: canQuery AND, canExport AND, readOnly OR.
+        // Spec section 8: canQuery AND, readOnly OR.
         var merged = PolicyMerger.Merge(new[]
         {
-            Definition("permissive", permissions: new PolicyPermissions(CanQuery: true, CanExport: true, ReadOnly: false)),
-            Definition("restrictive", permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true))
+            Definition("permissive", permissions: new PolicyPermissions(CanQuery: true, ReadOnly: false)),
+            Definition("restrictive", permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true))
         });
 
         merged.Permissions.CanQuery.Should().BeTrue();
-        merged.Permissions.CanExport.Should().BeFalse("canExport folds with AND");
         merged.Permissions.ReadOnly.Should().BeTrue("readOnly folds with OR, so the restrictive policy wins");
     }
 
@@ -104,16 +103,6 @@ public class CoreApiCoverageTests
 
         PolicyMerger.Merge(new[] { silent, explicitlyWritable })
             .Permissions.ReadOnly.Should().BeTrue();
-    }
-
-    [Fact]
-    public void Merge_AbsentCanExport_DefaultsToFalse()
-    {
-        var silent = TolapJsonOptions.Deserialize<PolicyDefinition>(
-            """{"version":"1.0","name":"silent","permissions":{"canQuery":true}}""");
-
-        silent.Permissions.CanExport.Should().BeFalse();
-        PolicyMerger.Merge(new[] { silent }).Permissions.CanExport.Should().BeFalse();
     }
 
     [Fact]
@@ -235,14 +224,13 @@ public class CoreApiCoverageTests
         // *largest* similarity floor.
         var merged = PolicyMerger.Merge(new[]
         {
-            Definition("a", limits: new PolicyLimits(MaxResults: 100, MaxQueryTimeSeconds: 30,
+            Definition("a", limits: new PolicyLimits(MaxResults: 100,
                 MinSimilarityScore: 0.5, MaxObjectSizeBytes: 1000)),
-            Definition("b", limits: new PolicyLimits(MaxResults: 10, MaxQueryTimeSeconds: 60,
+            Definition("b", limits: new PolicyLimits(MaxResults: 10,
                 MinSimilarityScore: 0.8, MaxObjectSizeBytes: 500))
         });
 
         merged.Limits!.MaxResults.Should().Be(10);
-        merged.Limits.MaxQueryTimeSeconds.Should().Be(30);
         merged.Limits.MinSimilarityScore.Should().Be(0.8);
         merged.Limits.MaxObjectSizeBytes.Should().Be(500);
     }
@@ -258,7 +246,6 @@ public class CoreApiCoverageTests
 
         merged.Limits!.MaxResults.Should().Be(25);
         merged.Limits.MinSimilarityScore.Should().Be(0.4);
-        merged.Limits.MaxQueryTimeSeconds.Should().BeNull();
     }
 
     [Fact]
@@ -811,7 +798,6 @@ public class CoreApiCoverageTests
         var deny = EffectivePolicy.DenyAll();
 
         deny.Permissions.CanQuery.Should().BeFalse();
-        deny.Permissions.CanExport.Should().BeFalse();
         deny.Permissions.ReadOnly.Should().BeTrue();
         deny.SourceProfiles.Should().BeEmpty();
         deny.ObjectRules.Should().BeNull();

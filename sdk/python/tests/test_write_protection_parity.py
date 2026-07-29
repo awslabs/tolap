@@ -42,7 +42,7 @@ PARITY_POLICY = EffectivePolicy(
     user_id="parity-user",
     tenant_id="parity-tenant",
     source_profiles=["write-protection-parity"],
-    permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+    permissions=PolicyPermissions(can_query=True, read_only=True),
     object_rules=ObjectRules(
         endpoint_rules=EndpointRules(
             allowed_endpoints=["/api/*"],

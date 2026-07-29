@@ -16,7 +16,6 @@ interface MergeFixture {
       canInsert?: boolean;
       canUpdate?: boolean;
       canDelete?: boolean;
-      canExport?: boolean;
       readOnly?: boolean;
     };
     objectRules?: Record<string, unknown>;
@@ -33,7 +32,7 @@ function loadFixture(filename: string): MergeFixture {
  * The fixture's expected permissions, with the three write flags filled in.
  *
  * The shared merge fixtures predate write permissions and name none of them, so
- * their `expected.permissions` blocks cover only `canQuery`/`canExport`/`readOnly`.
+ * their `expected.permissions` blocks cover only `canQuery`/`readOnly`.
  * Rather than loosen these assertions to a subset match — which would stop noticing
  * a stray key entirely — the write flags are computed here straight from the
  * fixture's own inputs under connector spec §4.1: absent defaults to false, then
@@ -64,7 +63,6 @@ describe("Policy Merger", () => {
 
       expect(result.sourceProfiles).toEqual(fixture.expected.sourceProfiles);
       expect(result.permissions.canQuery).toBe(false);
-      expect(result.permissions.canExport).toBe(false);
       expect(result.permissions.readOnly).toBe(true);
     });
   });
@@ -88,7 +86,6 @@ describe("Policy Merger", () => {
 
       expect(result.sourceProfiles).toEqual(fixture.expected.sourceProfiles);
       expect(result.permissions.canQuery).toBe(false);
-      expect(result.permissions.canExport).toBe(true);
       expect(result.permissions.readOnly).toBe(false);
     });
   });

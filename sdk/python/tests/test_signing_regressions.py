@@ -43,7 +43,7 @@ def _policy() -> EffectivePolicy:
         user_id="user-001",
         tenant_id="tenant-midwest-health",
         source_profiles=["healthcare-analyst-db"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
     )
 
 

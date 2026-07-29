@@ -26,7 +26,6 @@ function policy(
   limits?: EffectivePolicy["limits"],
   permissions: EffectivePolicy["permissions"] = {
     canQuery: true,
-    canExport: false,
     readOnly: true,
   },
 ): EffectivePolicy {
@@ -279,7 +278,7 @@ describe("request: url assembly and query-string handling", () => {
     const p = policy(
       { endpointRules: { allowedEndpoints: ["/x"], allowedMethods: ["GET", "POST"] } },
       undefined,
-      { canQuery: true, canInsert: true, canExport: false, readOnly: false },
+      { canQuery: true, canInsert: true, readOnly: false },
     );
     const { instance, calls } = wrapper({});
 

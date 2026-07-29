@@ -30,7 +30,7 @@ def _make_policy(
     return PolicyDefinition(
         version="1.0",
         name=name,
-        permissions=PolicyPermissions(can_query=can_query, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=can_query, read_only=True),
         priority=priority,
         object_rules=ObjectRules(allowed_objects=allowed_objects) if allowed_objects else None,
     )
@@ -230,7 +230,7 @@ class TestResolution:
         policy_a = PolicyDefinition(
             version="1.0",
             name="policy-a",
-            permissions=PolicyPermissions(can_query=True, can_export=True, read_only=False),
+            permissions=PolicyPermissions(can_query=True, read_only=False),
             priority=10,
             object_rules=ObjectRules(allowed_objects=["patients", "encounters"]),
             limits=PolicyLimits(max_results=5000),
@@ -238,7 +238,7 @@ class TestResolution:
         policy_b = PolicyDefinition(
             version="1.0",
             name="policy-b",
-            permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+            permissions=PolicyPermissions(can_query=True, read_only=True),
             priority=20,
             object_rules=ObjectRules(allowed_objects=["patients", "medications"]),
             limits=PolicyLimits(max_results=1000),
@@ -257,9 +257,8 @@ class TestResolution:
             get_roles=lambda uid: [],
         )
 
-        # AND for can_export, OR for read_only
+        # OR for read_only
         assert result.permissions.can_query is True
-        assert result.permissions.can_export is False
         assert result.permissions.read_only is True
 
         # Intersection of allowed objects

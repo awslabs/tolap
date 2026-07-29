@@ -56,7 +56,6 @@ class EndpointRules:
 @dataclass
 class PolicyLimits:
     max_results: int | None = None
-    max_query_time_seconds: int | None = None
     min_similarity_score: float | None = None
     max_object_size_bytes: int | None = None
 
@@ -87,7 +86,6 @@ class PolicyPermissions:
     can_insert: bool | None = None
     can_update: bool | None = None
     can_delete: bool | None = None
-    can_export: bool | None = None
     read_only: bool | None = None
 
 
@@ -172,7 +170,6 @@ class EffectivePolicy:
             # twice over without carrying three redundant keys into the signed bytes.
             permissions=PolicyPermissions(
                 can_query=False,
-                can_export=False,
                 read_only=True,
             ),
         )
