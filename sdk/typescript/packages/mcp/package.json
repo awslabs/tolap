@@ -16,7 +16,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "mysql2": "^3.22.5",
     "pg": "^8.21.0",
-    "typescript": "^5.4.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   }
 }
