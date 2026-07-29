@@ -389,6 +389,13 @@ class TestIdentityExtractionFailureSemantics:
         with pytest.raises(TolapIdentityError):
             self._extractor().extract_user_id(request)
 
+    def test_non_bearer_scheme_raises(self) -> None:
+        """A credential was presented -- just not one this extractor understands."""
+        request = {"headers": {"Authorization": "Basic dXNlcjpwYXNz"}}
+
+        with pytest.raises(TolapIdentityError, match="Bearer"):
+            self._extractor().extract_user_id(request)
+
     def test_non_allowlisted_algorithm_raises(self) -> None:
         # HS512 is a real algorithm but outside the caller's allow-list, so accepting
         # it would defeat the point of pinning one.

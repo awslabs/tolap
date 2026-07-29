@@ -204,6 +204,15 @@ class JwtIdentityExtractor:
             token.lower().startswith("bearer ") and not token[7:].strip()
         ):
             return None
+        # A scheme this extractor does not understand still means a credential was
+        # presented, so it is rejected loudly rather than degrading to anonymous.
+        # Reported distinctly from a malformed JWT so the integrator's log names the
+        # actual misconfiguration, matching the TypeScript SDK's message.
+        parts = token.split()
+        if len(parts) > 1 and parts[0].lower() != "bearer":
+            raise TolapIdentityError(
+                "Invalid Authorization header: expected 'Bearer <token>'"
+            )
         return token
 
     def _claim(self, request: dict, claim: str) -> str | None:
