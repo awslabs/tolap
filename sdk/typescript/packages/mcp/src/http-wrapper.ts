@@ -13,8 +13,12 @@
  */
 
 import {
-  applyMask,
+  applyMaskingToTree,
+  applyObjectSizeCeiling,
   applyResultLimit,
+  applyRowFilters,
+  applySimilarityFloor,
+  filterByTags,
   projectAllowedFields,
   stripHiddenFields,
   validateContext,
@@ -22,7 +26,6 @@ import {
   validateExpiry,
   type AccessResult,
   type EffectivePolicy,
-  type MaskingRule,
   type SecurityContext,
 } from "@tolap/core";
 
@@ -111,13 +114,22 @@ export class SecureHttpToolWrapper {
     }
     let body = (await response.json()) as unknown;
 
-    // Canonical pipeline order (spec §4): hidden fields, then the allowedFields
-    // projection, then masking, then the result limit. Hidden/allowed removal
-    // precedes masking so a field that is both hidden and masked is removed
-    // rather than returned in masked form.
+    // Canonical pipeline order (spec §4), all eight steps: row filters, tag
+    // filters, relevance floor, size ceiling, hidden fields, the allowedFields
+    // projection, masking, then the result limit. The four record-dropping steps
+    // were previously absent here, so rowFilters, allowedTags/deniedTags,
+    // minSimilarityScore, and maxObjectSizeBytes were all silent no-ops on the API
+    // path while the identical policy filtered correctly through the MCP and
+    // context wrappers. Every record-dropping step precedes every field-level step
+    // so work is not spent masking a record about to be discarded;
+    // hidden/allowed removal precedes masking so a field that is both hidden and
+    // masked is removed rather than returned in masked form; and the limit runs
+    // last so filtering never yields fewer records than maxResults when more
+    // qualifying records exist.
+    body = filterRecordsInBody(body, args.collectionPath, policy);
     body = stripHiddenFields(body, policy);
     body = projectAllowedFieldsInBody(body, args.collectionPath, policy);
-    body = applyMaskingToBody(body, policy);
+    body = applyMaskingToTree(body, policy);
     body = limitCollection(body, args.collectionPath, policy);
     return body;
   }
@@ -131,59 +143,78 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// A plain `node[key] = value` where key is "__proto__" reassigns the object's
-// prototype instead of adding a property, so a hostile response body could
-// reshape Object.prototype while being masked. Skipping the whole family
-// (including "constructor" and "prototype") is defense-in-depth: no policy rule
-// needs to address them, and no legitimate JSON body should be walked through
-// them.
-const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-function isDangerousKey(key: string): boolean {
-  return DANGEROUS_KEYS.has(key);
-}
-
-function walkAndMask(node: unknown, parts: string[], rule: MaskingRule): void {
-  if (parts.length === 0) return;
-  if (Array.isArray(node)) {
-    for (const item of node) walkAndMask(item, parts, rule);
-    return;
-  }
-  if (!isObject(node)) return;
-  const [head, ...rest] = parts;
-  if (isDangerousKey(head)) return;
-  if (!Object.prototype.hasOwnProperty.call(node, head)) return;
-  if (rest.length === 0) {
-    Object.defineProperty(node, head, {
-      value: applyMask(node[head], rule),
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
-  } else {
-    walkAndMask(node[head], rest, rule);
-  }
-}
-
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
 /**
- * Apply every maskedFields rule to a (potentially nested) JSON body.
+ * Run the record-dropping steps -- row filters, tag filters, the relevance floor,
+ * and the size ceiling -- over the record collection inside a response body.
  *
- * Masking delegates to the shared core `applyMask`, so an unknown maskType
- * redacts here exactly as it does on the DB path rather than returning the raw
- * value.
+ * These were previously missing from the HTTP path entirely, which made
+ * `rowFilters`, `allowedTags`/`deniedTags`, `minSimilarityScore`, and
+ * `maxObjectSizeBytes` silent no-ops over HTTP while the same policy filtered
+ * correctly on the DB/MCP path (spec §4 requires every wrapper, in every language,
+ * to run all eight steps in order). The `[]` allow-list case matters most:
+ * `allowedTags: []` is deny-all (spec §3), so skipping the step turned the most
+ * restrictive possible policy into no policy at all.
+ *
+ * Filtering targets the records -- the array at `collectionPath`, or the body when
+ * the body *is* the collection -- not the transport envelope, so an API's
+ * meta/paging block survives, exactly as the projection and limit steps already do.
+ * A body that is a single record runs the identical filters and becomes an empty
+ * collection when it is dropped.
  */
-function applyMaskingToBody(body: unknown, policy: EffectivePolicy): unknown {
-  const masked = policy.objectRules?.fieldRules?.maskedFields;
-  if (!masked || masked.length === 0) return body;
-  const cloned = deepClone(body);
-  for (const rule of masked) {
-    walkAndMask(cloned, rule.field.split("."), rule);
+function filterRecordsInBody(
+  body: unknown,
+  collectionPath: string | undefined,
+  policy: EffectivePolicy,
+): unknown {
+  const objectRules = policy.objectRules;
+  const hasRowFilters = (objectRules?.rowFilters?.length ?? 0) > 0;
+  // `tagRules` present but empty-valued still constrains: allowedTags: [] denies
+  // everything, so presence -- not truthiness of the arrays -- is the test.
+  const hasTagRules = objectRules?.tagRules !== undefined;
+  const hasRelevanceFloor = policy.limits?.minSimilarityScore !== undefined;
+  const hasSizeCeiling = policy.limits?.maxObjectSizeBytes !== undefined;
+  if (!hasRowFilters && !hasTagRules && !hasRelevanceFloor && !hasSizeCeiling) {
+    return body;
   }
-  return cloned;
+
+  const filter = (records: unknown[]): Array<Record<string, unknown>> => {
+    // Non-record entries cannot be evaluated against a field, tag, score, or size
+    // rule. Dropping them fails closed: the policy author asked for a constraint
+    // and we cannot prove it holds (spec §5/§7).
+    const asRecords = records.filter((item): item is Record<string, unknown> =>
+      isObject(item),
+    );
+    return applyObjectSizeCeiling(
+      applySimilarityFloor(
+        filterByTags(applyRowFilters(asRecords, policy), policy),
+        policy,
+      ),
+      policy,
+    );
+  };
+
+  if (collectionPath === undefined) {
+    if (Array.isArray(body)) return filter(deepClone(body));
+    if (isObject(body)) return filter([deepClone(body)]);
+    return body;
+  }
+
+  const parts = collectionPath.split(".");
+  const filtered = deepClone(body);
+  let cursor: unknown = filtered;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (!isObject(cursor) || !(parts[i] in cursor)) return filtered;
+    cursor = cursor[parts[i]];
+  }
+  const leaf = parts[parts.length - 1];
+  if (isObject(cursor) && Array.isArray(cursor[leaf])) {
+    cursor[leaf] = filter(cursor[leaf] as unknown[]);
+  }
+  return filtered;
 }
 
 /**

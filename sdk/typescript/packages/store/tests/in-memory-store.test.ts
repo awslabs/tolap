@@ -182,10 +182,15 @@ describe("InMemoryPolicyStore", () => {
       await store.putDefinition(policy);
       await store.putAssignment(assignment);
 
+      // Source ids are in the canonical `category:namespace:name` form and fall
+      // inside the fixture policy's declared sourcePatterns. Resolution filters on
+      // them (canonical spec §9), so a source outside a policy's patterns
+      // correctly resolves to deny-all -- this case is about the store returning a
+      // policy at all, so the source has to be one the policy claims to cover.
       const effective = await store.resolvePolicy(
         "user-001",
         "tenant-midwest-health",
-        "ds-postgres-healthcare",
+        "db:production:patient_records",
       );
 
       expect(effective.userId).toBe("user-001");
@@ -209,7 +214,7 @@ describe("InMemoryPolicyStore", () => {
       const effective = await store.resolvePolicy(
         "user-001",
         "tenant-midwest-health",
-        "ds-api-internal",
+        "api:internal:patients",
       );
 
       expect(effective.sourceProfiles).toContain("internal-api-readonly");

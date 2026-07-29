@@ -119,6 +119,136 @@ public sealed class SecureContextToolWrapper
     }
 
     /// <summary>
+    /// Runs the pre-execution checks and rewrites a SQL query so the policy's restrictions
+    /// reach the database.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An optional step, and never a replacement for <see cref="PostExecute"/>: the
+    /// post-execution pipeline stays mandatory and stays the enforcement point
+    /// (canonical-enforcement-spec.md section 4). What this adds is that a row the policy
+    /// excludes is not fetched and materialized before being discarded (threat-model D2). A
+    /// caller that skips this method loses the resource saving and nothing else.
+    /// </para>
+    /// <para>
+    /// The object name is taken from the query's own <c>FROM</c> clause when
+    /// <see cref="PreExecuteArgs.ObjectName"/> is null, so an <c>allowedObjects</c> rule
+    /// applies to the table the query actually reads rather than to whatever the caller
+    /// declared. Typical use:
+    /// </para>
+    /// <code>
+    /// var prep = wrapper.PrepareSqlQuery(ctx, new PreExecuteArgs("pg-query"), sql);
+    /// if (!prep.Allowed) throw new UnauthorizedAccessException(prep.DenialReason);
+    /// var rows = await RunAsync(prep.Query);
+    /// return wrapper.PostExecute(ctx, rows);   // still required
+    /// </code>
+    /// </remarks>
+    /// <param name="context">The signed security context.</param>
+    /// <param name="args">
+    /// What the call is about to do. A null <see cref="PreExecuteArgs.ObjectName"/> is filled
+    /// in from the query.
+    /// </param>
+    /// <param name="sql">The query to check and rewrite.</param>
+    /// <param name="rewriter">
+    /// The rewriter to use, or null for a default instance. Supply one to receive its
+    /// diagnostics.
+    /// </param>
+    /// <param name="dialect">
+    /// The engine <paramref name="sql"/> will run against (connector-spec.md section 5.1) —
+    /// yours to supply, since only you know which connection this is for. Null selects the
+    /// rewriter's own dialect, or <see cref="SqlDialect.Ansi"/>. An unrecognized value rewrites
+    /// nothing and reports every filter in
+    /// <see cref="SqlQueryPreparation.UnpushableFilters"/>; the pre-execution checks still run
+    /// either way, so declining to rewrite never relaxes a denial.
+    /// </param>
+    public SqlQueryPreparation PrepareSqlQuery(
+        SecurityContext context,
+        PreExecuteArgs args,
+        string sql,
+        ISqlQueryRewriter? rewriter = null,
+        SqlDialect? dialect = null)
+    {
+        rewriter ??= new SqlQueryRewriter();
+
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            return SqlQueryPreparation.Denied("query is empty", sql);
+        }
+
+        // Resolve the object from the query itself when the caller did not name one: an
+        // allowedObjects rule must apply to the table being read, not to a declaration the
+        // query is free to contradict.
+        var effectiveArgs = args.ObjectName is null
+            ? args with { ObjectName = rewriter.ExtractTableName(sql) }
+            : args;
+
+        var pre = PreExecute(context, effectiveArgs);
+        if (!pre.Allowed)
+        {
+            return SqlQueryPreparation.Denied(pre.Reason ?? "access denied", sql);
+        }
+
+        // Non-null: PreExecute above denies a context with no policy, so this is only reached
+        // once one is present.
+        var policy = context.Policies[0];
+
+        // Refuse rather than silently narrow: an agent that asked for a field it cannot read
+        // should be told, not handed a result that quietly omits the column.
+        if (!rewriter.ValidateQuery(sql, policy))
+        {
+            return SqlQueryPreparation.Denied(
+                "query references fields you do not have permission to access", sql);
+        }
+
+        var rewritten = rewriter.RewriteQuery(sql, policy, dialect);
+
+        return new SqlQueryPreparation(
+            Allowed: true,
+            DenialReason: null,
+            Query: rewritten,
+            Rewritten: !string.Equals(rewritten, sql, StringComparison.Ordinal),
+            UnpushableFilters: rewriter.UnpushableFilters(policy, dialect));
+    }
+
+    /// <summary>
+    /// Prepares a SQL query, executes it, and applies the post-execution pipeline.
+    /// </summary>
+    /// <remarks>
+    /// The pushed-down and post-fetch halves of enforcement in one call. The delegate receives
+    /// the rewritten query; the pipeline still runs over whatever it returns, so a filter that
+    /// could not be pushed down is still enforced.
+    /// </remarks>
+    /// <exception cref="UnauthorizedAccessException">
+    /// Thrown when the query is refused. The delegate is not invoked in that case.
+    /// </exception>
+    /// <param name="context">The signed security context.</param>
+    /// <param name="args">What the call is about to do.</param>
+    /// <param name="sql">The query to check, rewrite, and execute.</param>
+    /// <param name="execute">Runs the rewritten query and returns its rows.</param>
+    /// <param name="rewriter">The rewriter to use, or null for a default instance.</param>
+    /// <param name="dialect">
+    /// The engine <paramref name="execute"/> will run the query against (connector-spec.md
+    /// section 5.1). Null selects the rewriter's own dialect, or <see cref="SqlDialect.Ansi"/>.
+    /// </param>
+    public async Task<IReadOnlyList<Dictionary<string, object?>>> ExecuteSqlWithEnforcementAsync(
+        SecurityContext context,
+        PreExecuteArgs args,
+        string sql,
+        Func<string, Task<IReadOnlyList<Dictionary<string, object?>>>> execute,
+        ISqlQueryRewriter? rewriter = null,
+        SqlDialect? dialect = null)
+    {
+        var prep = PrepareSqlQuery(context, args, sql, rewriter, dialect);
+        if (!prep.Allowed)
+        {
+            throw new UnauthorizedAccessException($"Access denied: {prep.DenialReason}");
+        }
+
+        var raw = await execute(prep.Query).ConfigureAwait(false);
+        return PostExecute(context, raw);
+    }
+
+    /// <summary>
     /// Applies the canonical post-execution pipeline to a result set.
     /// </summary>
     /// <remarks>

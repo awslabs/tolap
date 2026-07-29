@@ -56,12 +56,22 @@ The tool never returns data the user is not authorized to see. There is nothing 
 
 | Data Source | Enforcement |
 |-------------|------------|
-| **Databases** (PostgreSQL, MySQL, Athena, BigQuery, ...) | Column hiding, row filtering, field masking, query rewriting, result limits |
+| **Databases** (PostgreSQL, MySQL, Athena, BigQuery, ...) | Column hiding, row filtering, field masking, result limits |
 | **APIs** (REST, GraphQL, SOAP, FHIR, gRPC, ...) | Endpoint allow/deny, HTTP method restrictions, response field masking |
-| **Knowledge Bases** (Bedrock KB, OpenSearch, Elasticsearch, ...) | Tag-based filtering, classification restrictions, similarity thresholds |
-| **Object Storage** (S3, Azure Blob, GCS, ...) | Prefix allow/deny, file type restrictions, size limits, metadata masking |
+| **Knowledge Bases** (Bedrock KB, OpenSearch, Elasticsearch, ...) | Tag-based filtering (classification levels are expressed as tags), similarity thresholds |
+| **Object Storage** (S3, Azure Blob, GCS, ...) | Prefix allow/deny, size limits, metadata masking |
 
 One policy schema covers all source types. No category-specific schemas.
+
+Enforcement is applied to results **after** the tool executes — that pass is the
+security boundary and always runs. The agent never receives an excluded row.
+
+For SQL sources the .NET SDK additionally offers **optional query rewriting**, which
+pushes row filters into a `WHERE` clause and the result limit into a `LIMIT` so the
+database returns less data. That is a resource optimization, not the enforcement: the
+post-execution pass still runs, because some filters have no portable SQL form. Without
+rewriting, a large result set is fetched and then trimmed, so push limits into your own
+queries when a collection may be large.
 
 ## How It Works
 
@@ -356,7 +366,7 @@ When multiple policies apply to a user, TOLAP merges them using most-restrictive
 | Boolean permissions | AND | `canQuery` true + false -> false |
 | Numeric limits (maxima) | Minimum | `maxResults` 100 + 50 -> 50 |
 | Numeric limits (minima) | Maximum | `minSimilarityScore` 0.7 + 0.8 -> 0.8 |
-| Masked fields | Most restrictive | full > hash > partial > redact > null |
+| Masked fields | Most restrictive | ranked by disclosure: null > redact > full > hash > partial |
 | Row filters | Concatenate | All filters from all policies apply (AND) |
 
 ## TOLAP vs Traditional Approaches
@@ -382,21 +392,37 @@ Schema version: **v1.0** (strict versioning, no extension points)
 
 ## Security Properties
 
-- **Non-bypassable** -- The tool is the only path to the data source. There is no way around enforcement.
-- **Tamper-proof** -- Effective policies are HMAC-signed. Modification invalidates the signature.
-- **Replay-resistant** -- Signed contexts include timestamps and expiry. Expired contexts are rejected.
-- **Cross-boundary** -- Signed contexts can be transported across process, network, and cloud boundaries without losing integrity.
-- **Audit-complete** -- Every policy assignment has mandatory audit fields: who granted it, when, and why.
+- **Non-bypassable where the wrapper is the only path** -- Enforcement runs inside the
+  tool, so an agent cannot route around it. This holds only as far as the integrator
+  wires it: a tool that reaches a data source without going through a secure wrapper is
+  outside the boundary, and TOLAP cannot know about it.
+- **Tamper-proof** -- Effective policies are HMAC-signed over a canonical form that
+  covers the whole context including its expiry. Any modification invalidates the
+  signature, and a context signed by one SDK verifies in the other two.
+- **Replay-bounded** -- Signed contexts carry an expiry that is inside the signature, so
+  it cannot be extended without the key. A valid context is replayable until it expires:
+  there is no nonce and contexts are not single-use, so keep TTLs short.
+- **Cross-boundary** -- Signed contexts can be transported across process, network, and
+  cloud boundaries without losing integrity.
+- **Audit fields are mandatory in the schema** -- Every policy assignment must carry who
+  granted it, when, and why. This is a schema constraint on stored assignments; validate
+  assignments against the schema in your store, because the SDK does not reject an
+  assignment that omits them at load time.
+
+See [Known limitations](docs/canonical-enforcement-spec.md#13-known-limitations) for the
+full list of what TOLAP does not guarantee.
 
 ## Documentation
 
 - [Architecture Guide](docs/architecture.md) -- Components, data flow, sequence diagrams
 - [Canonical Enforcement Spec](docs/canonical-enforcement-spec.md) -- Normative cross-language behavior: canonical signing, enforcement pipeline order, fail-closed rules
+- [Connector Spec](docs/connector-spec.md) -- Normative per-category behavior: which policy fields apply to `db` / `api` / `kb` / `storage`, what an object and a record mean for each, and which fields are advisory rather than enforced
+- [Local Testing](docs/local-testing.md) -- Running the suites against live Postgres/MySQL and the test API server
 - Implementation Guides:
   - [.NET / C#](docs/implementation-guide-dotnet.md)
   - [Python](docs/implementation-guide-python.md)
   - [TypeScript](docs/implementation-guide-typescript.md)
-- [Schema Examples](schema/v1.0/examples/) -- Database, API, knowledge base, and storage policy examples
+- [Schema Examples](schema/v1.0/examples/) -- Database (read and write), API, knowledge base, and storage policy examples
 
 ## Project Structure
 
@@ -406,9 +432,10 @@ tolap-sdk/
   schema/v1.0/    JSON Schema specification
   fixtures/       Shared test data (all languages validate against these)
   sdk/
-    dotnet/       Tolap.Core, Tolap.Store, Tolap.Mcp  (61 tests)
-    python/       tolap-core, tolap-store, tolap-mcp   (76 tests)
-    typescript/   @tolap/core, @tolap/store, @tolap/mcp (94 tests)
+    dotnet/       Tolap.Core, Tolap.Store, Tolap.Mcp
+    python/       tolap-core, tolap-store, tolap-mcp
+    typescript/   @tolap/core, @tolap/store, @tolap/mcp
+  tools/test-api/ Local HTTP server for socket-level enforcement tests
 ```
 
 ## Contributing

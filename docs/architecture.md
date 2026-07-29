@@ -91,19 +91,24 @@ The merge strategy ensures that the *intersection* of permissions is enforced. I
 | Allowed sets (objects, fields, endpoints, tags, methods) | Intersection | User must be allowed by ALL profiles |
 | Hidden/denied sets (objects, fields, endpoints, tags) | Union | ANY profile can hide an object |
 | Row filters | AND (all must be satisfied) | Every filter condition applies |
-| Masked fields | Most restrictive mask type per field | `full` > `hash` > `partial` > `null` > `redact` |
+| Masked fields | Most restrictive mask type per field | ranked by disclosure: `null` > `redact` > `full` > `hash` > `partial` |
 | Numeric limits (maxResults, maxQueryTime, maxObjectSize) | Minimum value | Most restrictive limit wins |
 | Similarity thresholds (minSimilarityScore) | Maximum value | Higher threshold = more restrictive |
 | Boolean permissions (canQuery, canExport) | AND | ALL profiles must allow |
 | Read-only flag | OR | ANY profile can enforce read-only |
 
-**Mask type restrictiveness order (most to least):**
+**Mask type restrictiveness order (most to least).** Ranked by how much of the
+original value is disclosed, so the mask that reveals least wins a merge:
 
-1. `full` -- entire value replaced (e.g., `*****`)
-2. `hash` -- value replaced with cryptographic hash
-3. `partial` -- partial reveal (e.g., `joh*****`)
-4. `redact` -- value replaced with `[REDACTED]`
-5. `null` -- value replaced with null
+1. `null` -- value replaced with null; neither the value nor its length survives
+2. `redact` -- value replaced with the fixed literal `[REDACTED]`
+3. `full` -- every character replaced (e.g., `*****`); discloses the length
+4. `hash` -- irreversible digest, but stable and therefore joinable
+5. `partial` -- discloses real characters of the original (e.g., `joh*****`)
+
+Merging `ssn: null` with `ssn: partial` therefore yields `null`. An earlier
+release ranked these in the opposite direction, so the merge returned `partial`
+and disclosed SSN digits a policy had demanded be erased entirely.
 
 ### 4. Secure Tool Wrappers
 
@@ -116,7 +121,7 @@ The enforcement layer. Each Secure Tool Wrapper wraps a data source and enforces
 - Validate the requested objects/endpoints are in the allowed set
 - Validate the requested objects/endpoints are not in the hidden set
 - For databases: validate the query does not reference hidden columns
-- For databases: rewrite the query to inject row filter WHERE clauses
+- Apply row filters to the returned rows (post-fetch; TOLAP does not rewrite the query)
 - For APIs: validate the HTTP method is in the allowed set
 - For APIs: validate the endpoint matches an allowed endpoint pattern
 - Apply result limits (max rows, max results)
@@ -184,7 +189,7 @@ sequenceDiagram
 
     Agent->>Wrapper: Execute tool call (e.g., query patients)
 
-    Note over Wrapper: Check canQuery = true<br/>Validate objects in allowedObjects<br/>Check fields against hiddenFields<br/>Rewrite query: inject row filters<br/>Apply maxResults limit
+    Note over Wrapper: Check canQuery = true<br/>Validate objects in allowedObjects<br/>Check fields against hiddenFields<br/>Filter returned rows against rowFilters<br/>Apply maxResults limit
 
     Wrapper->>DS: Execute secured query
     DS->>Wrapper: Raw results
@@ -936,19 +941,19 @@ sequenceDiagram
 
     Agent->>DBWrapper: Execute SQL query
 
-    Note over DBWrapper: 1. Check canQuery = true ... PASS<br/>2. Check tables: encounters, patients ... both in allowedObjects ... PASS<br/>3. Check columns: diagnosis_code, encounter_date, patient_id ... none hidden ... PASS<br/>4. Inject row filters into WHERE clause
+    Note over DBWrapper: 1. Check canQuery = true ... PASS<br/>2. Check tables: encounters, patients ... both in allowedObjects ... PASS<br/>3. Check columns: diagnosis_code, encounter_date, patient_id ... none hidden ... PASS
 
-    Note over DBWrapper: Rewritten query adds:<br/>AND region IN ('us-east', 'us-west')<br/>AND status != 'deleted'<br/>LIMIT 5000
+    DBWrapper->>PG: Execute the query as written
+    PG->>DBWrapper: 1,204 rows
 
-    DBWrapper->>PG: Execute rewritten query
-    PG->>DBWrapper: 847 rows
+    Note over DBWrapper: 4. Apply row filters to the returned rows:<br/>region IN ('us-east', 'us-west')<br/>status != 'deleted'<br/>1,204 rows -> 847 rows
 
     Note over DBWrapper: 5. No masked columns in SELECT ... no masking needed<br/>6. Row count 847 < 5000 limit ... PASS
 
     DBWrapper->>Agent: 847 rows (filtered to authorized regions)
 ```
 
-The agent receives 847 rows. It does not know that patients in other regions were excluded, or that deleted records were filtered out. The row filters were injected transparently.
+The agent receives 847 rows. It does not know that patients in other regions were excluded, or that deleted records were filtered out. The row filters were applied transparently to the returned rows.
 
 Now suppose the agent tries a different query:
 
@@ -1071,7 +1076,7 @@ flowchart LR
     SC --> F
     F --> DBW
     F --> APIW
-    DBW -->|Row filters injected<br/>Columns masked<br/>PII hidden| PG
+    DBW -->|Row filters applied to results<br/>Columns masked<br/>PII hidden| PG
     APIW -->|Endpoints validated<br/>Methods restricted<br/>Fields masked| API
     AG <-->|Authorized data only| DBW
     AG <-->|Authorized data only| APIW

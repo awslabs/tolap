@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -504,18 +506,110 @@ public static class EnforcementEngine
     }
 
     /// <summary>
-    /// Runs the canonical six-step pipeline over a materialized list of records.
+    /// Runs the canonical eight-step pipeline over a materialized list of records.
     /// </summary>
+    /// <remarks>
+    /// Every record-dropping step precedes every field-level step, so no work is spent
+    /// masking a record that is about to be discarded (spec section 4).
+    /// </remarks>
     public static IReadOnlyList<Dictionary<string, object?>> ApplyRecordPipeline(
         IReadOnlyList<Dictionary<string, object?>> records,
         EffectivePolicy policy)
     {
         var working = ApplyRowFilters(records, policy);
         working = FilterByTags(working, policy);
+        working = ApplySimilarityFloor(working, policy);
+        working = ApplyObjectSizeCeiling(working, policy);
         working = StripHiddenFields(working, policy);
         working = ProjectAllowedFields(working, policy);
         working = working.Select(r => ApplyFieldMasking(r, policy)).ToList();
         return ApplyResultLimit(working, policy);
+    }
+
+    /// <summary>
+    /// Field names carrying a similarity score, in precedence order. Covers the common
+    /// vector-store response shapes (Bedrock KB, OpenSearch, pgvector wrappers).
+    /// </summary>
+    private static readonly string[] ScoreKeys = ["score", "similarity", "similarityscore", "_score"];
+
+    /// <summary>
+    /// Field names carrying an object size in bytes, in precedence order. Covers the
+    /// common object-storage response shapes (S3, Azure Blob, GCS).
+    /// </summary>
+    private static readonly string[] SizeKeys = ["size", "sizebytes", "contentlength", "objectsize"];
+
+    /// <summary>
+    /// Reads the first present numeric field named by <paramref name="keys"/>,
+    /// case-insensitively. Returns null when no key is present or the value is not a
+    /// finite number; the caller treats null as "cannot establish this record's value",
+    /// which fails closed.
+    /// </summary>
+    private static double? NumericField(Dictionary<string, object?> record, string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            var match = record.Keys.FirstOrDefault(
+                k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+            if (match is null) continue;
+
+            var value = record[match];
+            return value switch
+            {
+                // bool is checked first: it must be a type error, not a passing 1.0.
+                bool => null,
+                sbyte or byte or short or ushort or int or uint or long or ulong
+                    or float or double or decimal => Finite(Convert.ToDouble(value)),
+                string s => double.TryParse(s.Trim(), out var parsed) ? Finite(parsed) : null,
+                _ => null
+            };
+        }
+
+        return null;
+
+        static double? Finite(double candidate)
+            => double.IsFinite(candidate) ? candidate : null;
+    }
+
+    /// <summary>
+    /// Drops records scoring below <c>MinSimilarityScore</c> (spec section 4, step 3).
+    /// </summary>
+    /// <remarks>
+    /// Fails closed: a record with no recognizable score field, or a non-numeric score,
+    /// is dropped when a floor is set. A record whose relevance cannot be established
+    /// cannot be shown to satisfy the floor, and the documented purpose of this limit is
+    /// to stop low-relevance vector hits from surfacing sensitive content -- so an
+    /// unscored record must not slip through. A score exactly equal to the floor is kept.
+    /// </remarks>
+    public static IReadOnlyList<Dictionary<string, object?>> ApplySimilarityFloor(
+        IReadOnlyList<Dictionary<string, object?>> records,
+        EffectivePolicy policy)
+    {
+        var floor = policy.Limits?.MinSimilarityScore;
+        if (floor is null) return records;
+
+        return records
+            .Where(r => NumericField(r, ScoreKeys) is double score && score >= floor.Value)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Drops records larger than <c>MaxObjectSizeBytes</c> (spec section 4, step 4).
+    /// </summary>
+    /// <remarks>
+    /// Fails closed on the same reasoning as the relevance floor: a record with no
+    /// recognizable size field, or a non-numeric size, is dropped when a ceiling is set.
+    /// A size exactly equal to the ceiling is kept.
+    /// </remarks>
+    public static IReadOnlyList<Dictionary<string, object?>> ApplyObjectSizeCeiling(
+        IReadOnlyList<Dictionary<string, object?>> records,
+        EffectivePolicy policy)
+    {
+        var ceiling = policy.Limits?.MaxObjectSizeBytes;
+        if (ceiling is null) return records;
+
+        return records
+            .Where(r => NumericField(r, SizeKeys) is double size && size <= ceiling.Value)
+            .ToList();
     }
 
     private static Dictionary<string, object?> ToRecord(object result)
@@ -609,8 +703,111 @@ public static class EnforcementEngine
             case FilterOperator.Matches:
                 if (value is null || rf.Value is null) return false;
                 return RegexMatches(rf.Value.ToString()!, value.ToString()!);
+            case FilterOperator.GreaterThanOrEqual:
+                return CompareNullable(value, rf.Value) is int ge && ge >= 0;
+            case FilterOperator.LessThanOrEqual:
+                return CompareNullable(value, rf.Value) is int le && le <= 0;
+            case FilterOperator.Like:
+                if (value is null || rf.Value is null) return false;
+                return LikeMatches(rf.Value.ToString()!, value.ToString()!);
+            case FilterOperator.NotLike:
+                // A null field value is not "unlike" the pattern, it is incomparable:
+                // SQL evaluates NULL NOT LIKE 'x' to NULL, which does not retain the row.
+                // Returning true here would be the same fail-open bug spec section 7
+                // records for notEquals/notIn on a missing field.
+                if (value is null || rf.Value is null) return false;
+                return !LikeMatches(rf.Value.ToString()!, value.ToString()!);
+            case FilterOperator.IsNull:
+                // The field is present (a missing field was already dropped above), so
+                // this is the genuine "present and null" case.
+                return Normalize(value) is null;
+            case FilterOperator.IsNotNull:
+                return Normalize(value) is not null;
+            case FilterOperator.Between:
+                return BetweenMatches(value, rf);
             default:
                 return false;
+        }
+    }
+
+    /// <summary>
+    /// Evaluates an inclusive <c>between</c> range taken from the first two entries of
+    /// <see cref="RowFilter.Values"/>.
+    /// </summary>
+    /// <remarks>
+    /// Fails closed on a malformed range: fewer than two bounds, a null bound, or a bound
+    /// that is not ordered against the row value all drop the row rather than admitting it.
+    /// An inverted range (low &gt; high) matches nothing, exactly as SQL
+    /// <c>BETWEEN 10 AND 1</c> does, and is not silently reordered — reordering would turn
+    /// a policy author's typo into a wider grant than what was written.
+    /// </remarks>
+    private static bool BetweenMatches(object? value, RowFilter rf)
+    {
+        var bounds = rf.Values;
+        if (bounds is null || bounds.Length < 2) return false;
+
+        return CompareNullable(value, bounds[0]) is int lower && lower >= 0
+               && CompareNullable(value, bounds[1]) is int upper && upper <= 0;
+    }
+
+    /// <summary>
+    /// Matches a value against a SQL <c>LIKE</c> pattern: <c>%</c> matches any run of
+    /// characters, <c>_</c> matches exactly one, and <c>\</c> escapes the next character.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Case-sensitive, matching Postgres <c>LIKE</c> (and unlike MySQL's default
+    /// case-insensitive collation). The post-fetch path is the normative one, so an
+    /// integrator pushing the same filter into MySQL may see MySQL match more rows than
+    /// this does; the post-fetch pass then removes the extras, which is the fail-closed
+    /// direction.
+    /// </para>
+    /// <para>
+    /// Every non-wildcard character is <see cref="Regex.Escape(string)"/>d, so a pattern
+    /// containing regex metacharacters (<c>.</c>, <c>(</c>, <c>|</c>) is treated literally and
+    /// cannot be used to smuggle in a pathological regex. The translation can only emit
+    /// <c>.*</c>, <c>.</c>, and escaped literals — no alternation, no backreferences, and no
+    /// nested quantifiers — so it cannot express a catastrophically backtracking pattern, and
+    /// unlike <c>matches</c> this operator does not need a length bound to be safe.
+    /// </para>
+    /// <para>
+    /// The timeout is nonetheless applied and its catch retained, on the same reasoning as
+    /// <see cref="GlobMatch"/>'s: it is currently unreachable, and it is what keeps a future
+    /// change to the translation from turning a pathological pattern into an exception that
+    /// aborts the whole result pass (spec section 7).
+    /// </para>
+    /// </remarks>
+    private static bool LikeMatches(string pattern, string value)
+    {
+        var regex = new StringBuilder(pattern.Length * 2 + 4);
+        regex.Append("^(?:");
+
+        for (var i = 0; i < pattern.Length; i++)
+        {
+            var c = pattern[i];
+            if (c == '\\' && i + 1 < pattern.Length)
+            {
+                // An escaped wildcard is a literal; consume both characters.
+                regex.Append(Regex.Escape(pattern[++i].ToString()));
+                continue;
+            }
+            regex.Append(c switch
+            {
+                '%' => ".*",
+                '_' => ".",
+                _ => Regex.Escape(c.ToString())
+            });
+        }
+
+        regex.Append(")$");
+
+        try
+        {
+            return Regex.IsMatch(value, regex.ToString(), RegexOptions.None, RegexMatchTimeout);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
         }
     }
 
@@ -683,6 +880,11 @@ public static class EnforcementEngine
             }
             catch (ArgumentException)
             {
+                // Reached only by an IComparable whose CompareTo rejects a same-typed
+                // operand, which the BCL primitives never do. Kept because a row value can
+                // be any CLR type a driver produces, and spec section 7 requires a
+                // non-comparable pair to be a non-match rather than an exception that
+                // aborts the result pass.
                 return null;
             }
         }
@@ -714,37 +916,83 @@ public static class EnforcementEngine
         value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal;
 
     /// <summary>
+    /// The methods that only read. Used twice: as the documented default for an omitted
+    /// <c>allowedMethods</c>, and as the set <c>readOnly</c> permits.
+    /// </summary>
+    private static readonly string[] ReadMethods = { "GET", "HEAD", "OPTIONS" };
+
+    /// <summary>
     /// Validates whether an endpoint and HTTP method are permitted under the given policy.
     /// </summary>
+    /// <remarks>
+    /// <para>Three restrictions apply, most-restrictive-first:</para>
+    /// <list type="number">
+    /// <item><c>hiddenEndpoints</c> then <c>allowedEndpoints</c> gate the path.</item>
+    /// <item><c>readOnly</c> gates the method. When the permission is true, only
+    /// GET/HEAD/OPTIONS are permitted — regardless of <c>allowedMethods</c>, because a
+    /// policy that grants DELETE while declaring itself read-only is contradictory and the
+    /// restrictive half must win (spec section 9). <c>readOnly</c> was previously merged
+    /// (OR-folded, so any read-only policy in the set made the result read-only) and then
+    /// never consulted, so the whole fold had no effect on any decision.</item>
+    /// <item><c>allowedMethods</c> gates the method. When omitted it defaults to the read
+    /// methods, as the schema documents ("If omitted, defaults to read-only methods: GET,
+    /// HEAD, OPTIONS"). Treating omitted as unrestricted — the previous behavior — let
+    /// POST/PUT/PATCH/DELETE through on a policy whose author had been told the default was
+    /// read-only.</item>
+    /// </list>
+    /// <para><see cref="PolicyPermissions.ReadOnly"/> defaults to <c>true</c>, matching the
+    /// schema default that spec section 8 requires be applied before folding, so a policy
+    /// silent on <c>readOnly</c> is read-only.</para>
+    /// </remarks>
     public static AccessResult ValidateEndpoint(string path, string method, EffectivePolicy policy)
     {
-        var endpointRules = policy.ObjectRules?.EndpointRules;
-        if (endpointRules is null)
-            return new AccessResult(true);
+        // The top-level read gate applies here as it does to every other read. Omitting it
+        // let a policy with canQuery=false still reach an API endpoint in .NET while Python
+        // and TypeScript denied the same policy -- a fail-open on the broadest permission
+        // there is, and a cross-SDK divergence for an identically signed policy.
+        if (!policy.Permissions.CanQuery)
+            return new AccessResult(false, "query not permitted");
 
-        // Check hidden endpoints first (takes precedence)
-        if (endpointRules.HiddenEndpoints is not null)
+        var endpointRules = policy.ObjectRules?.EndpointRules;
+
+        if (endpointRules is not null)
         {
-            foreach (var hidden in endpointRules.HiddenEndpoints)
+            // Check hidden endpoints first (takes precedence)
+            if (endpointRules.HiddenEndpoints is not null)
             {
-                if (GlobMatch(hidden, path))
-                    return new AccessResult(false, "endpoint is hidden");
+                foreach (var hidden in endpointRules.HiddenEndpoints)
+                {
+                    if (GlobMatch(hidden, path))
+                        return new AccessResult(false, "endpoint is hidden");
+                }
+            }
+
+            // Check allowed endpoints
+            if (endpointRules.AllowedEndpoints is not null)
+            {
+                var isAllowed = endpointRules.AllowedEndpoints.Any(a => GlobMatch(a, path));
+                if (!isAllowed)
+                    return new AccessResult(false, "endpoint not in allowed set");
             }
         }
 
-        // Check allowed endpoints
-        if (endpointRules.AllowedEndpoints is not null)
-        {
-            var isAllowed = endpointRules.AllowedEndpoints.Any(a => GlobMatch(a, path));
-            if (!isAllowed)
-                return new AccessResult(false, "endpoint not in allowed set");
-        }
+        // Check allowed methods. A null list is the documented read-only default, NOT
+        // "unrestricted": spec section 9 makes this the single deliberate exception to
+        // section 3's null-means-unrestricted rule, because an absent method list on an
+        // endpoint rule is far likelier to be an oversight than an intentional grant of
+        // DELETE. Do not "fix" this back to unrestricted for consistency with section 3.
+        // An empty array still denies every method, per section 3.
+        var permitted = endpointRules?.AllowedMethods ?? ReadMethods;
+        if (!permitted.Contains(method, StringComparer.OrdinalIgnoreCase))
+            return new AccessResult(false, "method not allowed");
 
-        // Check allowed methods
-        if (endpointRules.AllowedMethods is not null)
+        // readOnly is checked last so an explicit allowedMethods denial keeps its more
+        // specific reason. A policy that lists DELETE in allowedMethods while declaring
+        // itself read-only is contradictory, and the restrictive half wins.
+        if (policy.Permissions.ReadOnly
+            && !ReadMethods.Contains(method, StringComparer.OrdinalIgnoreCase))
         {
-            if (!endpointRules.AllowedMethods.Contains(method, StringComparer.OrdinalIgnoreCase))
-                return new AccessResult(false, "method not allowed");
+            return new AccessResult(false, "method not allowed on a read-only policy");
         }
 
         return new AccessResult(true);
@@ -807,18 +1055,48 @@ public static class EnforcementEngine
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Hashes a value into a stable pseudonym: lower-case hex, first 16 characters.
+    /// </summary>
+    /// <remarks>
+    /// The <c>algorithm</c> parameter is honoured, defaulting to <c>sha256</c> when absent
+    /// (spec section 6). The hash mask exists to be a cross-service join key, so the digest
+    /// must agree byte-for-byte with the Python and TypeScript SDKs; this previously
+    /// hardcoded SHA-256 and ignored the parameter, so a policy asking for <c>sha512</c>
+    /// produced a different pseudonym here than in TypeScript and every cross-service join
+    /// on the masked column silently failed.
+    /// <para>
+    /// Only the three schema-permitted values are accepted, matched exactly. Resolving the
+    /// parameter through a general algorithm lookup would accept anything the runtime
+    /// offers (<c>md5</c> included) plus spellings the other SDKs reject, which is the same
+    /// divergence in a new form. An unrecognized value fails closed as <c>redact</c>.
+    /// </para>
+    /// </remarks>
     private static string ApplyHashMask(object? value, MaskingParameters? parameters)
     {
         var str = value?.ToString() ?? "";
         var bytes = Encoding.UTF8.GetBytes(str);
+        var algorithm = parameters?.Algorithm ?? "sha256";
 
         byte[] hash;
-        using (var sha256 = SHA256.Create())
+        switch (algorithm)
         {
-            hash = sha256.ComputeHash(bytes);
+            case "sha256":
+                hash = SHA256.HashData(bytes);
+                break;
+            case "sha512":
+                hash = SHA512.HashData(bytes);
+                break;
+            case "blake2b":
+                hash = Blake2b512.HashData(bytes);
+                break;
+            default:
+                // Unknown or unavailable: never disclose the original, and never
+                // substitute a different algorithm -- a substituted digest looks like a
+                // valid pseudonym while failing to join (spec section 6).
+                return "[REDACTED]";
         }
 
-        // Return hex string truncated to 16 chars
         var hex = Convert.ToHexString(hash).ToLowerInvariant();
         return hex[..16];
     }
@@ -882,12 +1160,25 @@ public static class EnforcementEngine
     }
 
     /// <summary>
-    /// Performs glob pattern matching where '*' matches any sequence of characters
-    /// within a path segment and '**' would match across segments.
+    /// Performs glob pattern matching for object, field and endpoint names, where '*'
+    /// matches any sequence of characters including path separators.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Evaluated under the same bounded timeout as row-filter regexes; a timeout is a
     /// non-match rather than an unhandled exception (spec section 7).
+    /// </para>
+    /// <para>
+    /// <b>Deliberately different from <see cref="PolicyResolutionEngine.GlobMatch"/>,
+    /// which must not be unified with this method.</b> Here <c>*</c> expands to
+    /// <c>.*</c> so <c>/drug/*</c> reaches <c>/drug/event.json</c> and
+    /// <c>patients.*</c> reaches a nested field — these names are not segmented into a
+    /// fixed shape. <see cref="PolicyResolutionEngine.GlobMatch"/> expands <c>*</c> to
+    /// <c>[^:]*</c> instead because a source-connection id is a colon-delimited triple
+    /// and spec section 10 requires a wildcard to stay inside one segment. Adopting this
+    /// method's semantics there would let a policy scoped to <c>db:*</c> govern every
+    /// namespace under <c>db:</c>.
+    /// </para>
     /// </remarks>
     internal static bool GlobMatch(string pattern, string value)
     {
@@ -906,7 +1197,143 @@ public static class EnforcementEngine
         }
         catch (ArgumentException)
         {
+            // Defence in depth, and currently unreachable: the pattern is Regex.Escape'd
+            // before '*' is expanded, so every glob compiles to a valid regex. Retained so
+            // that a future change to the glob-to-regex translation cannot turn a malformed
+            // pattern into an exception that aborts the whole result pass (spec section 7).
             return false;
         }
+    }
+}
+
+/// <summary>
+/// BLAKE2b-512 (RFC 7693), unkeyed, for the <c>blake2b</c> hash mask.
+/// </summary>
+/// <remarks>
+/// Implemented here rather than taken from a package because
+/// <see cref="System.Security.Cryptography"/> does not provide BLAKE2b (it offers SHA-3
+/// and SHAKE, but not BLAKE2), and Tolap.Core ships zero runtime dependencies. The
+/// alternative was to fail closed and redact every <c>blake2b</c> field, which the schema
+/// permits and both other SDKs compute natively -- so .NET would have been the only SDK
+/// unable to participate in a BLAKE2b join.
+/// <para>
+/// This is used for pseudonymisation, not authentication: the value is a stable join key,
+/// never a MAC or a signature. Only the unkeyed 64-byte-digest variant is implemented,
+/// which is what Node's <c>blake2b512</c> and Python's
+/// <c>blake2b(digest_size=64)</c> compute. Verified against the RFC 7693 test vectors
+/// and against both other SDKs, including the exact-128-byte block boundary and
+/// multi-block inputs.
+/// </para>
+/// </remarks>
+internal static class Blake2b512
+{
+    private const int BlockBytes = 128;
+    private const int DigestBytes = 64;
+
+    private static readonly ulong[] Iv =
+    {
+        0x6a09e667f3bcc908UL, 0xbb67ae8584caa73bUL, 0x3c6ef372fe94f82bUL, 0xa54ff53a5f1d36f1UL,
+        0x510e527fade682d1UL, 0x9b05688c2b3e6c1fUL, 0x1f83d9abfb41bd6bUL, 0x5be0cd19137e2179UL
+    };
+
+    /// <summary>Message-word permutation per round (RFC 7693 section 2.7).</summary>
+    private static readonly byte[] Sigma =
+    {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3,
+        11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4,
+        7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8,
+        9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13,
+        2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9,
+        12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11,
+        13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10,
+        6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5,
+        10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3
+    };
+
+    /// <summary>Computes the unkeyed BLAKE2b-512 digest of <paramref name="input"/>.</summary>
+    internal static byte[] HashData(ReadOnlySpan<byte> input)
+    {
+        var h = (ulong[])Iv.Clone();
+        // Parameter block byte 0: digest length; byte 2: fanout 1; byte 3: depth 1.
+        h[0] ^= 0x01010000UL ^ DigestBytes;
+
+        ulong counter = 0;
+        var offset = 0;
+
+        // Every full block except the last is compressed as non-final. The strict
+        // inequality matters: an input that is an exact multiple of the block size must
+        // leave its trailing block for the final call, not compress it here and then
+        // finalize an empty one.
+        while (input.Length - offset > BlockBytes)
+        {
+            counter += BlockBytes;
+            Compress(h, input.Slice(offset, BlockBytes), counter, final: false);
+            offset += BlockBytes;
+        }
+
+        // The final block is zero-padded; the counter still records only the real bytes.
+        var remaining = input.Length - offset;
+        Span<byte> lastBlock = stackalloc byte[BlockBytes];
+        lastBlock.Clear();
+        input.Slice(offset, remaining).CopyTo(lastBlock);
+        counter += (ulong)remaining;
+        Compress(h, lastBlock, counter, final: true);
+
+        var digest = new byte[DigestBytes];
+        for (var i = 0; i < 8; i++)
+            BinaryPrimitives.WriteUInt64LittleEndian(digest.AsSpan(i * 8), h[i]);
+        return digest;
+    }
+
+    private static void Compress(ulong[] h, ReadOnlySpan<byte> block, ulong counter, bool final)
+    {
+        Span<ulong> m = stackalloc ulong[16];
+        for (var i = 0; i < 16; i++)
+            m[i] = BinaryPrimitives.ReadUInt64LittleEndian(block.Slice(i * 8, 8));
+
+        Span<ulong> v = stackalloc ulong[16];
+        for (var i = 0; i < 8; i++)
+        {
+            v[i] = h[i];
+            v[i + 8] = Iv[i];
+        }
+
+        v[12] ^= counter;
+        // BLAKE2b supports a 128-bit counter; v[13] would take the high half. Inputs here
+        // are field values, so 2^64 bytes is unreachable and the high half stays zero.
+        if (final)
+            v[14] = ~v[14];
+
+        for (var round = 0; round < 12; round++)
+        {
+            var s = round * 16;
+            Mix(v, 0, 4, 8, 12, m[Sigma[s + 0]], m[Sigma[s + 1]]);
+            Mix(v, 1, 5, 9, 13, m[Sigma[s + 2]], m[Sigma[s + 3]]);
+            Mix(v, 2, 6, 10, 14, m[Sigma[s + 4]], m[Sigma[s + 5]]);
+            Mix(v, 3, 7, 11, 15, m[Sigma[s + 6]], m[Sigma[s + 7]]);
+            Mix(v, 0, 5, 10, 15, m[Sigma[s + 8]], m[Sigma[s + 9]]);
+            Mix(v, 1, 6, 11, 12, m[Sigma[s + 10]], m[Sigma[s + 11]]);
+            Mix(v, 2, 7, 8, 13, m[Sigma[s + 12]], m[Sigma[s + 13]]);
+            Mix(v, 3, 4, 9, 14, m[Sigma[s + 14]], m[Sigma[s + 15]]);
+        }
+
+        for (var i = 0; i < 8; i++)
+            h[i] ^= v[i] ^ v[i + 8];
+    }
+
+    /// <summary>The G mixing function (RFC 7693 section 3.1).</summary>
+    private static void Mix(Span<ulong> v, int a, int b, int c, int d, ulong x, ulong y)
+    {
+        v[a] = v[a] + v[b] + x;
+        v[d] = BitOperations.RotateRight(v[d] ^ v[a], 32);
+        v[c] += v[d];
+        v[b] = BitOperations.RotateRight(v[b] ^ v[c], 24);
+        v[a] = v[a] + v[b] + y;
+        v[d] = BitOperations.RotateRight(v[d] ^ v[a], 16);
+        v[c] += v[d];
+        v[b] = BitOperations.RotateRight(v[b] ^ v[c], 63);
     }
 }

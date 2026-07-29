@@ -47,6 +47,22 @@ export function warnIfEnforcementDisabled(mode: EnforcementMode): void {
   );
 }
 
+/**
+ * Check an effective policy's own expiry, returning a denial reason or `undefined`.
+ *
+ * The counterpart to core's `validateExpiry` for a bare EffectivePolicy (which
+ * carries `expiresAt` directly rather than inside a SecurityContext envelope), and
+ * it fails closed identically: absent, empty, and unparseable are all denials
+ * rather than an unbounded lifetime (canonical spec §2).
+ */
+function policyExpiryReason(policy: EffectivePolicy): string | undefined {
+  if (!policy.expiresAt) return "policy has no expiry";
+  const expires = new Date(policy.expiresAt);
+  if (Number.isNaN(expires.getTime())) return "policy has an invalid expiry format";
+  if (expires.getTime() <= Date.now()) return "policy has expired";
+  return undefined;
+}
+
 export class SecureMcpToolWrapper {
   private tools = new Map<string, McpToolDefinition>();
   private options: Required<
@@ -59,13 +75,17 @@ export class SecureMcpToolWrapper {
    * deny.
    *
    * Threat-model remediation R-6: {@link EnforcementMode.Disabled} skips
-   * enforcement entirely and {@link EnforcementMode.AuditOnly} is documented as
-   * "log violations but allow access", so a deployment that reaches production
-   * still carrying either has no enforcement at all while continuing to look
-   * configured. The warning fires at construction rather than on the first
-   * denial, because a service whose policies happen not to deny anything during a
-   * smoke test would otherwise ship silently. `allowUnenforceableShapes` already
-   * warns on the same channel when it passes a result through.
+   * enforcement entirely, so a deployment that reaches production still carrying
+   * it has no enforcement at all while continuing to look configured. The warning
+   * fires at construction rather than on the first denial, because a service whose
+   * policies happen not to deny anything during a smoke test would otherwise ship
+   * silently. `allowUnenforceableShapes` already warns on the same channel when it
+   * passes a result through.
+   *
+   * {@link EnforcementMode.AuditOnly} is also warned about, but for a different
+   * reason: it still denies (see the enum), so the warning is about the *name*
+   * rather than a real bypass -- an operator who selected it believing it grants
+   * access needs to find out at startup, not from a support ticket.
    */
   constructor(options: SecureMcpServerOptions = {}) {
     this.options = {
@@ -131,15 +151,15 @@ export class SecureMcpToolWrapper {
       }
     }
 
-    // Check expiry
-    if (new Date(policy.expiresAt) <= new Date()) {
-      return this.handleDecision(
-        request,
-        false,
-        "policy has expired",
-        userId,
-        tenantId,
-      );
+    // Check expiry. Fails closed on both ends (canonical spec §2): a missing or
+    // empty expiry is never "never expires", and an unparseable expiry is never a
+    // silently skipped check. A bare comparison is not enough --
+    // `new Date("never") <= new Date()` is `false` in JavaScript, so any policy
+    // carrying a malformed or absent timestamp previously passed this gate and got
+    // an unbounded lifetime.
+    const expiryReason = policyExpiryReason(policy);
+    if (expiryReason !== undefined) {
+      return this.handleDecision(request, false, expiryReason, userId, tenantId);
     }
 
     // Pre-execution enforcement
@@ -246,10 +266,17 @@ export class SecureMcpToolWrapper {
   ): never {
     this.emitDecision(request, allowed, reason, userId, tenantId);
 
-    if (this.options.mode === EnforcementMode.AuditOnly) {
-      // In audit mode we still throw, but the caller can catch it
-    }
-
+    // Deliberately no AuditOnly special case here. There used to be an empty
+    // `if (mode === AuditOnly) {}` block whose only content was a comment saying
+    // audit mode throws anyway -- dead code that read as though a non-denying
+    // branch existed. AuditOnly denies exactly like Strict at this point; the mode
+    // is surfaced on the emitted decision (and warned about at construction) so an
+    // integrator can distinguish them without enforcement being weakened.
+    /* c8 ignore next 3 -- the `?? "unknown reason"` fallback is unreachable from
+       inside this class: every handleDecision call site passes a literal reason or
+       a reason from validateAccess/validateFieldAccess/validateEndpoint, all of
+       which always populate one. Retained so a future call site that forgets a
+       reason still produces an actionable denial rather than "undefined". */
     throw new Error(
       `Access denied for tool "${request.toolName}": ${reason ?? "unknown reason"}`,
     );

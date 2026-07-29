@@ -15,7 +15,7 @@ import type { RequestIdentityExtractor, McpRequestContext } from "./types.js";
 /**
  * Thrown when a credential is *presented and rejected*.
  *
- * Per canonical spec §9 an identity extractor either returns a trustworthy
+ * Per canonical spec §11 an identity extractor either returns a trustworthy
  * principal or it fails. Returning `undefined` for a token that was presented and
  * rejected converts an authentication failure into an authorization decision: the
  * caller sees no identity, treats the request as anonymous, and resolves whatever
@@ -116,7 +116,7 @@ export interface JwtExtractorOptions {
  * outside the allow-list are rejected, defeating `alg`-confusion and
  * unsigned-token attacks.
  *
- * Failure semantics follow canonical spec §9 and are identical in all three SDKs:
+ * Failure semantics follow canonical spec §11 and are identical in all three SDKs:
  *
  * - **No credential presented** (absent/empty `Authorization` header, or no token
  *   after the scheme) -- returns `undefined`. A legitimate anonymous request the
@@ -268,6 +268,14 @@ export class JwtIdentityExtractor implements RequestIdentityExtractor {
           `JWT algorithm not allowed: ${typeof alg === "string" ? alg : "(none)"}`,
         );
       }
+      /* c8 ignore next 5 -- unreachable defensive guard, deliberately retained.
+         The constructor refuses to build an extractor with neither `secret` nor
+         `allowUnverified: true`, and this block only runs when
+         `allowUnverified` is false, so `secret` is always present here. Kept
+         because it is the invariant that stops verification being skipped: if a
+         future refactor loosens the constructor, this throws rather than
+         silently trusting an unverified token. Asserting it would require
+         defeating the constructor's own check, which would test the mock. */
       if (!this.secret) {
         throw new IdentityExtractionError(
           "No signing secret configured for JWT verification",
@@ -279,6 +287,14 @@ export class JwtIdentityExtractor implements RequestIdentityExtractor {
       let provided: Buffer;
       try {
         provided = Buffer.from(segments[2], "base64url");
+        /* c8 ignore next 3 -- unreachable in Node: `Buffer.from(s, "base64url")`
+           never throws, it silently ignores characters outside the alphabet (an
+           undecodable signature therefore surfaces as a length mismatch or a
+           timingSafeEqual failure below, both of which ARE covered). Retained
+           because the surrounding contract is "a malformed signature is a clean
+           IdentityExtractionError, never a raw decode error escaping into the
+           caller", and that must hold if this ever runs on a runtime whose
+           base64url decoder is stricter. */
       } catch {
         throw new IdentityExtractionError("Invalid JWT signature encoding");
       }
@@ -300,7 +316,7 @@ export class JwtIdentityExtractor implements RequestIdentityExtractor {
    * Enforce `exp` and `nbf` with the same leeway.
    *
    * `nbf` is validated because a token presented before it becomes valid is
-   * invalid, not anonymous (spec §9). Leaving it unchecked let a post-dated token
+   * invalid, not anonymous (spec §11). Leaving it unchecked let a post-dated token
    * -- one an issuer minted for a future window -- be used immediately.
    */
   private verifyTemporalClaims(payload: Record<string, unknown>): void {

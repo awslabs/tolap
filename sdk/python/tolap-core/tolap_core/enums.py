@@ -44,15 +44,32 @@ def mask_restrictiveness(mask_type: object) -> int:
 
 
 class FilterOperator(Enum):
+    """Row-filter comparison operators.
+
+    The member order and the string values are held identical to the ``operator``
+    enum in ``schema/v1.0/policy-definition.schema.json`` (and its copy in
+    ``effective-policy.schema.json``). A schema-valid policy that this enum cannot
+    express is a cross-SDK divergence: the signature still verifies, because the
+    canonical payload covers the policy verbatim, so the policy passes every
+    integrity check while each SDK produces a different access outcome.
+    """
+
     equals = "equals"
     not_equals = "notEquals"
     in_ = "in"
     not_in = "notIn"
     greater_than = "greaterThan"
+    greater_than_or_equal = "greaterThanOrEqual"
     less_than = "lessThan"
+    less_than_or_equal = "lessThanOrEqual"
     contains = "contains"
     starts_with = "startsWith"
+    like = "like"
+    not_like = "notLike"
     matches = "matches"
+    is_null = "isNull"
+    is_not_null = "isNotNull"
+    between = "between"
 
 
 class AssigneeType(Enum):

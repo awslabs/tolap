@@ -30,7 +30,7 @@ class HeaderIdentityExtractor:
 class TolapIdentityError(PermissionError):
     """Raised when a credential is *presented and rejected*.
 
-    Per canonical-enforcement-spec.md section 9 an identity extractor either
+    Per canonical-enforcement-spec.md section 11 an identity extractor either
     returns a trustworthy principal or it fails. Returning "no identity" for a
     token that was presented and rejected converts an authentication failure into
     an authorization decision: the caller sees ``None``, treats the request as
@@ -62,7 +62,7 @@ class JwtIdentityExtractor:
     By default this extractor **verifies the JWT signature** (HMAC / HS256-384-512)
     and the ``exp``/``nbf`` claims before trusting any identity claim.
 
-    Failure semantics follow spec section 9 and are identical in all three SDKs:
+    Failure semantics follow spec section 11 and are identical in all three SDKs:
 
     * **No credential presented** (absent or empty ``Authorization`` header, or no
       token after the scheme) -- returns ``None``. This is a legitimate anonymous
@@ -128,7 +128,7 @@ class JwtIdentityExtractor:
         """Return the claims of a valid token, or raise ``TolapIdentityError``.
 
         Every rejection path raises: the token was presented, so silence would
-        turn an authentication failure into an anonymous request (spec section 9).
+        turn an authentication failure into an anonymous request (spec section 11).
         Callers must have already established that a credential *was* presented.
         """
         # Strip "Bearer " prefix if present
@@ -154,7 +154,11 @@ class JwtIdentityExtractor:
             # Reject "none" and any algorithm outside the caller's allow-list.
             if alg not in self._algorithms or alg not in _HMAC_ALGORITHMS:
                 raise TolapIdentityError(f"JWT algorithm not allowed: {alg or '(none)'}")
-            if self._secret is None:  # defensive: constructor guards this
+            # Unreachable: the constructor rejects secret=None unless
+            # allow_unverified=True, and that flag short-circuits this whole
+            # block. Kept so the HMAC call below can never be reached with a None
+            # key if that invariant is ever weakened.
+            if self._secret is None:  # pragma: no cover - defensive
                 raise TolapIdentityError("No signing secret configured for JWT verification")
             expected = hmac.new(
                 self._secret, signing_input, _HMAC_ALGORITHMS[alg]
@@ -171,7 +175,7 @@ class JwtIdentityExtractor:
         """Enforce ``exp`` and ``nbf`` with the same leeway.
 
         ``nbf`` is validated because a token presented before it becomes valid is
-        invalid, not anonymous (spec section 9). Leaving it unchecked let a
+        invalid, not anonymous (spec section 11). Leaving it unchecked let a
         post-dated token -- one an issuer minted for a future window -- be used
         immediately.
         """

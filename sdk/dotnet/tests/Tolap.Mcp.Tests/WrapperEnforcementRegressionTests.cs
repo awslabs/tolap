@@ -438,38 +438,6 @@ public class WrapperEnforcementRegressionTests
             .Which.Should().Contain("NOT enforcing");
     }
 
-    /// <summary>
-    /// Captures <see cref="System.Diagnostics.Trace"/> warnings for assertion, matching
-    /// the channel the AllowUnenforceableShapes opt-out already writes to.
-    /// </summary>
-    private sealed class CapturingTraceListener : System.Diagnostics.TraceListener
-    {
-        public List<string> Warnings { get; } = new();
-
-        public CapturingTraceListener() => System.Diagnostics.Trace.Listeners.Add(this);
-
-        public override void Write(string? message) { }
-
-        public override void WriteLine(string? message) { }
-
-        public override void TraceEvent(
-            System.Diagnostics.TraceEventCache? eventCache,
-            string source,
-            System.Diagnostics.TraceEventType eventType,
-            int id,
-            string? message)
-        {
-            if (eventType == System.Diagnostics.TraceEventType.Warning && message is not null)
-                Warnings.Add(message);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            System.Diagnostics.Trace.Listeners.Remove(this);
-            base.Dispose(disposing);
-        }
-    }
-
     private static IEnumerable<Dictionary<string, object?>> LazyRows()
     {
         yield return new Dictionary<string, object?> { ["ssn"] = "123-45-6789" };

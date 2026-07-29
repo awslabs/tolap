@@ -232,7 +232,9 @@ def _max_of_minima(values: list[int | float | None]) -> float | None:
 
 
 def _has_object_rules(rules: ObjectRules | None) -> bool:
-    if rules is None:
+    # _merge_object_rules always constructs an ObjectRules, so None never reaches
+    # here today; the guard keeps the signature honest for other callers.
+    if rules is None:  # pragma: no cover - defensive
         return False
     return any([
         rules.allowed_objects is not None,
@@ -272,7 +274,8 @@ def _has_endpoint_rules(rules: EndpointRules | None) -> bool:
 
 
 def _has_limits(limits: PolicyLimits | None) -> bool:
-    if limits is None:
+    # As above: _merge_limits always returns a PolicyLimits instance.
+    if limits is None:  # pragma: no cover - defensive
         return False
     return any([
         limits.max_results is not None,

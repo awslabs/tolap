@@ -47,6 +47,14 @@ public static class MaskTypeExtensions
 /// <summary>
 /// Comparison operator for row filter conditions.
 /// </summary>
+/// <remarks>
+/// Every operator is supported by both enforcement paths: the post-fetch pass in
+/// <see cref="EnforcementEngine.ApplyRowFilters"/> and the pre-execution SQL push-down in
+/// <see cref="SqlQueryRewriter"/>, except <see cref="Matches"/> whose regex dialect is not
+/// portable across engines (see <see cref="SqlQueryRewriter.UnpushableFilters"/>). New
+/// members are appended so existing ordinal values are unchanged; the wire form is the
+/// camelCase string emitted by <see cref="FilterOperatorJsonConverter"/>, never the ordinal.
+/// </remarks>
 public enum FilterOperator
 {
     Equals,
@@ -57,7 +65,38 @@ public enum FilterOperator
     LessThan,
     Contains,
     StartsWith,
-    Matches
+    Matches,
+
+    /// <summary>Field value is ordered at or after the comparison value.</summary>
+    GreaterThanOrEqual,
+
+    /// <summary>Field value is ordered at or before the comparison value.</summary>
+    LessThanOrEqual,
+
+    /// <summary>
+    /// Field value matches a SQL <c>LIKE</c> pattern, where <c>%</c> matches any run of
+    /// characters and <c>_</c> matches exactly one. Case-sensitive, and <c>\</c> escapes
+    /// a literal <c>%</c>, <c>_</c>, or <c>\</c>.
+    /// </summary>
+    Like,
+
+    /// <summary>Negation of <see cref="Like"/>.</summary>
+    NotLike,
+
+    /// <summary>
+    /// Field is present on the row and its value is null. A row missing the field
+    /// entirely is dropped, per the fail-closed rule in spec section 7.
+    /// </summary>
+    IsNull,
+
+    /// <summary>Field is present on the row and its value is not null.</summary>
+    IsNotNull,
+
+    /// <summary>
+    /// Field value falls within an inclusive range given as the first two entries of
+    /// <see cref="RowFilter.Values"/>.
+    /// </summary>
+    Between
 }
 
 /// <summary>

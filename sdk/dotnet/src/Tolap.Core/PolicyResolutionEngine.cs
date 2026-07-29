@@ -9,6 +9,19 @@ namespace Tolap.Core;
 public static class PolicyResolutionEngine
 {
     /// <summary>
+    /// Upper bound on a single glob evaluation, matching
+    /// <see cref="EnforcementEngine"/>'s row-filter bound.
+    /// </summary>
+    /// <remarks>
+    /// canonical-enforcement-spec.md section 13 names a regex match timeout as .NET's
+    /// ReDoS mitigation. Without it a source pattern containing many <c>*</c> wildcards
+    /// expands to a regex with nested quantifiers that can stall policy resolution
+    /// indefinitely — and resolution runs before any policy decision, so the stall
+    /// precedes every allow or deny.
+    /// </remarks>
+    private static readonly TimeSpan RegexMatchTimeout = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
     /// Resolves the effective policy for a specific user, tenant, and source connection.
     /// </summary>
     /// <param name="userId">The user's unique identifier.</param>
@@ -91,6 +104,25 @@ public static class PolicyResolutionEngine
         return true;
     }
 
+    /// <summary>
+    /// Whether a definition's <c>sourcePatterns</c> admit the source being resolved.
+    /// </summary>
+    /// <remarks>
+    /// Per canonical-enforcement-spec.md section 10: absent <b>or empty</b> patterns mean
+    /// the policy applies to every data source, and a non-empty list admits only a source
+    /// one pattern matches. A definition whose patterns do not match is excluded before
+    /// merging.
+    ///
+    /// <para>
+    /// The empty-array case is deliberate and is the one place in this library where an
+    /// empty array does <b>not</b> mean deny-all. Spec section 3's deny-all reading applies
+    /// to an <i>allow-list of what may be accessed</i>; <c>sourcePatterns</c> is instead a
+    /// declaration of <i>where a policy is in scope</i>, and a policy that names no scope
+    /// is source-agnostic rather than scoped to nothing. Reading <c>[]</c> as "applies
+    /// nowhere" would silently disable every policy that omitted the field's contents, so
+    /// the two readings are not interchangeable.
+    /// </para>
+    /// </remarks>
     private static bool MatchesSourcePatterns(string[]? sourcePatterns, string sourceConnectionId)
     {
         if (sourcePatterns is null || sourcePatterns.Length == 0)
@@ -100,9 +132,35 @@ public static class PolicyResolutionEngine
     }
 
     /// <summary>
-    /// Performs glob pattern matching. Supports '*' (match any sequence of non-separator characters)
-    /// and '**' would match anything. The pattern uses a simple translation to regex.
+    /// Performs glob pattern matching for source-connection identifiers, where <c>*</c>
+    /// matches within a <c>category:namespace:name</c> segment and does not cross the
+    /// <c>:</c> separator.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>These semantics differ deliberately from <see cref="EnforcementEngine.GlobMatch"/>
+    /// and the two must not be unified.</b> This method expands <c>*</c> to
+    /// <c>[^:]*</c> because a source id is a structured, colon-delimited triple and spec
+    /// section 10 requires <c>*</c> to stay within one segment: a policy scoped to
+    /// <c>db:*</c> must not capture <c>db:production:patients</c> and thereby govern an
+    /// entire category it never named.
+    /// <see cref="EnforcementEngine.GlobMatch"/> expands <c>*</c> to <c>.*</c> because it
+    /// matches object, field and endpoint names, which are not segmented that way and
+    /// where <c>/drug/*</c> is expected to reach <c>/drug/event.json</c>.
+    /// </para>
+    /// <para>
+    /// Unifying them on <c>.*</c> would make <c>sourcePatterns</c> silently over-match and
+    /// widen every scoped policy; unifying on <c>[^:]*</c> would break endpoint rules.
+    /// Both directions are covered by tests that pin the difference.
+    /// </para>
+    /// <para>
+    /// Evaluated under a bounded timeout, and a timeout or an invalid pattern is a
+    /// non-match rather than an escaping exception — the same fail-closed treatment
+    /// <see cref="EnforcementEngine"/> applies to row-filter patterns (spec sections 7
+    /// and 11). A non-match is the safe outcome here: a source pattern that fails to
+    /// evaluate excludes its policy from the merge rather than granting it.
+    /// </para>
+    /// </remarks>
     public static bool GlobMatch(string pattern, string value)
     {
         // Convert glob pattern to regex
@@ -111,6 +169,21 @@ public static class PolicyResolutionEngine
             .Replace("\\*", "[^:]*")  // * matches anything except colon (segment separator)
             + "$";
 
-        return Regex.IsMatch(value, regexPattern, RegexOptions.IgnoreCase);
+        try
+        {
+            return Regex.IsMatch(value, regexPattern, RegexOptions.IgnoreCase, RegexMatchTimeout);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            // Defence in depth, and currently unreachable for the same reason as
+            // EnforcementEngine.GlobMatch: the pattern is escaped before '*' is expanded,
+            // so it always compiles. A non-match is the fail-closed outcome here — an
+            // unevaluable source pattern excludes its policy rather than granting it.
+            return false;
+        }
     }
 }

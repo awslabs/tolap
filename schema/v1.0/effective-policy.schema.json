@@ -66,6 +66,15 @@
         "canQuery": {
           "type": "boolean"
         },
+        "canInsert": {
+          "type": "boolean"
+        },
+        "canUpdate": {
+          "type": "boolean"
+        },
+        "canDelete": {
+          "type": "boolean"
+        },
         "canExport": {
           "type": "boolean"
         },
@@ -183,16 +192,24 @@
               },
               "operator": {
                 "type": "string",
+                "comment": "Must stay identical to the operator enum in policy-definition.schema.json: an effective policy is the merged product of definitions, so an operator a definition can express must survive resolution.",
                 "enum": [
                   "equals",
                   "notEquals",
                   "in",
                   "notIn",
                   "greaterThan",
+                  "greaterThanOrEqual",
                   "lessThan",
+                  "lessThanOrEqual",
                   "contains",
                   "startsWith",
-                  "matches"
+                  "like",
+                  "notLike",
+                  "matches",
+                  "isNull",
+                  "isNotNull",
+                  "between"
                 ]
               },
               "value": {},

@@ -49,6 +49,17 @@ describe("globMatch", () => {
   });
 });
 
+// Source connection IDs below are in the canonical `category:namespace:name`
+// form and are chosen to fall inside each fixture policy's declared
+// `sourcePatterns`. That matters since resolution filters on them (canonical spec
+// §9): these cases exercise user/group/role matching, so they must use a source
+// the policy under test actually claims to cover, or the definition is correctly
+// excluded before merging and the case would be asserting nothing about identity.
+const SOURCE_HEALTHCARE_DB = "db:production:patient_records"; // healthcare-analyst.json
+const SOURCE_INTERNAL_API = "api:internal:patients"; // api-readonly.json
+const SOURCE_DATALAKE = "storage:datalake:prod"; // storage-analyst.json
+const SOURCE_RESEARCH_KB = "kb:research:trials"; // kb-researcher.json
+
 describe("resolve", () => {
   it("should resolve a direct user assignment", async () => {
     const assignment = loadAssignment("user-direct.json");
@@ -60,7 +71,7 @@ describe("resolve", () => {
     const result = await resolve(
       "user-001",
       "tenant-midwest-health",
-      "ds-postgres-healthcare",
+      SOURCE_HEALTHCARE_DB,
       [assignment],
       definitions,
     );
@@ -83,7 +94,7 @@ describe("resolve", () => {
     const result = await resolve(
       "user-001",
       "tenant-midwest-health",
-      "ds-api-internal",
+      SOURCE_INTERNAL_API,
       [assignment],
       definitions,
       () => ["research-analysts"],
@@ -98,6 +109,12 @@ describe("resolve", () => {
   it("should resolve a role-based assignment", async () => {
     const assignment = loadAssignment("multi-scope.json");
     const policy = loadPolicy("storage-analyst.json");
+    // multi-scope.json pins scope.sourceConnectionId to a legacy "ds-*" id, while
+    // the policy it references declares sourcePatterns ["storage:datalake:*"]. The
+    // assignment scope is an exact-match check and the policy patterns are globs
+    // over the same identifier, so both have to name the same source for this case
+    // to reach the role check it exists to test.
+    assignment.scope.sourceConnectionId = SOURCE_DATALAKE;
 
     const definitions = new Map<string, PolicyDefinition>();
     definitions.set(policy.name, policy);
@@ -105,7 +122,7 @@ describe("resolve", () => {
     const result = await resolve(
       "user-001",
       "tenant-midwest-health",
-      "ds-s3-datalake-prod",
+      SOURCE_DATALAKE,
       [assignment],
       definitions,
       () => [],
@@ -126,7 +143,7 @@ describe("resolve", () => {
     const result = await resolve(
       "user-001",
       "tenant-different",
-      "ds-postgres-healthcare",
+      SOURCE_HEALTHCARE_DB,
       [assignment],
       definitions,
     );
@@ -147,7 +164,7 @@ describe("resolve", () => {
     const result = await resolve(
       "user-001",
       "tenant-midwest-health",
-      "ds-postgres-healthcare",
+      SOURCE_HEALTHCARE_DB,
       [assignment],
       definitions,
     );
@@ -168,7 +185,7 @@ describe("resolve", () => {
     const result = await resolve(
       "user-002",
       "tenant-midwest-health",
-      "ds-kb-research",
+      SOURCE_RESEARCH_KB,
       [assignment],
       definitions,
     );
@@ -195,6 +212,14 @@ describe("resolve", () => {
 
     const policy1 = loadPolicy("healthcare-analyst.json");
     const policy2 = loadPolicy("api-readonly.json");
+    // These two fixtures are scoped to disjoint source categories
+    // (db:production:patient_* vs api:internal:*), so no real source can match
+    // both and resolution would correctly exclude one before merging (spec §9).
+    // This case is about the permission fold, not about scoping, so both loaded
+    // copies are declared source-agnostic. The empty list is the §9 spelling of
+    // "applies to every source" and is set on the in-memory copies only.
+    policy1.sourcePatterns = [];
+    policy2.sourcePatterns = [];
 
     const definitions = new Map<string, PolicyDefinition>();
     definitions.set(policy1.name, policy1);
@@ -203,7 +228,7 @@ describe("resolve", () => {
     const result = await resolve(
       "user-001",
       "tenant-midwest-health",
-      "ds-test",
+      "db:production:patient_records",
       [assignment1, assignment2],
       definitions,
     );
@@ -227,7 +252,7 @@ describe("resolve", () => {
     const result = await resolve(
       "user-001",
       "tenant-midwest-health",
-      "ds-postgres-healthcare",
+      SOURCE_HEALTHCARE_DB,
       [assignment],
       definitions,
     );

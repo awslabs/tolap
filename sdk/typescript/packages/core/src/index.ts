@@ -45,6 +45,7 @@ export {
   resolve,
   globToRegex,
   globMatch,
+  sourcePatternMatch,
   type GetGroupsFn,
   type GetRolesFn,
 } from "./resolution.js";
@@ -67,9 +68,12 @@ export {
   validateFieldAccess,
   applyMask,
   applyFieldMasking,
+  applyObjectSizeCeiling,
+  applyMaskingToTree,
   stripHiddenFields,
   projectAllowedFields,
   applyResultLimit,
+  applySimilarityFloor,
   applyResultPipeline,
   applyRowFilters,
   filterByTags,
@@ -78,4 +82,23 @@ export {
   UnenforceableResultError,
   type ResultShape,
   validateEndpoint,
+  fieldNameMatches,
 } from "./enforcement.js";
+
+// SQL query rewriting (canonical spec §4).
+//
+// An OPTIMIZATION, never the enforcement boundary: it reduces how much data crosses
+// the wire by pushing row filters into WHERE, the result limit into LIMIT, and the
+// field rules into the projection. `applyResultPipeline` remains mandatory over
+// whatever the rewritten query returns -- some filters cannot be expressed in
+// portable SQL at all, and the rewriter cannot know the query it was handed is the
+// query that ran.
+export {
+  SqlQueryRewriter,
+  SqlDialect,
+  DEFAULT_DIALECT,
+  MAX_QUERY_LENGTH,
+  type RewriteResult,
+  type RewriteDiagnostics,
+  type SqlRewriterOptions,
+} from "./sql-rewriter.js";

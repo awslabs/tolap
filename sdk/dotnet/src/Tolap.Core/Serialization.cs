@@ -69,6 +69,13 @@ public sealed class FilterOperatorJsonConverter : JsonConverter<FilterOperator>
             "contains" => FilterOperator.Contains,
             "startsWith" => FilterOperator.StartsWith,
             "matches" => FilterOperator.Matches,
+            "greaterThanOrEqual" => FilterOperator.GreaterThanOrEqual,
+            "lessThanOrEqual" => FilterOperator.LessThanOrEqual,
+            "like" => FilterOperator.Like,
+            "notLike" => FilterOperator.NotLike,
+            "isNull" => FilterOperator.IsNull,
+            "isNotNull" => FilterOperator.IsNotNull,
+            "between" => FilterOperator.Between,
             _ => throw new JsonException($"Unknown FilterOperator value: {value}")
         };
     }
@@ -86,6 +93,13 @@ public sealed class FilterOperatorJsonConverter : JsonConverter<FilterOperator>
             FilterOperator.Contains => "contains",
             FilterOperator.StartsWith => "startsWith",
             FilterOperator.Matches => "matches",
+            FilterOperator.GreaterThanOrEqual => "greaterThanOrEqual",
+            FilterOperator.LessThanOrEqual => "lessThanOrEqual",
+            FilterOperator.Like => "like",
+            FilterOperator.NotLike => "notLike",
+            FilterOperator.IsNull => "isNull",
+            FilterOperator.IsNotNull => "isNotNull",
+            FilterOperator.Between => "between",
             _ => throw new JsonException($"Unknown FilterOperator: {value}")
         };
         writer.WriteStringValue(str);

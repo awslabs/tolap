@@ -62,17 +62,32 @@
       "properties": {
         "canQuery": {
           "type": "boolean",
-          "description": "Whether the user can execute queries or requests against the data source."
+          "description": "Whether the user can execute reads against the data source: select, get, search, list. Merged with AND."
+        },
+        "canInsert": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the user can create new records or objects. Defaults to false: a policy that does not ask for write access does not receive it. Merged with AND, and denied outright when readOnly is true. See docs/connector-spec.md section 4."
+        },
+        "canUpdate": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the user can modify existing records or objects. Defaults to false. Merged with AND, and denied outright when readOnly is true. An update is additionally denied unless the target row satisfies the policy's rowFilters. See docs/connector-spec.md section 4."
+        },
+        "canDelete": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the user can remove records or objects. Defaults to false. Merged with AND, and denied outright when readOnly is true. A delete is additionally denied unless the target row satisfies the policy's rowFilters. See docs/connector-spec.md section 4."
         },
         "canExport": {
           "type": "boolean",
           "default": false,
-          "description": "Whether the user can export or download data from the data source."
+          "description": "ADVISORY ONLY -- not enforced by any SDK, because no SDK can define what 'export' means for an arbitrary tool. Integrators with an export path must check this flag themselves. See docs/connector-spec.md section 9."
         },
         "readOnly": {
           "type": "boolean",
           "default": true,
-          "description": "When true, only read operations are permitted. Write, update, and delete operations are blocked."
+          "description": "When true, every write is denied regardless of canInsert/canUpdate/canDelete: this is a ceiling, not a peer. Merged with OR, so any applicable policy can impose it while the write permissions are merged with AND. See docs/connector-spec.md section 4."
         }
       }
     },
@@ -126,7 +141,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Fields that can be read but not written. Only relevant when readOnly is false."
+              "description": "Fields that are readable but NOT writable. No effect on reads -- such a field is returned normally, subject to hidden/allowed/masking rules. On a write, a payload containing one of these fields is rejected outright. Union on merge: any policy can make a field read-only. See docs/connector-spec.md section 4.3."
             }
           }
         },
@@ -135,7 +150,7 @@
           "items": {
             "$ref": "#/$defs/filterRule"
           },
-          "description": "Filter conditions applied to every query. For databases, these become WHERE clauses. For APIs, these become query parameters. For knowledge bases, these become metadata filters. All filters are ANDed together."
+          "description": "Filter conditions applied to every result. All filters are ANDed together, and a record missing a referenced field is dropped (fail closed). Enforcement is applied to returned records; an SDK MAY additionally push filters into the source (a SQL WHERE clause, a knowledge-base metadata filter) as an optimization, but that never replaces the post-execution pass. See docs/canonical-enforcement-spec.md section 4."
         },
         "tagRules": {
           "type": "object",
@@ -210,7 +225,7 @@
         "maxQueryTimeSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "Maximum query execution time in seconds."
+          "description": "ADVISORY ONLY -- not enforced by any SDK, because the SDK never holds the database connection and so cannot set a statement timeout. Integrators must apply this via their own driver. See docs/connector-spec.md section 9."
         },
         "minSimilarityScore": {
           "type": "number",
@@ -307,20 +322,27 @@
             "in",
             "notIn",
             "greaterThan",
+            "greaterThanOrEqual",
             "lessThan",
+            "lessThanOrEqual",
             "contains",
             "startsWith",
-            "matches"
+            "like",
+            "notLike",
+            "matches",
+            "isNull",
+            "isNotNull",
+            "between"
           ],
-          "description": "Comparison operator. 'matches' uses regular expression matching."
+          "description": "Comparison operator. 'matches' uses regular-expression matching; 'like'/'notLike' use SQL LIKE wildcards ('%' for any sequence, '_' for any single character). A row missing the referenced field is dropped for every operator, including the negative ones."
         },
         "value": {
-          "description": "Single comparison value. Use for all operators except 'in' and 'notIn'."
+          "description": "Single comparison value. Use for every operator except 'in', 'notIn', 'between' (which use 'values'), and 'isNull'/'isNotNull' (which take no value)."
         },
         "values": {
           "type": "array",
           "items": {},
-          "description": "Array of comparison values. Use with 'in' and 'notIn' operators."
+          "description": "Array of comparison values. Use with 'in' and 'notIn'; use with 'between' as exactly two values ordered [low, high] inclusive."
         }
       }
     }

@@ -1,0 +1,45 @@
+{
+  "$schema": "../policy-definition.schema.json",
+  "version": "1.0",
+  "name": "clinical-data-steward",
+  "description": "Write access for a clinical data steward. May correct patient demographics and close encounters, but may never delete, may never write identity or audit columns, and is confined to their own region. Demonstrates docs/connector-spec.md section 4.",
+  "priority": 100,
+  "sourcePatterns": ["db:production:patient*", "db:production:encounters"],
+  "permissions": {
+    "canQuery": true,
+    "canInsert": true,
+    "canUpdate": true,
+    "canDelete": false,
+    "canExport": false,
+    "readOnly": false
+  },
+  "objectRules": {
+    "allowedObjects": ["patients", "encounters"],
+    "hiddenObjects": ["billing_internal", "audit_log"],
+    "fieldRules": {
+      "hiddenFields": ["patients.ssn"],
+      "maskedFields": [
+        {
+          "field": "patients.email",
+          "maskType": "hash",
+          "parameters": { "algorithm": "sha256" }
+        }
+      ],
+      "readOnlyFields": [
+        "patients.id",
+        "patients.mrn",
+        "patients.created_at",
+        "patients.created_by",
+        "encounters.id",
+        "encounters.patient_id"
+      ]
+    },
+    "rowFilters": [
+      { "field": "region", "operator": "in", "values": ["us-east", "us-west"] },
+      { "field": "status", "operator": "notEquals", "value": "archived" }
+    ]
+  },
+  "limits": {
+    "maxResults": 1000
+  }
+}

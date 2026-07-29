@@ -15,7 +15,7 @@ namespace Tolap.Mcp;
 /// rejected, defeating <c>alg</c>-confusion and unsigned-token attacks.
 ///
 /// <para>
-/// Failure semantics follow canonical-enforcement-spec.md section 9 and are
+/// Failure semantics follow canonical-enforcement-spec.md section 11 and are
 /// identical in all three SDKs: a credential that is <b>presented but invalid</b>
 /// — malformed, non-allowlisted algorithm, <c>alg=none</c>, bad signature, expired
 /// (<c>exp</c>), not-yet-valid (<c>nbf</c>), or missing a required claim — throws
@@ -85,7 +85,7 @@ public sealed class JwtIdentityExtractor : IRequestIdentityExtractor
     /// Extracts the identity from a presented JWT.
     /// </summary>
     /// <exception cref="SecurityException">
-    /// Thrown when a credential is presented but invalid (spec section 9).
+    /// Thrown when a credential is presented but invalid (spec section 11).
     /// </exception>
     public (string UserId, string TenantId) ExtractIdentity(object mcpRequest)
     {
@@ -181,7 +181,7 @@ public sealed class JwtIdentityExtractor : IRequestIdentityExtractor
     ///
     /// <para>
     /// <c>nbf</c> is validated because a token presented before it becomes valid is
-    /// invalid, not anonymous (spec section 9). Leaving it unchecked let a post-dated
+    /// invalid, not anonymous (spec section 11). Leaving it unchecked let a post-dated
     /// token — one an issuer minted for a future window — be used immediately.
     /// </para>
     /// </remarks>
@@ -227,7 +227,7 @@ public sealed class JwtIdentityExtractor : IRequestIdentityExtractor
     /// <remarks>
     /// A verified token missing a required claim throws <see cref="SecurityException"/>:
     /// the issuer authenticated someone the policy engine cannot identify, which is an
-    /// invalid credential rather than an anonymous request (spec section 9).
+    /// invalid credential rather than an anonymous request (spec section 11).
     /// </remarks>
     private static string GetRequiredClaim(JsonElement payload, string claim)
     {

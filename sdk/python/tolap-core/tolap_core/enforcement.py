@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import functools
 import hashlib
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -33,6 +34,20 @@ class UnenforceableResultError(PermissionError):
     """
 
 
+def _pattern_matches(pattern: str, name: str) -> bool:
+    """Case-insensitive glob match, identically on every platform.
+
+    ``fnmatch.fnmatch`` applies ``os.path.normcase``, which lower-cases on Windows
+    and is a no-op elsewhere -- so a rule ``hiddenObjects: ["Billing"]`` against a
+    query for ``billing`` denied on Windows and allowed on macOS/Linux. The same
+    signed policy must produce the same decision everywhere, so match with
+    ``fnmatchcase`` over pre-lowered strings instead of relying on the platform's
+    case rules. This mirrors :func:`_field_name_matches`, which already did so for
+    the post-execution path.
+    """
+    return fnmatchcase(name.lower(), pattern.lower())
+
+
 def validate_access(object_name: str, policy: EffectivePolicy) -> AccessResult:
     """Validate whether access to a named object is permitted by the policy."""
     if not policy.permissions.can_query:
@@ -45,13 +60,13 @@ def validate_access(object_name: str, policy: EffectivePolicy) -> AccessResult:
     # Check hidden objects first (hidden takes precedence)
     if obj_rules.hidden_objects:
         for pattern in obj_rules.hidden_objects:
-            if fnmatch(object_name, pattern):
+            if _pattern_matches(pattern, object_name):
                 return AccessResult(allowed=False, reason="object is hidden")
 
     # Check allowed objects (if specified, object must be in the set)
     if obj_rules.allowed_objects is not None:
         for pattern in obj_rules.allowed_objects:
-            if fnmatch(object_name, pattern):
+            if _pattern_matches(pattern, object_name):
                 return AccessResult(allowed=True)
         return AccessResult(allowed=False, reason="object not in allowed set")
 
@@ -71,7 +86,7 @@ def validate_field_access(fields: list[str], policy: EffectivePolicy) -> FieldAc
         # Check hidden fields first (takes precedence)
         if field_rules and field_rules.hidden_fields:
             for pattern in field_rules.hidden_fields:
-                if fnmatch(f, pattern):
+                if _pattern_matches(pattern, f):
                     denied = True
                     break
 
@@ -83,7 +98,7 @@ def validate_field_access(fields: list[str], policy: EffectivePolicy) -> FieldAc
         if field_rules and field_rules.allowed_fields is not None:
             allowed = False
             for pattern in field_rules.allowed_fields:
-                if fnmatch(f, pattern):
+                if _pattern_matches(pattern, f):
                     allowed = True
                     break
             if not allowed:
@@ -131,6 +146,32 @@ def _field_name_matches(rule_field: str, key: str) -> bool:
     )
 
 
+def _blake2b_512(data: bytes) -> str:
+    """BLAKE2b-512 hex digest.
+
+    ``digest_size=64`` is stated explicitly rather than relying on the default:
+    ``hashlib.blake2b`` accepts any size from 1 to 64 bytes, and the schema's
+    ``blake2b`` means BLAKE2b-512 specifically -- the variant Node spells
+    ``blake2b512``. A different digest size is a different hash, so leaving it
+    implicit would make the join key hostage to a CPython default.
+    """
+    return hashlib.blake2b(data, digest_size=64).hexdigest()
+
+
+_HASH_ALGORITHMS: dict[str, Any] = {
+    "sha256": lambda data: hashlib.sha256(data).hexdigest(),
+    "sha512": lambda data: hashlib.sha512(data).hexdigest(),
+    "blake2b": _blake2b_512,
+}
+"""Hash-mask algorithms, keyed by the exact schema value (canonical spec §6).
+
+Only the three values the schema permits are accepted, matched exactly. Passing
+the parameter straight to ``hashlib.new`` would accept anything the runtime
+happens to offer -- ``md5`` included -- and would accept spellings the other SDKs
+reject, which is how a pseudonym stops matching across services.
+"""
+
+
 def _apply_mask(value: object, rule: MaskingRule) -> object:
     """Apply a masking rule to a field value.
 
@@ -165,8 +206,21 @@ def _apply_mask(value: object, rule: MaskingRule) -> object:
             return prefix + (mask_char * masked_count) + suffix
 
         case MaskType.hash:
-            digest = hashlib.sha256(str_value.encode("utf-8")).hexdigest()[:16]
-            return digest
+            algorithm = "sha256"
+            if rule.parameters and rule.parameters.algorithm:
+                algorithm = rule.parameters.algorithm
+
+            hasher = _HASH_ALGORITHMS.get(algorithm)
+            if hasher is None:
+                # An algorithm this runtime cannot provide must not abort the
+                # result pass and must never disclose the original, so fail
+                # closed as ``redact`` (canonical spec §6). Substituting sha256
+                # would be worse than redacting: the value would look like a
+                # valid pseudonym while silently failing to join against a
+                # service that computed the requested algorithm.
+                return "[REDACTED]"
+
+            return hasher(str_value.encode("utf-8"))[:16]
 
         case MaskType.null:
             return None
@@ -223,6 +277,27 @@ def apply_field_masking(record: dict, policy: EffectivePolicy) -> dict:
         return copy.deepcopy(record)
 
     return _mask_node(copy.deepcopy(record), rules)
+
+
+def apply_masking(result: Any, policy: EffectivePolicy) -> Any:
+    """Apply maskedFields to a record, list of records, or arbitrary JSON tree.
+
+    The tree-walking counterpart to :func:`strip_hidden_fields`, and the shared
+    implementation both the MCP and HTTP paths use so they cannot drift. A
+    dotted-path walk that only honoured a rule anchored at the root of the body
+    left a bare rule such as ``ssn`` matching only a top-level key, so the same
+    policy masked ``{"demographics": {"ssn": ...}}`` through the MCP wrapper and
+    disclosed it through the HTTP wrapper. Spec section 4 requires masking to
+    recurse into nested objects and arrays and to match bare and qualified field
+    forms in both directions.
+
+    Returns a deep copy; the caller's value is never mutated.
+    """
+    rules = _masking_rules(policy)
+    if not rules:
+        return copy.deepcopy(result)
+
+    return _mask_node(copy.deepcopy(result), rules)
 
 
 def _hidden_field_patterns(policy: EffectivePolicy) -> list[str]:
@@ -311,6 +386,91 @@ def apply_result_limit(results: list, policy: EffectivePolicy) -> list:
     return results
 
 
+# -- Numeric record floors and ceilings --
+
+# Field names carrying a similarity score, in precedence order. Covers the common
+# vector-store response shapes (Bedrock KB, OpenSearch, pgvector wrappers).
+_SCORE_KEYS = ("score", "similarity", "similarityscore", "_score")
+
+# Field names carrying an object size in bytes, in precedence order. Covers the
+# common object-storage response shapes (S3, Azure Blob, GCS).
+_SIZE_KEYS = ("size", "sizebytes", "contentlength", "objectsize")
+
+
+def _numeric_field(record: Any, keys: tuple[str, ...]) -> float | None:
+    """Read the first present numeric field named by ``keys``, case-insensitively.
+
+    Returns None when no key is present or the value is not a finite number. The
+    caller treats None as "cannot establish this record's value", which fails
+    closed.
+    """
+    if not isinstance(record, Mapping):
+        return None
+    lowered = {str(k).lower(): v for k, v in record.items()}
+    for key in keys:
+        if key not in lowered:
+            continue
+        value = lowered[key]
+        # bool is an int subclass; a True score is a type error, not a 1.0 score.
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            numeric = float(value)
+            return numeric if math.isfinite(numeric) else None
+        if isinstance(value, str):
+            try:
+                numeric = float(value.strip())
+            except ValueError:
+                return None
+            return numeric if math.isfinite(numeric) else None
+        return None
+    return None
+
+
+def apply_similarity_floor(results: list, policy: EffectivePolicy) -> list:
+    """Drop records scoring below ``minSimilarityScore`` (spec section 4, step 3).
+
+    Fails closed: a record with no recognizable score field, or a non-numeric
+    score, is dropped when a floor is set. A record whose relevance cannot be
+    established cannot be shown to satisfy the floor, and the documented purpose
+    of this limit is to stop low-relevance vector hits from surfacing sensitive
+    content -- so an unscored record must not slip through.
+
+    A score exactly equal to the floor is kept.
+    """
+    if not policy.limits or policy.limits.min_similarity_score is None:
+        return results
+
+    floor = policy.limits.min_similarity_score
+    kept = []
+    for record in results:
+        score = _numeric_field(record, _SCORE_KEYS)
+        if score is None or score < floor:
+            continue
+        kept.append(record)
+    return kept
+
+
+def apply_object_size_ceiling(results: list, policy: EffectivePolicy) -> list:
+    """Drop records larger than ``maxObjectSizeBytes`` (spec section 4, step 4).
+
+    Fails closed on the same reasoning as the relevance floor: a record with no
+    recognizable size field, or a non-numeric size, is dropped when a ceiling is
+    set. A size exactly equal to the ceiling is kept.
+    """
+    if not policy.limits or policy.limits.max_object_size_bytes is None:
+        return results
+
+    ceiling = policy.limits.max_object_size_bytes
+    kept = []
+    for record in results:
+        size = _numeric_field(record, _SIZE_KEYS)
+        if size is None or size > ceiling:
+            continue
+        kept.append(record)
+    return kept
+
+
 # -- Result shapes --
 
 _RECORD_SHAPE = "record"
@@ -357,15 +517,18 @@ def apply_result_pipeline(result: Any, policy: EffectivePolicy) -> Any:
 
       1. row filters      drop rows the policy excludes
       2. tag filters      drop records by allowedTags / deniedTags
-      3. hidden fields    remove hiddenFields from every record
-      4. allowed fields   project to allowedFields when specified
-      5. masking          apply maskedFields transformations
-      6. result limit     truncate to maxResults
+      3. relevance floor  drop records scoring below minSimilarityScore
+      4. size ceiling     drop records larger than maxObjectSizeBytes
+      5. hidden fields    remove hiddenFields from every record
+      6. allowed fields   project to allowedFields when specified
+      7. masking          apply maskedFields transformations
+      8. result limit     truncate to maxResults
 
-    Hidden/allowed removal precedes masking so a field that is both hidden and
-    masked is removed rather than returned in masked form, and the limit runs
-    last so filtering never yields fewer rows than maxResults when more
-    qualifying rows exist.
+    Every record-dropping step precedes every field-level step, so no work is
+    spent masking a record that is about to be discarded. Hidden/allowed removal
+    precedes masking so a field that is both hidden and masked is removed rather
+    than returned in masked form, and the limit runs last so filtering never
+    yields fewer rows than maxResults when more qualifying rows exist.
 
     Raises UnenforceableResultError for a shape the policy cannot be applied to.
     """
@@ -381,6 +544,8 @@ def apply_result_pipeline(result: Any, policy: EffectivePolicy) -> Any:
 
     filtered = apply_row_filters(records, policy)
     filtered = filter_by_tags(filtered, policy)
+    filtered = apply_similarity_floor(filtered, policy)
+    filtered = apply_object_size_ceiling(filtered, policy)
     stripped = strip_hidden_fields(filtered, policy)
     projected = project_allowed_fields(stripped, policy)
     masked = [apply_field_masking(record, policy) for record in projected]
@@ -443,12 +608,126 @@ def _compile_row_filter_pattern(pattern: str) -> re.Pattern[str] | None:
         return None
 
 
+@functools.lru_cache(maxsize=256)
+def _compile_like_pattern(pattern: str) -> re.Pattern[str] | None:
+    """Translate a SQL ``LIKE`` pattern to an anchored regex, or None if unusable.
+
+    ``%`` matches any run of characters, ``_`` matches exactly one, and ``\\``
+    escapes the next character so a literal percent or underscore can be written.
+    Every other character is ``re.escape``d, so a pattern containing regex
+    metacharacters (``.``, ``(``, ``|``) is matched literally and cannot smuggle a
+    pathological regex through the ``like`` operator.
+
+    Case-sensitive, matching Postgres ``LIKE`` -- and matching the ``LIKE`` this
+    SDK's query rewriter emits, so the post-fetch and pushed-down evaluations of
+    the same filter agree. Deliberately distinct from ``matches`` (a full regex)
+    and from ``contains`` (a plain substring test).
+    """
+    if len(pattern) > _MAX_REGEX_PATTERN_LENGTH:
+        return None
+
+    parts = ["^(?:"]
+    index = 0
+    while index < len(pattern):
+        char = pattern[index]
+        if char == "\\" and index + 1 < len(pattern):
+            # An escaped wildcard is a literal; consume both characters.
+            parts.append(re.escape(pattern[index + 1]))
+            index += 2
+            continue
+        if char == "%":
+            parts.append(".*")
+        elif char == "_":
+            parts.append(".")
+        else:
+            parts.append(re.escape(char))
+        index += 1
+    parts.append(")$")
+
+    try:
+        return re.compile("".join(parts), re.DOTALL)
+    except re.error:  # pragma: no cover - every emitted fragment is valid regex
+        return None
+
+
+def _like_matches(pattern: object, value: object) -> bool | None:
+    """Whether ``value`` matches a SQL ``LIKE`` ``pattern``.
+
+    Returns None when the comparison cannot be made at all -- a null pattern or a
+    null field value -- which callers treat as "drop the row" for both ``like``
+    and ``notLike``. SQL evaluates ``NULL LIKE 'x'`` and ``NULL NOT LIKE 'x'``
+    both to NULL, and neither retains a row; returning True for the negative case
+    would reintroduce exactly the fail-open behaviour spec section 7 records for
+    ``notEquals``/``notIn`` on a missing field.
+    """
+    if value is None or pattern is None:
+        return None
+
+    str_value = str(value)
+    if len(str_value) > _MAX_REGEX_VALUE_LENGTH:
+        return None
+    compiled = _compile_like_pattern(str(pattern))
+    if compiled is None:
+        return None
+    return compiled.fullmatch(str_value) is not None
+
+
+def _compare(left: object, right: object) -> int | None:
+    """Order two values, or None when they are not orderable.
+
+    None when either side is null, either side is a boolean, or the pair has no
+    ordering (``age="notanumber"`` against ``30``). Callers treat None as a
+    non-match, so a type mismatch drops the row rather than raising an exception
+    that would abort the whole result pass (spec section 7).
+
+    Booleans are excluded for the same reason :func:`_values_equal` excludes
+    them: Python orders ``True`` as ``1``, so ``flag > 0`` would silently treat a
+    boolean field as a number.
+    """
+    if left is None or right is None:
+        return None
+    if isinstance(left, bool) or isinstance(right, bool):
+        return None
+    try:
+        if left < right:  # type: ignore[operator]
+            return -1
+        if left > right:  # type: ignore[operator]
+            return 1
+    except TypeError:
+        return None
+    return 0
+
+
+def _between_matches(value: object, rf: RowFilter) -> bool:
+    """Whether ``value`` falls inside the inclusive range in ``rf.values``.
+
+    The bounds are the first two entries of ``values``, ordered ``[low, high]``.
+    Fails closed on a malformed range: fewer than two bounds, a null bound, or a
+    bound that is not orderable against the row value all drop the row.
+
+    An inverted range (low > high) matches nothing, exactly as SQL
+    ``BETWEEN 10 AND 1`` does. The bounds are deliberately not reordered --
+    silently swapping them would turn a policy author's typo into a wider grant
+    than the one they wrote.
+    """
+    bounds = rf.values or []
+    if len(bounds) < 2:
+        return False
+
+    lower = _compare(value, bounds[0])
+    if lower is None or lower < 0:
+        return False
+    upper = _compare(value, bounds[1])
+    return upper is not None and upper <= 0
+
+
 def _row_passes_filter(row: dict, rf: RowFilter) -> bool:
     value = _row_field_value(row, rf.field)
     if value is _MISSING:
-        # Fail closed for every operator, including the negative ones: a filter
-        # written to exclude classified rows must not retain every row that
-        # simply lacks the column.
+        # Fail closed for every operator, including the negative ones and the
+        # null tests: a filter written to exclude classified rows must not retain
+        # every row that simply lacks the column. See the isNull note below for
+        # why "absent" and "present and null" are kept distinct.
         return False
 
     op = rf.operator
@@ -460,19 +739,39 @@ def _row_passes_filter(row: dict, rf: RowFilter) -> bool:
         return any(_values_equal(value, candidate) for candidate in (rf.values or []))
     if op is FilterOperator.not_in:
         return not any(_values_equal(value, candidate) for candidate in (rf.values or []))
-    if op is FilterOperator.greater_than or op is FilterOperator.less_than:
-        if value is None or rf.value is None:
-            return False
-        try:
-            return value > rf.value if op is FilterOperator.greater_than else value < rf.value
-        except TypeError:
-            # Non-comparable value (e.g. age="notanumber" vs 30): a non-match,
-            # never an exception that aborts the whole result pass.
-            return False
+    if op is FilterOperator.greater_than:
+        ordering = _compare(value, rf.value)
+        return ordering is not None and ordering > 0
+    if op is FilterOperator.greater_than_or_equal:
+        ordering = _compare(value, rf.value)
+        return ordering is not None and ordering >= 0
+    if op is FilterOperator.less_than:
+        ordering = _compare(value, rf.value)
+        return ordering is not None and ordering < 0
+    if op is FilterOperator.less_than_or_equal:
+        ordering = _compare(value, rf.value)
+        return ordering is not None and ordering <= 0
     if op is FilterOperator.contains:
         return value is not None and rf.value is not None and str(rf.value) in str(value)
     if op is FilterOperator.starts_with:
         return value is not None and rf.value is not None and str(value).startswith(str(rf.value))
+    if op is FilterOperator.like:
+        return _like_matches(rf.value, value) is True
+    if op is FilterOperator.not_like:
+        # None (an incomparable pair) drops the row rather than retaining it;
+        # only a definite non-match satisfies notLike.
+        return _like_matches(rf.value, value) is False
+    if op is FilterOperator.is_null:
+        # The field is present -- a missing field was already dropped above -- so
+        # this is the genuine "present and null" case. A MISSING field does NOT
+        # satisfy isNull: "the field is absent" and "the field is present and
+        # null" are different statements, and dropping the row is the fail-closed
+        # reading of a constraint we cannot prove holds (spec section 7).
+        return value is None
+    if op is FilterOperator.is_not_null:
+        return value is not None
+    if op is FilterOperator.between:
+        return _between_matches(value, rf)
     if op is FilterOperator.matches:
         if value is None or rf.value is None:
             return False
@@ -483,6 +782,10 @@ def _row_passes_filter(row: dict, rf: RowFilter) -> bool:
         if compiled is None:
             return False
         return compiled.fullmatch(str_value) is not None
+    # An operator this SDK does not implement retains nothing. Deserialization
+    # already refuses an unrecognized operator string, so this is reachable only
+    # for a hand-built RowFilter -- but a future enum member added without a
+    # branch here must deny rather than pass rows through.
     return False
 
 
@@ -533,35 +836,74 @@ def filter_by_tags(results: list[dict], policy: EffectivePolicy) -> list[dict]:
     return filtered
 
 
+# The methods that only read. Used twice: as the documented default for an
+# omitted allowedMethods, and as the set readOnly permits.
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
 def validate_endpoint(path: str, method: str, policy: EffectivePolicy) -> AccessResult:
-    """Validate access to an API endpoint."""
+    """Validate access to an API endpoint.
+
+    Three restrictions apply, most-restrictive-first:
+
+    1. ``hiddenEndpoints`` then ``allowedEndpoints`` gate the path.
+    2. ``readOnly`` gates the method. When the permission is true, only
+       ``GET``/``HEAD``/``OPTIONS`` are permitted -- regardless of
+       ``allowedMethods``, because a policy that grants ``DELETE`` while declaring
+       itself read-only is contradictory and the restrictive half must win.
+       ``readOnly`` was previously merged (OR-folded, so any read-only policy in
+       the set made the result read-only) and then never consulted, so the whole
+       fold had no effect on any decision.
+    3. ``allowedMethods`` gates the method. When omitted it defaults to the read
+       methods, as the schema documents ("If omitted, defaults to read-only
+       methods: GET, HEAD, OPTIONS"). Treating omitted as unrestricted -- the
+       previous behaviour -- let ``POST``/``PUT``/``PATCH``/``DELETE`` through on
+       a policy whose author had been told the default was read-only.
+
+    ``readOnly`` is unset on many policies; absent means the schema default of
+    ``true`` (spec section 8), so an endpoint policy silent on ``readOnly`` is
+    read-only.
+    """
     if not policy.permissions.can_query:
         return AccessResult(allowed=False, reason="query not permitted")
 
-    if not policy.object_rules or not policy.object_rules.endpoint_rules:
-        return AccessResult(allowed=True)
+    normalized_method = method.upper()
+    rules = None
+    if policy.object_rules and policy.object_rules.endpoint_rules:
+        rules = policy.object_rules.endpoint_rules
 
-    rules = policy.object_rules.endpoint_rules
+    if rules is not None:
+        # Check hidden endpoints first (takes precedence)
+        if rules.hidden_endpoints:
+            for pattern in rules.hidden_endpoints:
+                if _pattern_matches(pattern, path):
+                    return AccessResult(allowed=False, reason="endpoint is hidden")
 
-    # Check hidden endpoints first (takes precedence)
-    if rules.hidden_endpoints:
-        for pattern in rules.hidden_endpoints:
-            if fnmatch(path, pattern):
-                return AccessResult(allowed=False, reason="endpoint is hidden")
+        # Check allowed endpoints
+        if rules.allowed_endpoints is not None:
+            matched = False
+            for pattern in rules.allowed_endpoints:
+                if _pattern_matches(pattern, path):
+                    matched = True
+                    break
+            if not matched:
+                return AccessResult(allowed=False, reason="endpoint not in allowed set")
 
-    # Check allowed endpoints
-    if rules.allowed_endpoints is not None:
-        matched = False
-        for pattern in rules.allowed_endpoints:
-            if fnmatch(path, pattern):
-                matched = True
-                break
-        if not matched:
-            return AccessResult(allowed=False, reason="endpoint not in allowed set")
+    # Check allowed methods. `None` is the documented read-only default, not
+    # "unrestricted"; `[]` denies every method.
+    allowed_methods = rules.allowed_methods if rules is not None else None
+    permitted = _READ_METHODS if allowed_methods is None else {m.upper() for m in allowed_methods}
+    if normalized_method not in permitted:
+        return AccessResult(allowed=False, reason="method not allowed")
 
-    # Check allowed methods
-    if rules.allowed_methods is not None:
-        if method.upper() not in [m.upper() for m in rules.allowed_methods]:
-            return AccessResult(allowed=False, reason="method not allowed")
+    # readOnly is checked last so an explicit allowedMethods denial keeps its more
+    # specific reason. An absent readOnly takes its schema default of true,
+    # matching the merge rules in spec section 8: excluding absent booleans from
+    # the decision would invert it, letting a policy silent on readOnly permit
+    # writes. A policy that lists DELETE in allowedMethods while declaring itself
+    # read-only is contradictory, and the restrictive half wins.
+    read_only = policy.permissions.read_only is not False
+    if read_only and normalized_method not in _READ_METHODS:
+        return AccessResult(allowed=False, reason="method not allowed on a read-only policy")
 
     return AccessResult(allowed=True)

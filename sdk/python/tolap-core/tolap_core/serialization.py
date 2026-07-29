@@ -57,15 +57,6 @@ def _convert_keys_to_snake(obj: Any) -> Any:
     return obj
 
 
-def _strip_none(obj: Any) -> Any:
-    """Recursively strip None values from dicts."""
-    if isinstance(obj, dict):
-        return {k: _strip_none(v) for k, v in obj.items() if v is not None}
-    if isinstance(obj, list):
-        return [_strip_none(item) for item in obj]
-    return obj
-
-
 def _dataclass_to_dict(obj: Any) -> Any:
     """Convert a dataclass to a dict, handling enums."""
     if isinstance(obj, Enum):
@@ -142,9 +133,23 @@ def _deser_masking_rule(data: dict) -> MaskingRule:
 
 def _deser_row_filter(data: dict) -> RowFilter:
     d = _convert_keys_to_snake(data)
+    raw_operator = d["operator"]
+    if raw_operator not in _FILTER_OP_MAP:
+        # Fail closed at the boundary, on the same reasoning as the unknown
+        # maskType check above. The bare dict subscript this replaced raised a
+        # bare KeyError, so a schema-valid policy carrying an operator this SDK
+        # has not implemented yet was an uncaught crash rather than a denial --
+        # and the enforcement path's own fallback silently dropped every row.
+        # Neither is a decision an integrator can act on, so refuse the policy
+        # with a message naming the operator and what this SDK supports.
+        valid = ", ".join(op.value for op in FilterOperator)
+        raise ValueError(
+            f"unknown filter operator {raw_operator!r} for field {d.get('field')!r}; "
+            f"expected one of: {valid}"
+        )
     return RowFilter(
         field=d["field"],
-        operator=_FILTER_OP_MAP[d["operator"]],
+        operator=_FILTER_OP_MAP[raw_operator],
         value=d.get("value"),
         values=d.get("values"),
     )

@@ -24,6 +24,7 @@ export {
   SecureContextToolWrapper,
   type SecureContextWrapperOptions,
   type PreExecuteArgs,
+  type SqlQueryPreparation,
 } from "./context-wrapper.js";
 export {
   SecureHttpToolWrapper,

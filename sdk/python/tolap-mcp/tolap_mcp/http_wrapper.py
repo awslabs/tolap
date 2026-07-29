@@ -22,60 +22,35 @@ import httpx
 from tolap_core.context import validate_context, validate_expiry
 from tolap_core.enforcement import (
     AccessResult,
-    _apply_mask,
+    apply_masking,
+    apply_object_size_ceiling,
     apply_result_limit,
+    apply_row_filters,
+    apply_similarity_floor,
+    filter_by_tags,
     project_allowed_fields,
     strip_hidden_fields,
     validate_endpoint,
 )
-from tolap_core.models import EffectivePolicy, MaskingRule, SecurityContext
+from tolap_core.models import EffectivePolicy, SecurityContext
 
 from tolap_mcp.options import SecureMcpServerOptions
 
 
-def _walk_and_mask(node: Any, path_parts: list[str], rule: MaskingRule) -> None:
-    """Recursively descend `node` along `path_parts`, masking the leaf in place.
-
-    A path_parts of ["patient", "patientonsetage"] applies the rule to
-    node["patient"]["patientonsetage"] for dicts, and to every element's
-    ["patient"]["patientonsetage"] when traversing lists. Missing keys are
-    silently skipped — masking is best-effort, never an error path.
-    """
-    if not path_parts:
-        return
-
-    if isinstance(node, list):
-        for item in node:
-            _walk_and_mask(item, path_parts, rule)
-        return
-
-    if not isinstance(node, dict):
-        return
-
-    head, *rest = path_parts
-    if head not in node:
-        return
-
-    if not rest:
-        node[head] = _apply_mask(node[head], rule)
-    else:
-        _walk_and_mask(node[head], rest, rule)
-
-
 def _apply_masking_to_body(body: Any, policy: EffectivePolicy) -> Any:
-    """Apply every masked_field rule to a (potentially nested) JSON body."""
-    if not policy.object_rules or not policy.object_rules.field_rules:
-        return body
-    if not policy.object_rules.field_rules.masked_fields:
-        return body
+    """Apply every masked_field rule to a (potentially nested) JSON body.
 
-    masked = copy.deepcopy(body)
-    for rule in policy.object_rules.field_rules.masked_fields:
-        # "table.field" is the DB convention; for APIs we use dotted paths into JSON.
-        # We treat both the same: split on '.', walk the tree.
-        parts = rule.field.split(".")
-        _walk_and_mask(masked, parts, rule)
-    return masked
+    Delegates to the shared core implementation, for the same reason the
+    hidden-field path does: a separate dotted-path walk here drifted from core and
+    under-masked. It anchored each rule at the root of the body, so a bare rule
+    such as ``ssn`` reached only a top-level key -- the identical policy masked
+    ``{"demographics": {"ssn": ...}}`` through the MCP wrapper and disclosed it
+    through this one. The core walk recurses into nested dicts and lists and
+    matches a rule's bare and dotted forms against a key's bare and dotted forms,
+    so both ``results.patient.ssn`` and ``ssn`` reach a nested ``ssn`` key
+    (spec section 4).
+    """
+    return apply_masking(body, policy)
 
 
 def _strip_hidden_fields_from_body(body: Any, policy: EffectivePolicy) -> Any:
@@ -127,6 +102,82 @@ def _project_allowed_fields_in_body(
     if isinstance(cursor, dict) and isinstance(cursor.get(leaf), list):
         cursor[leaf] = project_allowed_fields(cursor[leaf], policy)
     return projected
+
+
+def _filter_records_in_body(
+    body: Any,
+    collection_path: str | None,
+    policy: EffectivePolicy,
+) -> Any:
+    """Apply steps 1-4 of the canonical pipeline to the response's records.
+
+    Row filters, tag filters, the relevance floor, and the size ceiling -- every
+    record-dropping step in spec section 4, which binds "every wrapper, in every
+    language".
+
+    Row and tag filtering were absent from this wrapper, so a policy that excluded
+    rows by ``rowFilters`` or by ``deniedTags``/``allowedTags`` was silently a
+    no-op over HTTP. The relevance floor and size ceiling were absent too: with
+    ``minSimilarityScore`` and ``maxObjectSizeBytes`` both set, a body carrying a
+    0.2-scoring 1GB record and a 0.99-scoring 10-byte record returned *both*.
+
+    Filtering runs before hidden-field stripping so a filter may reference a field
+    the policy then removes; the pre-execution endpoint check cannot substitute,
+    because it never inspects the rows that come back.
+
+    Only the records are filtered -- the array at ``collection_path``, or the body
+    when the body itself is the collection -- so an API's ``meta``/paging envelope
+    survives, matching the projection and limit steps.
+    """
+    has_record_filters = bool(
+        policy.object_rules
+        and (policy.object_rules.row_filters or policy.object_rules.tag_rules)
+    )
+    has_numeric_limits = bool(
+        policy.limits
+        and (
+            policy.limits.min_similarity_score is not None
+            or policy.limits.max_object_size_bytes is not None
+        )
+    )
+    if not has_record_filters and not has_numeric_limits:
+        return body
+
+    def _filter(records: list) -> list:
+        # Non-record entries cannot be policy-evaluated; a list of scalars is not
+        # a result set this step can filter, so it is left to the shape rules.
+        if not all(isinstance(item, dict) for item in records):
+            return records
+        kept = filter_by_tags(apply_row_filters(records, policy), policy)
+        kept = apply_similarity_floor(kept, policy)
+        return apply_object_size_ceiling(kept, policy)
+
+    if collection_path is None:
+        if isinstance(body, list):
+            return _filter(body)
+        if isinstance(body, dict):
+            # A single-record body is one record, not an envelope, so it runs the
+            # identical pipeline (spec section 4, "Single records"). Returning it
+            # untouched disclosed the excluded record outright: a policy with
+            # `status != deleted` handed back `{"id": 1, "status": "deleted"}`.
+            # A dropped single record becomes None rather than {} -- an empty
+            # record would imply the row existed but had no visible fields, which
+            # is a different statement from "this row is not available to you".
+            kept = _filter([body])
+            return kept[0] if kept else None
+        return body
+
+    parts = collection_path.split(".")
+    filtered = copy.deepcopy(body)
+    cursor = filtered
+    for part in parts[:-1]:
+        if not isinstance(cursor, dict) or part not in cursor:
+            return filtered
+        cursor = cursor[part]
+    leaf = parts[-1]
+    if isinstance(cursor, dict) and isinstance(cursor.get(leaf), list):
+        cursor[leaf] = _filter(cursor[leaf])
+    return filtered
 
 
 def _limit_collection(body: Any, collection_path: str | None, policy: EffectivePolicy) -> Any:
@@ -213,6 +264,12 @@ class SecureHttpToolWrapper:
         response.raise_for_status()
         body = response.json()
 
+        # Canonical pipeline order (spec section 4): row filters, tag filters,
+        # hidden fields, allowed fields, masking, result limit. Filtering precedes
+        # field removal so a filter may reference a field the policy then hides,
+        # and the limit runs last so filtering never yields fewer rows than
+        # maxResults when more qualifying rows exist.
+        body = _filter_records_in_body(body, collection_path, policy)
         body = _strip_hidden_fields_from_body(body, policy)
         body = _project_allowed_fields_in_body(body, collection_path, policy)
         body = _apply_masking_to_body(body, policy)

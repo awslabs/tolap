@@ -11,6 +11,7 @@ import {
   type FieldAccessResult,
   type MaskingRule,
   type RowFilter,
+  FilterOperator,
   maskRestrictiveness,
 } from "./types.js";
 import { globToRegex } from "./resolution.js";
@@ -57,8 +58,15 @@ function matchForms(name: string): string[] {
   return [...forms];
 }
 
-/** Whether a policy field reference refers to a record key. */
-function fieldNameMatches(ruleField: string, key: string): boolean {
+/**
+ * Whether a policy field reference refers to a record key.
+ *
+ * Exported so `sql-rewriter.ts` decides "is this column hidden?" with exactly the
+ * rule the post-execution pass uses. A rewriter with its own matching would push
+ * down a projection that disagrees with what the post pass then strips, so the two
+ * halves of enforcement must share one implementation (spec §4).
+ */
+export function fieldNameMatches(ruleField: string, key: string): boolean {
   const keyForms = matchForms(key);
   return matchForms(ruleField).some((ruleForm) =>
     keyForms.some((keyForm) => matchesGlob(ruleForm, keyForm)),
@@ -78,12 +86,25 @@ function isDangerousKey(key: string): boolean {
   return DANGEROUS_KEYS.has(key);
 }
 
-/** Assign a key without ever tripping a prototype setter. */
+/**
+ * Assign a key without ever tripping a prototype setter.
+ *
+ * `Object.defineProperty` is used rather than `node[key] = value` because a plain
+ * assignment where key is "__proto__" reassigns the object's prototype instead of
+ * adding a property.
+ */
 function safeSet(
   node: Record<string, unknown>,
   key: string,
   value: unknown,
 ): void {
+  /* c8 ignore next -- defense in depth, currently unreachable. Every caller either
+     already skipped dangerous keys (deepClone, maskNode, dropNode, projectRecord all
+     `continue` on isDangerousKey first) or is walking a tree deepClone has already
+     stripped them from. Retained because safeSet is the single choke point for
+     assignment: a future caller that forgets its own check must still not be able to
+     reassign a prototype. Reaching it in a test would require calling this private
+     function directly, which asserts nothing about the pipeline. */
   if (isDangerousKey(key)) return;
   Object.defineProperty(node, key, {
     value,
@@ -275,12 +296,35 @@ function applyPartialMask(value: unknown, rule: MaskingRule): string {
   return prefix + maskChar.repeat(maskedLength) + suffix;
 }
 
+/**
+ * The Node digest name for each schema-permitted `algorithm` value (spec §6).
+ *
+ * Mapped rather than passed through, for two reasons. Node spells BLAKE2b-512
+ * `blake2b512` and throws on `blake2b`, so the schema value has to be translated.
+ * And passing the parameter straight to `createHash` accepts anything OpenSSL
+ * knows -- `md5` included -- plus spellings the Python and .NET SDKs reject, which
+ * is how a pseudonym stops matching across services.
+ */
+const HASH_ALGORITHMS: Record<string, string> = {
+  sha256: "sha256",
+  sha512: "sha512",
+  blake2b: "blake2b512",
+};
+
 function applyHashMask(value: unknown, rule: MaskingRule): string {
   const str = String(value);
   const algorithm = rule.parameters?.algorithm ?? "sha256";
-  const hash = createHash(algorithm).update(str).digest("hex");
-  // Truncate to 16 hex chars to match Python and .NET SDKs.
-  return hash.slice(0, 16);
+  const nodeName = HASH_ALGORITHMS[algorithm];
+
+  // Unknown, or unavailable in this runtime: fail closed as `redact`. Masking must
+  // never return the raw value and must not abort the result pass (spec §6), and
+  // substituting sha256 is worse than redacting -- the field would look like a
+  // valid pseudonym while silently failing to join against a service that computed
+  // the algorithm the policy actually asked for.
+  if (nodeName === undefined) return "[REDACTED]";
+
+  // Truncate to 16 hex chars to match the Python and .NET SDKs.
+  return createHash(nodeName).update(str).digest("hex").slice(0, 16);
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +361,10 @@ function maskNode(node: unknown, rules: MaskingRule[]): unknown {
   if (!isRecord(node)) return node;
 
   for (const key of Object.keys(node)) {
+    /* c8 ignore next -- defense in depth, currently unreachable: every public entry
+       point deep-clones first and deepClone drops dangerous keys, so no key reaching
+       this walker can be one. Retained so the walker is safe on its own terms if a
+       future caller passes an un-cloned tree. */
     if (isDangerousKey(key)) continue;
     const rule = ruleForKey(rules, key);
     if (rule !== undefined) {
@@ -339,9 +387,27 @@ export function applyFieldMasking(
   record: Record<string, unknown>,
   policy: EffectivePolicy,
 ): Record<string, unknown> {
+  return applyMaskingToTree(record, policy);
+}
+
+/**
+ * Apply `maskedFields` to an arbitrary JSON tree (record, array, or nested body).
+ *
+ * The generic counterpart to {@link applyFieldMasking}, alongside
+ * {@link stripHiddenFields} and {@link projectAllowedFields}. Exported so the HTTP
+ * wrapper masks through this same walker rather than a private one of its own: a
+ * wrapper-local path-walking implementation only reaches a key at the literal
+ * dotted path from the root, so a bare rule such as `ssn` silently missed a
+ * nested `demographics.ssn` and returned it in cleartext, while the identical rule
+ * masked it on the DB/MCP path. Field-name matching is bidirectional,
+ * case-insensitive, and recurses into nested records and arrays (spec §4).
+ *
+ * Returns a deep copy; the caller's tree is never mutated.
+ */
+export function applyMaskingToTree<T>(result: T, policy: EffectivePolicy): T {
   const rules = maskingRules(policy);
-  if (rules.length === 0) return deepClone(record);
-  return maskNode(deepClone(record), rules) as Record<string, unknown>;
+  if (rules.length === 0) return deepClone(result);
+  return maskNode(deepClone(result), rules) as T;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +429,9 @@ function dropNode(node: unknown, patterns: string[]): unknown {
   if (!isRecord(node)) return node;
 
   for (const key of Object.keys(node)) {
+    /* c8 ignore next -- defense in depth, unreachable for the same reason as in
+       maskNode: stripHiddenFields deep-clones before walking, and deepClone has
+       already dropped every dangerous key. */
     if (isDangerousKey(key)) continue;
     if (patterns.some((pattern) => fieldNameMatches(pattern, key))) {
       delete node[key];
@@ -406,6 +475,10 @@ function projectRecord(
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(record)) {
+    /* c8 ignore next -- defense in depth, unreachable: projectAllowedFields
+       deep-clones before projecting, and deepClone has already dropped every
+       dangerous key. Retained so the projection cannot copy one forward even if it
+       is ever called on an un-cloned record. */
     if (isDangerousKey(key)) continue;
     if (patterns.some((pattern) => fieldNameMatches(pattern, key))) {
       safeSet(out, key, record[key]);
@@ -454,6 +527,101 @@ export function applyResultLimit<T>(
     return results.slice(0, maxResults);
   }
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Numeric record floors and ceilings
+// ---------------------------------------------------------------------------
+
+/**
+ * Field names carrying a similarity score, in precedence order. Covers the common
+ * vector-store response shapes (Bedrock KB, OpenSearch, pgvector wrappers).
+ */
+const SCORE_KEYS = ["score", "similarity", "similarityscore", "_score"] as const;
+
+/**
+ * Field names carrying an object size in bytes, in precedence order. Covers the
+ * common object-storage response shapes (S3, Azure Blob, GCS).
+ */
+const SIZE_KEYS = ["size", "sizebytes", "contentlength", "objectsize"] as const;
+
+/**
+ * Read the first present numeric field named by `keys`, case-insensitively.
+ *
+ * Returns undefined when no key is present or the value is not a finite number.
+ * The caller treats undefined as "cannot establish this record's value", which
+ * fails closed.
+ */
+function numericField(
+  record: unknown,
+  keys: readonly string[],
+): number | undefined {
+  if (!isRecord(record)) return undefined;
+
+  const lowered = new Map<string, unknown>();
+  for (const [key, value] of Object.entries(record)) {
+    lowered.set(key.toLowerCase(), value);
+  }
+
+  for (const key of keys) {
+    if (!lowered.has(key)) continue;
+    const value = lowered.get(key);
+    // `typeof true === "boolean"`, so a boolean is rejected rather than coerced
+    // to 1 -- a `true` score is a type error, not a passing score.
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : undefined;
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed === "") return undefined;
+      const parsed = Number(trimmed);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Drop records scoring below `minSimilarityScore` (canonical spec §4, step 3).
+ *
+ * Fails closed: a record with no recognizable score field, or a non-numeric score,
+ * is dropped when a floor is set. A record whose relevance cannot be established
+ * cannot be shown to satisfy the floor, and the documented purpose of this limit is
+ * to stop low-relevance vector hits from surfacing sensitive content -- so an
+ * unscored record must not slip through. A score exactly equal to the floor is kept.
+ */
+export function applySimilarityFloor<T>(
+  results: T[],
+  policy: EffectivePolicy,
+): T[] {
+  const floor = policy.limits?.minSimilarityScore;
+  if (floor === undefined || floor === null) return results;
+
+  return results.filter((record) => {
+    const score = numericField(record, SCORE_KEYS);
+    return score !== undefined && score >= floor;
+  });
+}
+
+/**
+ * Drop records larger than `maxObjectSizeBytes` (canonical spec §4, step 4).
+ *
+ * Fails closed on the same reasoning as the relevance floor: a record with no
+ * recognizable size field, or a non-numeric size, is dropped when a ceiling is set.
+ * A size exactly equal to the ceiling is kept.
+ */
+export function applyObjectSizeCeiling<T>(
+  results: T[],
+  policy: EffectivePolicy,
+): T[] {
+  const ceiling = policy.limits?.maxObjectSizeBytes;
+  if (ceiling === undefined || ceiling === null) return results;
+
+  return results.filter((record) => {
+    const size = numericField(record, SIZE_KEYS);
+    return size !== undefined && size <= ceiling;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -570,6 +738,8 @@ export function applyResultPipeline(
 
   let out: Array<Record<string, unknown>> = applyRowFilters(records, policy);
   out = filterByTags(out, policy);
+  out = applySimilarityFloor(out, policy);
+  out = applyObjectSizeCeiling(out, policy);
   out = stripHiddenFields(out, policy);
   out = projectAllowedFields(out, policy);
   out = out.map((record) => applyFieldMasking(record, policy));
@@ -598,6 +768,129 @@ const MAX_REGEX_PATTERN_LENGTH = 1024;
 const MAX_REGEX_VALUE_LENGTH = 4096;
 
 const rowFilterPatternCache = new Map<string, RegExp | null>();
+
+/**
+ * Unrecognized operator names already warned about, so a filter evaluated over a
+ * million rows produces one message rather than a million.
+ *
+ * Bounded for the same reason as {@link rowFilterPatternCache}: a hostile or
+ * merely varied policy stream must not grow it without limit.
+ */
+const warnedUnknownOperators = new Set<string>();
+
+/**
+ * Report an operator the engine cannot evaluate, once per distinct spelling.
+ *
+ * The row is dropped either way -- see the `default` arm of
+ * {@link rowPassesFilter} -- but a silent drop-everything is indistinguishable
+ * from a filter that is working, so the integrator gets no signal that their
+ * policy is not being enforced as written. Warning rather than throwing keeps the
+ * behaviour consistent with how an unknown `maskType` is handled (spec §6: it
+ * degrades to `redact` rather than aborting the result pass), and means one
+ * malformed filter cannot take down a whole tool call. Deliberately NOT
+ * fail-open.
+ */
+function warnUnknownOperator(operator: string): void {
+  if (warnedUnknownOperators.has(operator)) return;
+  if (warnedUnknownOperators.size >= 64) warnedUnknownOperators.clear();
+  warnedUnknownOperators.add(operator);
+  console.warn(
+    `TOLAP row filter uses unrecognized operator "${operator}": every row is ` +
+      "dropped (fail closed, canonical spec §7). This is almost certainly a typo " +
+      "or a policy authored against a newer schema than this SDK implements; the " +
+      "filter is NOT being enforced as written. Supported operators: " +
+      `${Object.values(FilterOperator).join(", ")}.`,
+  );
+}
+
+/**
+ * Test a value against a SQL `LIKE` pattern.
+ *
+ * `%` matches any run of characters, `_` exactly one, and `\` escapes the next
+ * character so a literal `%` or `_` can be matched. The match is anchored (the
+ * whole value, as SQL `LIKE` is) and case-sensitive.
+ *
+ * Case-sensitivity is load-bearing rather than incidental. Postgres, Athena, and
+ * Trino all evaluate `LIKE` case-sensitively, and {@link module:sql-rewriter} pushes
+ * this operator into the query as a real `LIKE`. If the post-fetch pass were
+ * case-insensitive, pushing the filter down would change which rows a caller sees:
+ * the database would already have dropped the rows differing only in case, and no
+ * post-fetch leniency could bring them back. The two paths must mean the same
+ * thing, so both follow the SQL engines. (MySQL's default collation *is*
+ * case-insensitive, so a pushed-down filter there matches a superset; the
+ * post-fetch pass then removes the extras, which is the fail-closed direction.)
+ *
+ * Every non-wildcard character is regex-escaped, so a pattern containing regex
+ * metacharacters (`.`, `(`, `|`, `+`) is matched literally and cannot smuggle in a
+ * pathological regex. The translation only ever emits `.*`, `.`, and escaped
+ * literals -- there is no nesting or alternation to backtrack over -- but pattern
+ * and value length are still bounded, consistent with `matches`.
+ */
+function likeMatches(pattern: string, value: string): boolean {
+  if (
+    pattern.length > MAX_REGEX_PATTERN_LENGTH ||
+    value.length > MAX_REGEX_VALUE_LENGTH
+  ) {
+    return false;
+  }
+
+  const compiled = compileLikePattern(pattern);
+  // Unreachable alongside the corresponding `catch` in compileLikePattern, and kept
+  // for the same reason: a pattern that cannot compile is a non-match (spec §7),
+  // never an exception that aborts the result pass.
+  /* c8 ignore next */
+  if (compiled === null) return false;
+  return compiled.test(value);
+}
+
+const likePatternCache = new Map<string, RegExp | null>();
+
+function compileLikePattern(pattern: string): RegExp | null {
+  const cached = likePatternCache.get(pattern);
+  if (cached !== undefined) return cached;
+
+  let body = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === "\\" && i + 1 < pattern.length) {
+      // An escaped character is a literal, wildcard or not. Consume both.
+      body += escapeRegex(pattern[++i]!);
+      continue;
+    }
+    if (ch === "%") {
+      body += ".*";
+    } else if (ch === "_") {
+      body += ".";
+    } else {
+      // Includes a trailing backslash, which has nothing to escape and is literal.
+      body += escapeRegex(ch!);
+    }
+  }
+
+  let compiled: RegExp | null;
+  try {
+    // `s` so `_` and `%` also span a newline, matching SQL LIKE, where the
+    // wildcards have no line semantics at all.
+    compiled = new RegExp(`^(?:${body})$`, "s");
+  } catch {
+    // Unreachable as written: every character is either regex-escaped or one of
+    // the two wildcard expansions, so `body` is always a valid pattern, and the
+    // 1024-character bound above rules out "regex too large". Retained as the
+    // second layer -- if `escapeRegex` is ever relaxed, a construction failure must
+    // be a non-match (spec §7) rather than an exception that aborts the result pass.
+    /* c8 ignore next */
+    compiled = null;
+  }
+
+  if (likePatternCache.size >= 256) likePatternCache.clear();
+  likePatternCache.set(pattern, compiled);
+  return compiled;
+}
+
+/** Escape one character so a regex treats it as a literal. */
+function escapeRegex(ch: string): string {
+  return /[.*+?^${}()|[\]\\]/.test(ch) ? `\\${ch}` : ch;
+}
 
 /**
  * Compile an anchored row-filter pattern, or `null` if it is unusable.
@@ -740,7 +1033,67 @@ function rowPassesFilter(
       if (compiled === null) return false;
       return compiled.test(strValue);
     }
+    case "greaterThanOrEqual": {
+      if (value === null || rf.value === undefined || rf.value === null) {
+        return false;
+      }
+      const cmp = compareValues(value, rf.value);
+      return cmp !== undefined && cmp >= 0;
+    }
+    case "lessThanOrEqual": {
+      if (value === null || rf.value === undefined || rf.value === null) {
+        return false;
+      }
+      const cmp = compareValues(value, rf.value);
+      return cmp !== undefined && cmp <= 0;
+    }
+    case "like":
+      if (value === null || rf.value === undefined || rf.value === null) {
+        return false;
+      }
+      return likeMatches(String(rf.value), String(value));
+    case "notLike":
+      // A null field value is not "unlike" the pattern, it is incomparable: SQL
+      // evaluates `NULL NOT LIKE 'x'` to NULL, which does not retain the row.
+      // Returning true here would be exactly the fail-open bug spec §7 records
+      // for notEquals/notIn on a missing field, one level down.
+      if (value === null || rf.value === undefined || rf.value === null) {
+        return false;
+      }
+      return !likeMatches(String(rf.value), String(value));
+    case "isNull":
+      // The field is present -- a missing field was already dropped above -- so
+      // this is the genuine "present and null" case. A key holding `undefined`
+      // counts as null: it carries no value, and a JSON `null` round-trips to
+      // `null` while `undefined` only arises from a driver or caller that means
+      // the same thing.
+      return value === null || value === undefined;
+    case "isNotNull":
+      return value !== null && value !== undefined;
+    case "between": {
+      // Inclusive, over the first two entries of `values`, in the order written.
+      // Fails closed on a malformed range: fewer than two bounds, a null bound, or
+      // a bound not ordered against the row value all drop the row. An inverted
+      // range (low > high) matches nothing, exactly as SQL `BETWEEN 10 AND 1`
+      // does, and is NOT silently reordered -- reordering would turn a policy
+      // author's typo into a wider grant than what was written.
+      const bounds = rf.values;
+      if (bounds === undefined || bounds.length < 2) return false;
+      if (value === null) return false;
+      const [low, high] = bounds;
+      if (low === undefined || low === null || high === undefined || high === null) {
+        return false;
+      }
+      const lower = compareValues(value, low);
+      if (lower === undefined || lower < 0) return false;
+      const upper = compareValues(value, high);
+      return upper !== undefined && upper <= 0;
+    }
     default:
+      // Fail closed, loudly. Dropping every row is the safe direction, but it is
+      // indistinguishable from a filter that is working, so the integrator is told
+      // once that their policy is not being enforced as written.
+      warnUnknownOperator(String(rf.operator));
       return false;
   }
 }
@@ -810,7 +1163,32 @@ export function filterByTags(
 // ---------------------------------------------------------------------------
 
 /**
+ * The methods that only read. Used twice: as the documented default for an
+ * omitted allowedMethods, and as the set readOnly permits.
+ */
+const READ_METHODS = ["GET", "HEAD", "OPTIONS"];
+
+/**
  * Validate whether an endpoint + method is accessible under the effective policy.
+ *
+ * Three restrictions apply, most-restrictive-first:
+ *
+ *   1. `hiddenEndpoints` then `allowedEndpoints` gate the path.
+ *   2. `readOnly` gates the method. When the permission is true, only
+ *      GET/HEAD/OPTIONS are permitted -- regardless of `allowedMethods`, because a
+ *      policy that grants DELETE while declaring itself read-only is contradictory
+ *      and the restrictive half must win (canonical spec §9). `readOnly` was
+ *      previously merged (OR-folded, so any read-only policy in the set made the
+ *      result read-only) and then never consulted, so the whole fold had no effect
+ *      on any decision.
+ *   3. `allowedMethods` gates the method. When omitted it defaults to the read
+ *      methods, as the schema documents ("If omitted, defaults to read-only
+ *      methods: GET, HEAD, OPTIONS"). Treating omitted as unrestricted -- the
+ *      previous behaviour -- let POST/PUT/PATCH/DELETE through on a policy whose
+ *      author had been told the default was read-only.
+ *
+ * `readOnly` is unset on many policies; absent means the schema default of `true`
+ * (spec §8), so an endpoint policy silent on `readOnly` is read-only.
  */
 export function validateEndpoint(
   path: string,
@@ -821,30 +1199,50 @@ export function validateEndpoint(
     return { allowed: false, reason: "query not permitted" };
   }
 
+  const upperMethod = method.toUpperCase();
   const endpointRules = policy.objectRules?.endpointRules;
-  if (!endpointRules) return { allowed: true };
 
-  // Hidden endpoints take precedence
-  if (
-    endpointRules.hiddenEndpoints &&
-    matchesAnyGlob(endpointRules.hiddenEndpoints, path)
-  ) {
-    return { allowed: false, reason: "endpoint is hidden" };
-  }
+  if (endpointRules) {
+    // Hidden endpoints take precedence
+    if (
+      endpointRules.hiddenEndpoints &&
+      matchesAnyGlob(endpointRules.hiddenEndpoints, path)
+    ) {
+      return { allowed: false, reason: "endpoint is hidden" };
+    }
 
-  // Check allowed endpoints
-  if (endpointRules.allowedEndpoints) {
-    if (!matchesAnyGlob(endpointRules.allowedEndpoints, path)) {
-      return { allowed: false, reason: "endpoint not in allowed set" };
+    // Check allowed endpoints
+    if (endpointRules.allowedEndpoints) {
+      if (!matchesAnyGlob(endpointRules.allowedEndpoints, path)) {
+        return { allowed: false, reason: "endpoint not in allowed set" };
+      }
     }
   }
 
-  // Check allowed methods
-  if (endpointRules.allowedMethods) {
-    const upperMethod = method.toUpperCase();
-    if (!endpointRules.allowedMethods.includes(upperMethod)) {
-      return { allowed: false, reason: "method not allowed" };
-    }
+  // Check allowed methods. An omitted list is the documented read-only default,
+  // NOT "unrestricted": canonical spec §9 makes this the single deliberate
+  // exception to §3's null-means-unrestricted rule, because an absent method list
+  // on an endpoint rule is far likelier to be an oversight than an intentional
+  // grant of DELETE. Do not "fix" this back to unrestricted for consistency with
+  // §3. An empty [] still denies every method, per §3.
+  const allowedMethods = endpointRules?.allowedMethods;
+  const permitted =
+    allowedMethods === undefined
+      ? READ_METHODS
+      : allowedMethods.map((m) => m.toUpperCase());
+  if (!permitted.includes(upperMethod)) {
+    return { allowed: false, reason: "method not allowed" };
+  }
+
+  // readOnly is checked last so an explicit allowedMethods denial keeps its more
+  // specific reason. An absent readOnly takes its schema default of true, matching
+  // the merge rules in spec §8: excluding absent booleans from the decision would
+  // invert it, letting a policy silent on readOnly permit writes. A policy that
+  // lists DELETE in allowedMethods while declaring itself read-only is
+  // contradictory, and the restrictive half wins.
+  const readOnly = policy.permissions.readOnly !== false;
+  if (readOnly && !READ_METHODS.includes(upperMethod)) {
+    return { allowed: false, reason: "method not allowed on a read-only policy" };
   }
 
   return { allowed: true };

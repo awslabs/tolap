@@ -141,7 +141,8 @@ public sealed class OpenFdaTests : IClassFixture<OpenFdaTests.RecordingsFixture>
         if (expected.TryGetProperty("rowCount", out var rowCount) && collectionPath is not null)
         {
             var coll = Walk(body, collectionPath.Split('.'));
-            coll.Value.ValueKind.Should().Be(JsonValueKind.Array);
+            coll.Should().NotBeNull($"the response should carry a collection at '{collectionPath}'");
+            coll!.Value.ValueKind.Should().Be(JsonValueKind.Array);
             coll.Value.GetArrayLength().Should().Be(rowCount.GetInt32());
         }
 
@@ -151,12 +152,13 @@ public sealed class OpenFdaTests : IClassFixture<OpenFdaTests.RecordingsFixture>
             var field = maskedSpec.GetProperty("field").GetString()!;
             var mask = maskedSpec.GetProperty("mask").GetString()!;
             var coll = Walk(body, cpath.Split('.'));
+            coll.Should().NotBeNull($"the response should carry a collection at '{cpath}'");
             var path = request.GetProperty("path").GetString()!;
             var fixturePath = Path.Combine(ScenarioHelpers.OpenFdaFixturesDir, Routes[$"GET {path}"]);
             using var origDoc = JsonDocument.Parse(File.ReadAllText(fixturePath));
             var origColl = Walk(origDoc.RootElement, cpath.Split('.'))!.Value;
 
-            var actuals = coll.Value.EnumerateArray().ToArray();
+            var actuals = coll!.Value.EnumerateArray().ToArray();
             var origs = origColl.EnumerateArray().ToArray();
             for (var i = 0; i < actuals.Length; i++)
             {

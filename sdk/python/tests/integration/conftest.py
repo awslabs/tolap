@@ -82,16 +82,23 @@ def db_dsn() -> str:
     return dsn
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def _seed_database(db_dsn: str) -> None:
-    """Reload schema.sql once per session so the test data is deterministic."""
+    """Reload schema.sql once per session so the test data is deterministic.
+
+    Deliberately **not** ``autouse``. An autouse session fixture is requested by
+    every test in this package, so its ``pytest.skip`` skipped the whole
+    integration session — the Postgres tests never ran for anyone without MySQL
+    installed, and vice versa. Seeding is pulled in by ``db_conn`` instead, so a
+    missing Postgres skips only the tests that actually need Postgres.
+    """
     sql = SCHEMA_PATH.read_text()
     with psycopg.connect(db_dsn, autocommit=True) as conn:
         conn.execute(sql)
 
 
 @pytest.fixture
-def db_conn(db_dsn: str):
+def db_conn(db_dsn: str, _seed_database: None):
     with psycopg.connect(db_dsn, row_factory=psycopg.rows.dict_row) as conn:
         yield conn
 
@@ -122,9 +129,15 @@ def mysql_conn_kwargs() -> dict:
     return kwargs
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="session")
 def _seed_mysql_database(mysql_conn_kwargs: dict) -> None:
-    """Reload schema_mysql.sql once per session."""
+    """Reload schema_mysql.sql once per session.
+
+    Not ``autouse``, for the same reason as ``_seed_database``: as an autouse
+    session fixture its skip took the Postgres tests and the DB-independent
+    KB/openFDA tests down with it whenever MySQL was unreachable. Pulled in by
+    ``mysql_conn`` so only MySQL tests depend on MySQL.
+    """
     raw = MYSQL_SCHEMA_PATH.read_text()
     # Strip line comments so we can naively split on ';'. Block comments are
     # not used in our schema file.
@@ -142,7 +155,7 @@ def _seed_mysql_database(mysql_conn_kwargs: dict) -> None:
 
 
 @pytest.fixture
-def mysql_conn(mysql_conn_kwargs: dict):
+def mysql_conn(mysql_conn_kwargs: dict, _seed_mysql_database: None):
     conn = pymysql.connect(**mysql_conn_kwargs, cursorclass=pymysql.cursors.DictCursor)
     try:
         yield conn

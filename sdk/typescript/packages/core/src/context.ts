@@ -73,11 +73,22 @@ export function normalizeTimestamp(value: string | undefined): string {
 
 /**
  * Produce a canonical JSON representation of a single policy for signing.
- * This excludes the `integrity` block (it cannot sign itself) and uses compact
- * JSON with recursively sorted keys and explicit nulls dropped.
+ *
+ * Excludes the `integrity` block (it cannot sign itself) and uses compact JSON with
+ * recursively sorted keys and explicit nulls dropped.
+ *
+ * Timestamps are normalized here for the same reason the envelope projection
+ * normalizes them (spec §1: "All signature computation uses this form and only this
+ * form", plus §2 rule 4/5): without it, `+00:00` and `Z` — and `.123456Z` versus
+ * `.123Z` — signed to different bytes on the policy-alone path while agreeing on the
+ * envelope path. A policy round-tripped through a transport that reformats its
+ * timestamps then failed its own integrity check with a generic signature error
+ * indistinguishable from tampering.
  */
 function canonicalize(policy: EffectivePolicy): string {
-  return JSON.stringify(deepSortKeys(stripIntegrity(policy)));
+  return JSON.stringify(
+    deepSortKeys(normalizePolicyTimestamps(stripIntegrity(policy))),
+  );
 }
 
 function stripIntegrity(policy: EffectivePolicy): Record<string, unknown> {
@@ -318,7 +329,19 @@ export function validatePolicy(
 
   const { algorithm } = policy.integrity;
   const payload = canonicalize(policy);
-  const expected = computeHmac(payload, secretKey, algorithm);
+
+  let expected: string;
+  try {
+    expected = computeHmac(payload, secretKey, algorithm);
+  } catch {
+    // An algorithm this SDK cannot verify is a validation FAILURE, never a thrown
+    // error that escapes an enforcement check. `ed25519` is in the schema's
+    // algorithm enum but unimplemented here, so a schema-valid policy reaches this
+    // path -- and a wrapper calling validatePolicy inside a try-less enforcement
+    // step would otherwise surface a crash instead of a denial. Mirrors
+    // validateContext, which already fails closed the same way.
+    return false;
+  }
 
   const sigBuf = Buffer.from(policy.integrity.signature, "base64");
   const expectedBuf = Buffer.from(expected, "base64");

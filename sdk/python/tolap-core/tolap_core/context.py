@@ -138,6 +138,12 @@ def _compute_signature(payload: str, secret_key: str, algorithm: SigningAlgorith
             digest = hmac.new(key_bytes, payload_bytes, hashlib.sha512).digest()
         case SigningAlgorithm.ed25519:
             raise NotImplementedError("Ed25519 signing requires an external library")
+        case _:
+            # An algorithm this SDK cannot compute must fail closed and say so.
+            # Without this arm the match simply fell through and `digest` was
+            # unbound, so the failure surfaced as an UnboundLocalError that named
+            # neither the algorithm nor the reason.
+            raise ValueError(f"unsupported signing algorithm: {algorithm!r}")
 
     return base64.b64encode(digest).decode("utf-8")
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from datetime import timedelta
 
 import pytest
@@ -533,3 +534,28 @@ class TestUnenforceableModeWarning:
             SecureMcpToolWrapper(SecureMcpServerOptions(signing_key=self.KEY))
 
         assert caplog.text == ""
+
+    def test_there_is_no_enforcement_mode_option(self) -> None:
+        """There is deliberately no mode that logs a violation and allows it anyway.
+
+        The TypeScript SDK's ``EnforcementMode`` has an ``AuditOnly`` member whose
+        doc-comment once promised "log violations but allow access" while the code
+        denied exactly like strict mode; the .NET SDK has a ``Permissive`` mode that
+        genuinely does grant access. Python has neither, and this pins that: adding a
+        mode field here would be a design change, and one shaped like an audit mode
+        would be a fail-open path of exactly the kind the hardening effort removed.
+
+        The opt-outs Python does have are all named on the options dataclass and all
+        warn at construction (tested above).
+        """
+        fields = {f.name for f in dataclasses.fields(SecureMcpServerOptions)}
+
+        assert not {name for name in fields if "mode" in name}
+        assert fields == {
+            "signing_key",
+            "signing_algorithm",
+            "enforce_signatures",
+            "enforce_expiry",
+            "allowed_tools",
+            "allow_unenforceable_shapes",
+        }

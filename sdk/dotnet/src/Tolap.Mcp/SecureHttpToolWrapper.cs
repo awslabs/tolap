@@ -77,10 +77,12 @@ public sealed class SecureHttpToolWrapper
         var raw = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
         // Parse → mutate → reserialize → reparse so we hand back an immutable JsonElement.
-        // Pipeline order per canonical-enforcement-spec.md section 4: hidden fields ->
-        // allowed fields -> masking -> result limit.
+        // The full canonical order per canonical-enforcement-spec.md section 4:
+        // row filters -> tag filters -> hidden fields -> allowed fields -> masking ->
+        // result limit.
         using var doc = JsonDocument.Parse(raw);
         var node = JsonNodeFromElement(doc.RootElement);
+        node = FilterRecords(node, args.CollectionPath, policy);
         node = StripHiddenFields(node, policy);
         node = ProjectAllowedFields(node, args.CollectionPath, policy);
         node = ApplyMaskingToBody(node, policy);
@@ -151,6 +153,96 @@ public sealed class SecureHttpToolWrapper
     }
 
     /// <summary>
+    /// Applies row filters and tag filters to the records in a response body.
+    /// </summary>
+    /// <remarks>
+    /// Steps 1 and 2 of the post-execution pipeline (canonical-enforcement-spec.md
+    /// section 4). These were previously absent from the HTTP path entirely, so
+    /// <c>rowFilters</c>, <c>deniedTags</c> and <c>allowedTags</c> were a silent no-op
+    /// over HTTP while the identical policy filtered correctly through the MCP and
+    /// database wrappers — and an empty <c>allowedTags</c>, which denies everything under
+    /// spec section 3, returned every record.
+    ///
+    /// <para>
+    /// Filtering targets the record collection — the array at
+    /// <paramref name="collectionPath"/>, or the body when the body <i>is</i> the
+    /// collection — rather than the transport envelope, matching how the allowed-field
+    /// projection and the result limit already locate records. Both steps delegate to
+    /// <see cref="EnforcementEngine"/> so the HTTP path cannot drift from the SQL path:
+    /// the fail-closed treatment of a missing field, the type-mismatch guards and the
+    /// bounded regex all come from the shared implementation.
+    /// </para>
+    /// </remarks>
+    private static object? FilterRecords(object? body, string? collectionPath, EffectivePolicy policy)
+    {
+        var hasRowFilters = policy.ObjectRules?.RowFilters is { Length: > 0 };
+        // Tested for null, not for emptiness: an empty allow-list denies every record
+        // (spec section 3), so a truthiness check here would discard the most restrictive
+        // possible rule.
+        var hasTagRules = policy.ObjectRules?.TagRules is not null;
+        if (!hasRowFilters && !hasTagRules)
+            return body;
+
+        if (collectionPath is null)
+            return FilterNode(body, policy);
+
+        var parts = collectionPath.Split('.');
+        object? cursor = body;
+        for (var i = 0; i < parts.Length - 1; i++)
+        {
+            if (cursor is not Dictionary<string, object?> d || !d.ContainsKey(parts[i]))
+                return body;
+            cursor = d[parts[i]];
+        }
+
+        var leaf = parts[^1];
+        if (cursor is Dictionary<string, object?> leafDict
+            && leafDict.TryGetValue(leaf, out var listObj)
+            && listObj is List<object?>)
+        {
+            leafDict[leaf] = FilterNode(listObj, policy);
+        }
+        return body;
+    }
+
+    /// <summary>
+    /// Runs the row and tag filters over a node that is expected to be a record array.
+    /// </summary>
+    /// <remarks>
+    /// A node that is not a list of records is returned untouched: a scalar or a single
+    /// object carries no collection to filter, and the pre-execution checks plus the
+    /// remaining pipeline steps still apply to it. Non-record entries inside a list are
+    /// preserved in place rather than dropped, so a heterogeneous array is not silently
+    /// truncated by a rule that cannot address it.
+    /// </remarks>
+    private static object? FilterNode(object? node, EffectivePolicy policy)
+    {
+        if (node is not List<object?> list)
+            return node;
+
+        var records = new List<Dictionary<string, object?>>(list.Count);
+        var nonRecords = new List<object?>();
+        foreach (var item in list)
+        {
+            if (item is Dictionary<string, object?> record)
+                records.Add(record);
+            else
+                nonRecords.Add(item);
+        }
+
+        if (records.Count == 0)
+            return node;
+
+        var kept = EnforcementEngine.ApplyRowFilters(records, policy);
+        kept = EnforcementEngine.FilterByTags(kept, policy);
+
+        var filtered = new List<object?>(kept.Count + nonRecords.Count);
+        filtered.AddRange(kept);
+        filtered.AddRange(nonRecords);
+        return filtered;
+    }
+
+    /// <summary>
     /// Removes hidden fields from a JSON response tree.
     /// </summary>
     /// <remarks>
@@ -163,36 +255,74 @@ public sealed class SecureHttpToolWrapper
     private static object? StripHiddenFields(object? node, EffectivePolicy policy)
         => EnforcementEngine.StripHiddenFieldsFromTree(node, policy);
 
+    /// <summary>
+    /// Applies every maskedFields rule to a (potentially nested) JSON body.
+    /// </summary>
+    /// <remarks>
+    /// Matching goes through <see cref="EnforcementEngine.FieldNameMatches"/>, the same
+    /// matcher hidden-field removal already used here via the shared core walker. That
+    /// accepts a rule's bare, table-qualified and dotted forms against a key's bare and
+    /// dotted forms, case-insensitively (spec section 4), so
+    /// <c>results.demographics.ssn</c>, <c>patients.ssn</c>, <c>SSN</c> and <c>ssn</c> all
+    /// reach an <c>ssn</c> key at any depth.
+    ///
+    /// <para>
+    /// Masking previously walked a literal dotted path from the body root instead, so a
+    /// bare rule matched a top-level key only and matching was case-sensitive: the
+    /// identical policy that masked an SSN through the MCP wrapper returned it in
+    /// cleartext over HTTP. A single matcher-driven pass replaces that walk — running both
+    /// would apply a rule twice to the same key, and a second <c>hash</c> pass would
+    /// digest the digest.
+    /// </para>
+    /// </remarks>
     private static object? ApplyMaskingToBody(object? node, EffectivePolicy policy)
     {
         var rules = policy.ObjectRules?.FieldRules?.MaskedFields;
         if (rules is null || rules.Length == 0) return node;
-        foreach (var rule in rules)
-        {
-            WalkAndMask(node, rule.Field.Split('.'), rule);
-        }
+
+        MaskByFieldName(node, rules);
         return node;
     }
 
-    private static void WalkAndMask(object? node, string[] parts, MaskingRule rule)
+    /// <summary>
+    /// Masks every key matching a rule under <see cref="EnforcementEngine"/>'s field-name
+    /// matcher, recursing into nested objects and arrays.
+    /// </summary>
+    /// <remarks>
+    /// A matched key is masked and <b>not</b> recursed into: the rule addressed that node,
+    /// so its subtree is replaced rather than walked. Recursion continues only through
+    /// unmatched keys.
+    /// </remarks>
+    private static void MaskByFieldName(object? node, MaskingRule[] rules)
     {
-        if (parts.Length == 0) return;
         if (node is List<object?> list)
         {
-            foreach (var item in list) WalkAndMask(item, parts, rule);
+            foreach (var item in list) MaskByFieldName(item, rules);
             return;
         }
-        if (node is Dictionary<string, object?> dict)
+
+        if (node is not Dictionary<string, object?> dict)
+            return;
+
+        foreach (var key in dict.Keys.ToList())
         {
-            var head = parts[0];
-            if (!dict.ContainsKey(head)) return;
-            if (parts.Length == 1)
+            // Most restrictive matching rule wins, ranked by disclosure, with an unknown
+            // mask type ranking above every known one (spec section 6).
+            MaskingRule? best = null;
+            foreach (var rule in rules)
             {
-                dict[head] = ApplyMask(dict[head], rule);
+                if (!EnforcementEngine.FieldNameMatches(rule.Field, key)) continue;
+                if (best is null || rule.MaskType.Restrictiveness() > best.MaskType.Restrictiveness())
+                    best = rule;
+            }
+
+            if (best is not null)
+            {
+                dict[key] = ApplyMask(dict[key], best);
             }
             else
             {
-                WalkAndMask(dict[head], parts[1..], rule);
+                MaskByFieldName(dict[key], rules);
             }
         }
     }

@@ -13,9 +13,30 @@ import type { EffectivePolicy } from "@tolap/core";
 export enum EnforcementMode {
   /** Enforce policies strictly -- deny access on any violation. */
   Strict = "strict",
-  /** Log violations but allow access (audit mode). */
+  /**
+   * Deny exactly like {@link Strict}, and additionally surface the decision for
+   * auditing.
+   *
+   * This does **NOT** grant access. A violation is denied -- `executeTool` throws --
+   * and the only difference from `Strict` is observability: the mode is reported on
+   * the {@link EnforcementDecision} passed to `onEnforcementDecision`, and the
+   * wrapper warns at construction. It is not a soft-launch or observe-only mode and
+   * must not be shipped as one.
+   *
+   * This comment previously described the mode as logging violations while granting
+   * access, which the implementation has never done. Making the code match that
+   * description would turn every denial into an allow -- a data leak -- so the comment
+   * was corrected instead. If an observe-but-permit capability is genuinely wanted it
+   * is a design change, not a doc fix, and no such mode exists today.
+   */
   AuditOnly = "audit-only",
-  /** Disable enforcement entirely. */
+  /**
+   * Disable enforcement entirely: the tool runs and its result is returned
+   * unfiltered, with no policy resolution, masking, or filtering.
+   *
+   * The only mode that actually grants unpoliced access. Intended for migration
+   * only; the wrapper warns loudly at construction.
+   */
   Disabled = "disabled",
 }
 

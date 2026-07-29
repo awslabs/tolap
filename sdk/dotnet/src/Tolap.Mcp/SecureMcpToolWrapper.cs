@@ -133,6 +133,111 @@ public sealed class SecureMcpToolWrapper
     }
 
     /// <summary>
+    /// Resolves the caller's policy, runs the pre-execution checks, and rewrites a SQL query so
+    /// the policy's restrictions reach the database.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An optional step that never replaces the post-execution pipeline, which stays mandatory
+    /// and stays the enforcement point (canonical-enforcement-spec.md section 4). What it adds
+    /// is that a row the policy excludes is not fetched and materialized before being discarded
+    /// (threat-model D2).
+    /// </para>
+    /// <para>
+    /// The object name comes from the query's own <c>FROM</c> clause when
+    /// <paramref name="objectName"/> is null, so an <c>allowedObjects</c> rule applies to the
+    /// table the query actually reads. Pair with
+    /// <see cref="ExecuteWithEnforcementAsync"/> — which still applies the pipeline — or with
+    /// <see cref="EnforcementEngine.ApplyRecordPipeline"/> directly.
+    /// </para>
+    /// </remarks>
+    /// <param name="mcpRequest">The inbound request carrying the caller's identity.</param>
+    /// <param name="sourceConnectionId">The source the policy is resolved against.</param>
+    /// <param name="sql">The query to check and rewrite.</param>
+    /// <param name="objectName">
+    /// The target object, or null to take it from the query's own <c>FROM</c> clause.
+    /// </param>
+    /// <param name="rewriter">The rewriter to use, or null for a default instance.</param>
+    /// <param name="dialect">
+    /// The engine <paramref name="sql"/> will run against (connector-spec.md section 5.1) —
+    /// yours to supply, since only you know which connection this is for. Null selects the
+    /// rewriter's own dialect, or <see cref="SqlDialect.Ansi"/>. An unrecognized value rewrites
+    /// nothing and reports every filter, leaving the post-execution pass to enforce them.
+    /// </param>
+    public async Task<SqlQueryPreparation> PrepareSqlQueryAsync(
+        object mcpRequest,
+        string sourceConnectionId,
+        string sql,
+        string? objectName = null,
+        ISqlQueryRewriter? rewriter = null,
+        SqlDialect? dialect = null)
+    {
+        rewriter ??= new SqlQueryRewriter();
+
+        if (string.IsNullOrWhiteSpace(sql))
+        {
+            return SqlQueryPreparation.Denied("query is empty", sql);
+        }
+
+        var policy = await ResolvePolicyAsync(mcpRequest, sourceConnectionId).ConfigureAwait(false);
+
+        if (!policy.Permissions.CanQuery)
+        {
+            return Refuse("query permission denied", sql);
+        }
+
+        var target = objectName ?? rewriter.ExtractTableName(sql);
+        if (target is not null)
+        {
+            var access = EnforcementEngine.ValidateAccess(target, policy);
+            if (!access.Allowed)
+            {
+                return Refuse(access.Reason ?? "access denied", sql);
+            }
+        }
+
+        if (!rewriter.ValidateQuery(sql, policy))
+        {
+            return Refuse("query references fields you do not have permission to access", sql);
+        }
+
+        var rewritten = rewriter.RewriteQuery(sql, policy, dialect);
+
+        return new SqlQueryPreparation(
+            Allowed: true,
+            DenialReason: null,
+            Query: rewritten,
+            Rewritten: !string.Equals(rewritten, sql, StringComparison.Ordinal),
+            UnpushableFilters: rewriter.UnpushableFilters(policy, dialect));
+
+        // Permissive mode allows the call, as it does for every other denial here, but the
+        // query is deliberately returned unrewritten: a mode whose contract is "log, do not
+        // block" must not narrow a result set either, or a migration would see rows disappear
+        // from a configuration documented as non-enforcing.
+        SqlQueryPreparation Refuse(string reason, string original)
+            => _options.EnforcementMode == EnforcementMode.Permissive
+                ? new SqlQueryPreparation(
+                    true, $"[permissive] {reason}", original, false, Array.Empty<RowFilter>())
+                : SqlQueryPreparation.Denied(reason, original);
+    }
+
+    /// <summary>
+    /// Resolves the effective policy for a request.
+    /// </summary>
+    private async Task<EffectivePolicy> ResolvePolicyAsync(object mcpRequest, string sourceConnectionId)
+    {
+        var (userId, tenantId) = _options.IdentityExtractor.ExtractIdentity(mcpRequest);
+        var resolvedSourceId = ResolveSourceConnectionId(sourceConnectionId);
+        var groups = await _options.IdentityResolver.GetGroupsForUserAsync(userId);
+        var roles = await _options.IdentityResolver.GetRolesForUserAsync(userId);
+
+        return await _options.PolicyStore.ResolveEffectivePolicyAsync(
+            userId, tenantId, resolvedSourceId,
+            _ => groups,
+            _ => roles);
+    }
+
+    /// <summary>
     /// Validates field access for a query before execution.
     /// </summary>
     public async Task<FieldAccessResult> ValidateFieldsAsync(

@@ -48,7 +48,11 @@ async function resolveWithExpiry(expiresAt: string | undefined) {
   return resolve(
     "user-002",
     "tenant-midwest-health",
-    "ds-kb-research",
+    // Inside kb-researcher.json's declared sourcePatterns (["kb:research:*",
+    // "kb:clinical:*"]). Resolution filters on those (canonical spec §9), so a
+    // source outside them would be excluded before merging and every case here
+    // would report deny-all regardless of the expiry under test.
+    "kb:research:trials",
     [assignment],
     definitions,
   );

@@ -18,16 +18,49 @@ export enum MaskType {
   Redact = "redact",
 }
 
+/**
+ * The row-filter comparison operators, spelled exactly as they appear on the wire.
+ *
+ * The enum is the public spelling of `policy-definition.schema.json`'s operator
+ * enum, and the two MUST agree member-for-member: a schema-valid operator that
+ * enforcement does not implement falls through to `rowPassesFilter`'s default arm
+ * and drops every row, so an administrator's working filter becomes a silent
+ * deny-all in one SDK while another SDK enforces it correctly. That divergence
+ * survives signature verification (the canonical payload covers the policy
+ * verbatim), which is precisely the class of drift the canonical spec exists to
+ * prevent -- so `types-branches.test.ts` asserts every member is reachable and
+ * enforceable.
+ */
 export enum FilterOperator {
   Equals = "equals",
   NotEquals = "notEquals",
   In = "in",
   NotIn = "notIn",
   GreaterThan = "greaterThan",
+  GreaterThanOrEqual = "greaterThanOrEqual",
   LessThan = "lessThan",
+  LessThanOrEqual = "lessThanOrEqual",
   Contains = "contains",
   StartsWith = "startsWith",
+  /**
+   * SQL `LIKE`: `%` matches any run of characters, `_` exactly one, `\` escapes
+   * the next character. Anchored (a full-value match, not a substring search) and
+   * case-sensitive, matching Postgres. Distinct from {@link Matches}, which is a
+   * regular expression, and from {@link Contains}, which is an unanchored
+   * substring test.
+   */
+  Like = "like",
+  NotLike = "notLike",
   Matches = "matches",
+  /**
+   * The field is present on the row and holds null. A row *missing* the field is
+   * dropped instead of satisfying this -- "absent" and "present and null" are
+   * different statements (spec §7).
+   */
+  IsNull = "isNull",
+  IsNotNull = "isNotNull",
+  /** Inclusive range over `values[0]`..`values[1]`, in the order written. */
+  Between = "between",
 }
 
 export enum AssigneeType {

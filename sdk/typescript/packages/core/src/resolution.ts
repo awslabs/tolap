@@ -70,6 +70,64 @@ export function globMatch(pattern: string, value: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Source-pattern matching (canonical spec §10)
+// ---------------------------------------------------------------------------
+
+/**
+ * Match a `sourcePatterns` glob against a `sourceConnectionId`.
+ *
+ * A deliberately *different* glob dialect from {@link globMatch}: source
+ * identifiers are `category:namespace:name`, so `*` matches within one segment and
+ * must not cross the `:` separator (spec §10). `globMatch` is `/`-oriented — its
+ * `*` expands to `[^/]*`, which crosses a colon freely — so reusing it would let
+ * `db:*` capture every database source in every namespace, including ones the
+ * administrator deliberately left out. Mirrors .NET's
+ * `PolicyResolutionEngine.GlobMatch` (`[^:]*`) rather than its
+ * `EnforcementEngine.GlobMatch` (`.*`).
+ *
+ * Matching is case-insensitive. Every other character is literal, so a `.` or `+`
+ * in a pattern is not a regex operator.
+ */
+export function sourcePatternMatch(pattern: string, value: string): boolean {
+  const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, (ch) =>
+    ch === "*" ? "[^:]*" : `\\${ch}`,
+  );
+  try {
+    return new RegExp(`^${escaped}$`, "i").test(value);
+  } catch {
+    // A pattern that will not compile excludes its policy from the merge rather
+    // than throwing out of resolution. A non-match is the fail-closed outcome
+    // here: the policy simply does not apply.
+    /* c8 ignore next 2 -- every metacharacter is escaped above, so the compiled
+       source cannot be invalid; kept as a guard rather than a reachable path. */
+    return false;
+  }
+}
+
+/**
+ * Whether a definition applies to the source being resolved (spec §10).
+ *
+ * Absent or `[]` means source-agnostic: the policy applies everywhere. Note this
+ * is the opposite of the `null`-vs-`[]` rule for *allow-lists* (spec §3) — here
+ * §10 assigns absent and empty the same "applies to all" meaning, because the
+ * common case is a policy that is genuinely not source-scoped.
+ *
+ * `appliesToAll` short-circuits the check, matching .NET, so a policy asserting
+ * "all sources" is not excluded by a leftover pattern list.
+ */
+function matchesSourcePatterns(
+  definition: PolicyDefinition,
+  sourceConnectionId: string,
+): boolean {
+  if (definition.appliesToAll) return true;
+  const patterns = definition.sourcePatterns;
+  if (patterns === undefined || patterns.length === 0) return true;
+  return patterns.some((pattern) =>
+    sourcePatternMatch(pattern, sourceConnectionId),
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Identity resolution types
 // ---------------------------------------------------------------------------
 
@@ -183,11 +241,14 @@ export async function resolve(
       assignmentMatchesIdentity(a, userId, groups, roles),
   );
 
-  // Look up definitions
+  // Look up definitions, then filter by sourcePatterns (canonical spec §10): a
+  // definition whose patterns do not cover this source is excluded BEFORE merging,
+  // so its rules cannot fold into an effective policy for a source it was never
+  // authored for.
   const policies: PolicyDefinition[] = [];
   for (const assignment of matching) {
     const def = defMap.get(assignment.policyName);
-    if (def) {
+    if (def && matchesSourcePatterns(def, sourceConnectionId)) {
       policies.push(def);
     }
   }
