@@ -19,11 +19,14 @@ import {
   validateEndpoint,
   validateExpiry,
   validateFieldAccess,
+  validateWrite,
   SqlQueryRewriter,
   SqlDialect,
   type AccessResult,
   type RowFilter,
   type SecurityContext,
+  type ValidateWriteOptions,
+  type WriteOperation,
 } from "@tolap/core";
 
 export interface SecureContextWrapperOptions {
@@ -156,6 +159,73 @@ export class SecureContextToolWrapper {
       if (!r.allowed) return r;
     }
     return { allowed: true };
+  }
+
+  /**
+   * Validate a write before it is issued (connector spec §4).
+   *
+   * The write counterpart to {@link preExecute}. Validates the context, then runs
+   * the four required pre-write checks: the operation's permission and the
+   * `readOnly` ceiling, the target object, every field in the payload, and the
+   * policy's row filters against `options.targetRow`.
+   *
+   * Fails closed on the whole write: one unwritable field denies the operation
+   * rather than being stripped so the rest can proceed (§4.4).
+   *
+   * Omitting `options.targetRow` on an update or delete while the policy carries row
+   * filters yields `write target unverifiable`, never an allow — read the row first
+   * and pass it here, or push the filters into the statement's `WHERE`.
+   *
+   * A permitted write that returns data is a *read* of that data: pass the response
+   * through {@link postExecute} (§4.5).
+   */
+  preWrite(
+    context: SecurityContext,
+    operation: WriteOperation | string,
+    objectName?: string,
+    payload?: unknown,
+    options: ValidateWriteOptions = {},
+  ): AccessResult {
+    const ctxResult = this.validateSecurityContext(context);
+    if (!ctxResult.allowed) return ctxResult;
+
+    return validateWrite(
+      operation,
+      objectName,
+      payload,
+      context.effectivePolicy,
+      options,
+    );
+  }
+
+  /**
+   * Validate a write, issue it, and enforce the policy on anything it returns.
+   *
+   * Throws before `writeFn` is called if the write is denied, so a refused write
+   * never reaches the source.
+   *
+   * Whatever the write returns is treated as a read of that data and goes through
+   * the full post-execution pipeline (§4.5) — a masked field comes back masked even
+   * though the caller just wrote it, and a hidden field does not appear at all. A
+   * write that returns nothing (`undefined` or `null`) is passed through as-is rather
+   * than denied as an unenforceable shape: there is no data to enforce a policy over.
+   */
+  async executeWriteWithEnforcement(
+    context: SecurityContext,
+    operation: WriteOperation | string,
+    writeFn: () => Promise<unknown> | unknown,
+    objectName?: string,
+    payload?: unknown,
+    options: ValidateWriteOptions = {},
+  ): Promise<unknown> {
+    const pre = this.preWrite(context, operation, objectName, payload, options);
+    if (!pre.allowed) {
+      throw new Error(`Access denied: ${pre.reason}`);
+    }
+
+    const result = await writeFn();
+    if (result === undefined || result === null) return result;
+    return this.postExecute(context, result);
   }
 
   /**

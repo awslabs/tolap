@@ -13,8 +13,9 @@
  * A caller MUST still run the post pass over whatever the rewritten query returns:
  *
  * - A rewriter cannot express every filter. `contains`, `startsWith`, and `matches`
- *   have no portable SQL form and are never pushed; {@link unpushableFilters}
- *   reports them.
+ *   have no portable SQL form and are never pushed, and `like`/`notLike` are pushed
+ *   only where the dialect's `LIKE` is case-sensitive;
+ *   {@link SqlQueryRewriter.unpushableFilters} reports them.
  * - A rewriter cannot know whether the query it was handed is the query that ran.
  *
  * ## Dialect
@@ -114,35 +115,67 @@ export const DEFAULT_DIALECT = SqlDialect.Ansi;
 type RowLimitForm = "limit" | "top";
 
 /**
- * The emitted-text rules for one engine.
+ * The emitted-text rules for one engine, plus the one semantic it must promise.
  *
- * Only *text* lives here. Which operators are pushable, which values are refused, and
- * every fail-closed rule are profile-independent by design (connector spec §5.1): a
- * filter unpushable in one profile is unpushable in all of them, so selecting a
- * profile never changes which rows a policy admits.
+ * Almost everything here is *text*: which values are refused and every fail-closed
+ * rule are profile-independent by design (connector spec §5.1), so selecting a profile
+ * never changes which rows a policy admits.
+ *
+ * {@link DialectProfile.caseSensitiveLike} is the single exception, and it is not a
+ * text rule — it records whether the engine's `LIKE` compares the way the post-fetch
+ * pass does. A profile that cannot promise that declines to push `like`/`notLike` at
+ * all, which keeps the invariant above intact by *narrowing* what is pushed rather
+ * than by emitting a comparison whose meaning the profile does not know.
  */
 interface DialectProfile {
   readonly dialect: SqlDialect;
   readonly quoteOpen: string;
   readonly quoteClose: string;
   readonly rowLimit: RowLimitForm;
+  /**
+   * Whether this engine's `LIKE` is case-sensitive, and therefore whether
+   * `like`/`notLike` may be pushed down at all (spec §4).
+   *
+   * The post-fetch pass compares case-SENSITIVELY and is engine-independent, but a
+   * pushed-down `LIKE` inherits the *column's* collation:
+   *
+   * ```
+   * postgres:  SELECT 'ALICE JONES' LIKE 'alice%'  ->  false
+   * mysql:     SELECT 'ALICE JONES' LIKE 'alice%'  ->  true
+   * ```
+   *
+   * so on MySQL a `name notLike 'alice%'` filter drops `'ALICE JONES'` when pushed
+   * down and keeps it when applied post-fetch. That is a difference in which *real*
+   * records a caller sees, not an edge-case null, so the profiles that cannot promise
+   * a case-sensitive comparison decline the operator entirely.
+   */
+  readonly caseSensitiveLike: boolean;
 }
 
 const DIALECT_PROFILES: Readonly<Record<SqlDialect, DialectProfile>> = {
+  // ansi is the strict intersection and makes no collation promise at all, so it takes
+  // the same answer as the engines that are known to be insensitive.
   [SqlDialect.Ansi]: {
     dialect: SqlDialect.Ansi, quoteOpen: '"', quoteClose: '"', rowLimit: "limit",
+    caseSensitiveLike: false,
   },
   [SqlDialect.Postgres]: {
     dialect: SqlDialect.Postgres, quoteOpen: '"', quoteClose: '"', rowLimit: "limit",
+    caseSensitiveLike: true,
   },
   [SqlDialect.Trino]: {
     dialect: SqlDialect.Trino, quoteOpen: '"', quoteClose: '"', rowLimit: "limit",
+    caseSensitiveLike: true,
   },
+  // MySQL's default collation, utf8mb4_0900_ai_ci, is case- and accent-insensitive;
+  // SQL Server's default is case-insensitive too.
   [SqlDialect.MySql]: {
     dialect: SqlDialect.MySql, quoteOpen: "`", quoteClose: "`", rowLimit: "limit",
+    caseSensitiveLike: false,
   },
   [SqlDialect.SqlServer]: {
     dialect: SqlDialect.SqlServer, quoteOpen: "[", quoteClose: "]", rowLimit: "top",
+    caseSensitiveLike: false,
   },
 };
 
@@ -1005,9 +1038,11 @@ export class SqlQueryRewriter {
    * null — those are different statements.)
    *
    * Returns undefined — leaving the filter to the post-fetch pass — for a field
-   * name that is not a safe identifier, a value with no portable literal form, and
-   * the operators with no portable SQL form. That is the safe direction: an omitted
-   * condition costs transfer, never disclosure.
+   * name that is not a safe identifier, a value with no portable literal form, the
+   * operators with no portable SQL form, and `like`/`notLike` on a dialect whose
+   * collation could make the comparison case-insensitive
+   * ({@link buildLikeCondition}). That is the safe direction: an omitted condition
+   * costs transfer, never disclosure.
    *
    * It NEVER returns a neutral predicate for a filter it failed to build. a prior implementation
    * emitted `1=1` for a malformed `BETWEEN`, converting the most restrictive
@@ -1065,9 +1100,9 @@ export class SqlQueryRewriter {
         return this.buildInCondition(column, filter, true);
 
       case FilterOperator.Like:
-        return this.buildLikeCondition(column, filter.value, false);
+        return this.buildLikeCondition(column, filter.value, profile, false);
       case FilterOperator.NotLike:
-        return this.buildLikeCondition(column, filter.value, true);
+        return this.buildLikeCondition(column, filter.value, profile, true);
 
       case FilterOperator.IsNull:
         return `${column} IS NULL`;
@@ -1162,21 +1197,67 @@ export class SqlQueryRewriter {
   }
 
   /**
-   * Render a `LIKE` or `NOT LIKE` condition.
+   * Render a `LIKE` or `NOT LIKE` condition, or decline when the profile cannot
+   * guarantee the comparison means what the post-fetch pass means.
    *
-   * The pattern is already a SQL `LIKE` pattern, so it passes through as a literal
-   * with no wildcard translation. A pattern containing a backslash is declined by
-   * {@link formatLiteral}: MySQL treats one as a string escape by default while
+   * **The profile must guarantee a case-sensitive `LIKE`, or nothing is pushed**
+   * (spec §4). The post-fetch pass compares case-sensitively and is
+   * engine-independent, but a pushed-down `LIKE` inherits the *column's* collation:
+   * `'ALICE JONES' LIKE 'alice%'` is false on Postgres and **true** under MySQL's
+   * default `utf8mb4_0900_ai_ci`. So on MySQL a `name notLike 'alice%'` filter drops
+   * `'ALICE JONES'` when pushed down and keeps it when applied post-fetch — a
+   * difference in which *real* records the caller sees. `postgres` and `trino` may
+   * push; `mysql`, `sqlserver` and `ansi` may not (`ansi` because the strict
+   * intersection promises no collation, `sqlserver` because its default is
+   * insensitive too).
+   *
+   * A `COLLATE` clause *can* force the comparison, and is deliberately **not**
+   * emitted: the correct collation name depends on the column's character set, which
+   * a rewriter holding only a policy and a query string does not know, and guessing
+   * wrong either fails the query or silently changes the comparison again. Declining
+   * is the same move as refusing a value containing a backslash — where the
+   * pushed-down form cannot be guaranteed to mean what the post-fetch form means, it
+   * is not emitted.
+   *
+   * The decline is unconditional for those profiles rather than case-by-case, so
+   * whether a filter is pushed is a plain function of its operator and the dialect. A
+   * null pattern would render as a collation-independent `1 = 0`, but exempting it
+   * would make the rule read "not pushed, except sometimes" for no gain beyond one
+   * unreachable optimization.
+   *
+   * Otherwise: the pattern is already a SQL `LIKE` pattern, so it passes through as a
+   * literal with no wildcard translation. A pattern containing a backslash is declined
+   * by {@link formatLiteral}: MySQL treats one as a string escape by default while
    * Postgres does not, so the same text would mean different things in the two
    * engines. That also declines the escape form `like '100\%'`, which is correct —
    * the post pass handles it, and emitting text whose meaning is dialect-dependent
    * would make the two paths disagree.
+   *
+   * `NOT LIKE` gets an `IS NULL` arm, exactly as `<>` and `NOT IN` do.
+   * `NULL NOT LIKE 'x'` is unknown — therefore not true — for the same reason
+   * `NULL <> 'x'` is, so the bare form drops a null-valued row while the post-fetch
+   * pass keeps it (spec §7 drops rows whose field is *absent*, not rows whose value
+   * is null). Omitting the arm for this one negative operator while emitting it for
+   * the other two would make the same policy's row set depend on which operator the
+   * author happened to choose. Since only the case-sensitive profiles push the
+   * operator at all, that arm is only ever emitted for `postgres` and `trino`.
    */
   private buildLikeCondition(
     column: string,
     value: unknown,
+    profile: DialectProfile,
     negated: boolean,
   ): string | undefined {
+    if (!profile.caseSensitiveLike) {
+      this.diagnose(
+        `row filter is not pushed into SQL: the ${profile.dialect} dialect does not ` +
+          "guarantee a case-sensitive LIKE, so a pushed-down comparison could select " +
+          "different rows than the case-sensitive post-fetch pass; it is enforced " +
+          "after the fetch instead",
+      );
+      return undefined;
+    }
+
     if (value === undefined || value === null) {
       // Post-fetch, a null pattern is a non-match for both like and notLike.
       return ALWAYS_FALSE;
@@ -1185,9 +1266,10 @@ export class SqlQueryRewriter {
     const literal = this.formatLiteral(value);
     if (literal === undefined) return undefined;
 
-    // NOT LIKE needs no IS NULL arm: SQL and the post pass agree that a
-    // null-valued row is dropped.
-    return negated ? `${column} NOT LIKE ${literal}` : `${column} LIKE ${literal}`;
+    return negated
+      // NOT LIKE drops a null-valued row; the post-fetch pass keeps it.
+      ? `(${column} NOT LIKE ${literal} OR ${column} IS NULL)`
+      : `${column} LIKE ${literal}`;
   }
 
   /**

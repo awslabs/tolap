@@ -107,6 +107,14 @@ function policyOf(opts: {
 
 const rewriter = new SqlQueryRewriter();
 
+/**
+ * A rewriter that names Postgres explicitly, needed wherever `like`/`notLike` must be
+ * pushable: a pushed-down `LIKE` inherits the column's collation, so only a dialect
+ * that promises a case-sensitive comparison may push it. The default dialect makes no
+ * such promise and declines.
+ */
+const pgRewriter = new SqlQueryRewriter({ dialect: SqlDialect.Postgres });
+
 async function rows(sql: string): Promise<Array<Record<string, unknown>>> {
   const result = await client.query(sql);
   return result.rows as Array<Record<string, unknown>>;
@@ -312,7 +320,7 @@ describe("pushed-down and post-fetch paths select identical rows", () => {
       columns: "id, region",
     },
     {
-      name: "notLike over a NULLABLE column (no IS NULL arm -- both drop the nulls)",
+      name: "notLike over a NULLABLE column (the IS NULL arm keeps the nulls)",
       filter: { field: "nickname", operator: FilterOperator.NotLike, value: "J%" },
       columns: "id, nickname",
     },
@@ -335,7 +343,10 @@ describe("pushed-down and post-fetch paths select identical rows", () => {
       const policy = policyOf({ rowFilters: [filter] });
       const original = `SELECT ${columns} FROM patients ORDER BY id`;
 
-      const { query, unpushableFilters } = rewriter.rewriteQuery(original, policy);
+      // Postgres is named explicitly because these run against Postgres: `like` and
+      // `notLike` are only pushable on a dialect whose LIKE is case-sensitive, and the
+      // default dialect makes no collation promise.
+      const { query, unpushableFilters } = pgRewriter.rewriteQuery(original, policy);
       // Every operator here has a portable SQL form, so all of them push down.
       expect(unpushableFilters, `${name} should be pushable`).toEqual([]);
       expect(query, `${name} should have been rewritten`).not.toBe(original);
@@ -389,6 +400,74 @@ describe("pushed-down and post-fetch paths select identical rows", () => {
     const rewritten = await rows(query);
 
     expect(rewritten.length).toBeGreaterThan(bare.length);
+  });
+
+  it("notLike on a nullable column returns MORE rows than bare SQL would", async () => {
+    if (!dbReady) return;
+
+    // The same demonstration for the third negative operator. `NULL NOT LIKE 'x'` is
+    // unknown -- therefore not true -- for exactly the same reason `NULL <> 'x'` is, so
+    // bare SQL loses the null-nickname rows while the rewritten form keeps them.
+    //
+    // Postgres only, deliberately: a pushed-down LIKE inherits the column's collation
+    // and MySQL's default is case-insensitive, so this comparison is engine-dependent
+    // there. That is a separate matter from the null handling proven here.
+    const bare = await rows(
+      "SELECT id FROM patients WHERE nickname NOT LIKE 'J%' ORDER BY id",
+    );
+    const { query, unpushableFilters } = pgRewriter.rewriteQuery(
+      "SELECT id, nickname FROM patients ORDER BY id",
+      policyOf({
+        rowFilters: [
+          { field: "nickname", operator: FilterOperator.NotLike, value: "J%" },
+        ],
+      }),
+    );
+    expect(unpushableFilters).toEqual([]);
+    expect(query).toContain("IS NULL");
+    const rewritten = await rows(query);
+
+    expect(rewritten.length).toBeGreaterThan(bare.length);
+  });
+
+  it("all three negative operators select the same rows, pushed down and post-fetch", async () => {
+    if (!dbReady) return;
+
+    // Regression guard for the asymmetry: `notLike` omitted the IS NULL arm that
+    // `notEquals` and `notIn` carried, so the same policy's row set depended on which
+    // negative operator the author chose. Each filter below excludes exactly 'Johnny'.
+    const negatives: RowFilter[] = [
+      { field: "nickname", operator: FilterOperator.NotEquals, value: "Johnny" },
+      { field: "nickname", operator: FilterOperator.NotIn, values: ["Johnny"] },
+      { field: "nickname", operator: FilterOperator.NotLike, value: "Johnn_" },
+    ];
+    const original = "SELECT id, nickname FROM patients ORDER BY id";
+    const answers: number[][] = [];
+
+    for (const filter of negatives) {
+      const policy = policyOf({ rowFilters: [filter] });
+      const { query, unpushableFilters } = pgRewriter.rewriteQuery(original, policy);
+
+      expect(unpushableFilters, `${filter.operator} should be pushable`).toEqual([]);
+      // Every negative carries the arm, so the database keeps the null rows too.
+      expect(query, `${filter.operator} needs the arm`).toContain("IS NULL");
+
+      const pushedDown = ids(await rows(query));
+      const postFetch = ids(applyRowFilters(await rows(original), policy));
+
+      expect(pushedDown, `${filter.operator}: pushed-down vs post-fetch`).toEqual(
+        postFetch,
+      );
+      answers.push(pushedDown);
+    }
+
+    // And the three operators agree with EACH OTHER, which is the actual asymmetry.
+    expect(answers[1]).toEqual(answers[0]);
+    expect(answers[2]).toEqual(answers[0]);
+    // Non-vacuous: the null-nickname rows survive and at least one row was excluded.
+    const all = ids(await rows(original));
+    expect(answers[0].length).toBeGreaterThan(0);
+    expect(answers[0].length).toBeLessThan(all.length);
   });
 });
 

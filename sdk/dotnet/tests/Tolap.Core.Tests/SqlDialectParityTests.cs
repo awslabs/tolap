@@ -88,6 +88,9 @@ public class SqlDialectParityTests
             case "like":
                 rowFilters = [new("region", FilterOperator.Like, Value: "us-%")];
                 break;
+            case "notlike":
+                rowFilters = [new("region", FilterOperator.NotLike, Value: "us-%")];
+                break;
             case "backslash":
                 rowFilters = Eq("region", @"us\' OR 1=1 --");
                 break;
@@ -190,7 +193,22 @@ public class SqlDialectParityTests
         data.Add(@"notin-mysql", @"SELECT a FROM t", @"notin_regions", @"mysql", @"SELECT a FROM t WHERE (`region` NOT IN ('eu-west') OR `region` IS NULL)");
         data.Add(@"between-mysql", @"SELECT a FROM t", @"between", @"mysql", @"SELECT a FROM t WHERE `age` BETWEEN 18 AND 65");
         data.Add(@"isnull-mysql", @"SELECT a FROM t", @"isnull", @"mysql", @"SELECT a FROM t WHERE `deleted_at` IS NULL");
-        data.Add(@"like-mysql", @"SELECT a FROM t", @"like", @"mysql", @"SELECT a FROM t WHERE `region` LIKE 'us-%'");
+        // like/notLike, every profile x both operators. The emitted text is the whole point
+        // of the case: `postgres`/`trino` push a real LIKE, and `mysql`, `sqlserver` and
+        // `ansi` emit the query untouched because their collation could make the comparison
+        // case-insensitive, which would select different rows than the case-sensitive
+        // post-execution pass (spec section 4). A declined filter is reported unpushable
+        // and enforced post-fetch.
+        data.Add(@"like-postgres", @"SELECT a FROM t", @"like", @"postgres", @"SELECT a FROM t WHERE ""region"" LIKE 'us-%'");
+        data.Add(@"like-trino", @"SELECT a FROM t", @"like", @"trino", @"SELECT a FROM t WHERE ""region"" LIKE 'us-%'");
+        data.Add(@"like-mysql", @"SELECT a FROM t", @"like", @"mysql", @"SELECT a FROM t");
+        data.Add(@"like-sqlserver", @"SELECT a FROM t", @"like", @"sqlserver", @"SELECT a FROM t");
+        data.Add(@"like-ansi", @"SELECT a FROM t", @"like", @"ansi", @"SELECT a FROM t");
+        data.Add(@"notlike-postgres", @"SELECT a FROM t", @"notlike", @"postgres", @"SELECT a FROM t WHERE (""region"" NOT LIKE 'us-%' OR ""region"" IS NULL)");
+        data.Add(@"notlike-trino", @"SELECT a FROM t", @"notlike", @"trino", @"SELECT a FROM t WHERE (""region"" NOT LIKE 'us-%' OR ""region"" IS NULL)");
+        data.Add(@"notlike-mysql", @"SELECT a FROM t", @"notlike", @"mysql", @"SELECT a FROM t");
+        data.Add(@"notlike-sqlserver", @"SELECT a FROM t", @"notlike", @"sqlserver", @"SELECT a FROM t");
+        data.Add(@"notlike-ansi", @"SELECT a FROM t", @"notlike", @"ansi", @"SELECT a FROM t");
         data.Add(@"backslash-mysql", @"SELECT a FROM t", @"backslash", @"mysql", @"SELECT a FROM t");
         data.Add(@"backslash-ansi", @"SELECT a FROM t", @"backslash", @"ansi", @"SELECT a FROM t");
         data.Add(@"backslash-sqlserver", @"SELECT a FROM t", @"backslash", @"sqlserver", @"SELECT a FROM t");
@@ -216,6 +234,56 @@ public class SqlDialectParityTests
             .Should().Be(expected, $"case {caseId} must match the cross-SDK corpus");
     }
 
+    /// <summary>
+    /// (case id, policy spec, dialect, how many filters all three SDKs must report as
+    /// unpushable).
+    /// </summary>
+    /// <remarks>
+    /// The emitted text and this report are two halves of one contract: a filter that
+    /// vanishes from the SQL without being reported would be a silent loss of the
+    /// optimization at best, and at worst an integrator's "fully pushed down" assertion
+    /// passing while the database returns unfiltered rows. Duplicated verbatim in all three
+    /// SDKs alongside <see cref="ParityCorpus"/>.
+    /// </remarks>
+    public static TheoryData<string, string, string, int> UnpushableParityCorpus()
+    {
+        var data = new TheoryData<string, string, string, int>();
+        // like/notLike: pushed on the case-sensitive profiles, reported on the others.
+        data.Add(@"like-postgres", @"like", @"postgres", 0);
+        data.Add(@"like-trino", @"like", @"trino", 0);
+        data.Add(@"like-mysql", @"like", @"mysql", 1);
+        data.Add(@"like-sqlserver", @"like", @"sqlserver", 1);
+        data.Add(@"like-ansi", @"like", @"ansi", 1);
+        data.Add(@"notlike-postgres", @"notlike", @"postgres", 0);
+        data.Add(@"notlike-trino", @"notlike", @"trino", 0);
+        data.Add(@"notlike-mysql", @"notlike", @"mysql", 1);
+        data.Add(@"notlike-sqlserver", @"notlike", @"sqlserver", 1);
+        data.Add(@"notlike-ansi", @"notlike", @"ansi", 1);
+        // The decline paths that were already dialect-independent, held here so the two
+        // kinds of decline are asserted by the same mechanism.
+        data.Add(@"contains-mysql", @"contains", @"mysql", 1);
+        data.Add(@"contains-postgres", @"contains", @"postgres", 1);
+        data.Add(@"backslash-postgres", @"backslash", @"postgres", 1);
+        data.Add(@"backslash-mysql", @"backslash", @"mysql", 1);
+        data.Add(@"equals-postgres", @"us_filter", @"postgres", 0);
+        data.Add(@"equals-mysql", @"us_filter", @"mysql", 0);
+        // An unrecognized dialect rewrites nothing, so every filter is reported.
+        data.Add(@"like-unknown", @"like", @"oracle", 1);
+        data.Add(@"equals-unknown", @"us_filter", @"oracle", 1);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(UnpushableParityCorpus))]
+    public void TheUnpushableReport_MatchesTheCrossSdkCorpus(
+        string caseId, string spec, string dialect, int expectedCount)
+    {
+        var rewriter = new SqlQueryRewriter();
+
+        rewriter.UnpushableFilters(PolicyFor(spec), Dialect(dialect))
+            .Should().HaveCount(expectedCount, $"case {caseId} must match the cross-SDK corpus");
+    }
+
     [Fact]
     public void TheCorpus_CoversEveryProfile_AndBothDeclinePaths()
     {
@@ -228,10 +296,38 @@ public class SqlDialectParityTests
     }
 
     [Fact]
+    public void TheLikeGate_IsCoveredForEveryProfile_AndBothOperators()
+    {
+        // like/notLike are the one operator pair whose *pushability* depends on the
+        // dialect, so the corpus must state an answer for all five profiles rather than
+        // sampling one or two.
+        string[] every = ["ansi", "postgres", "trino", "mysql", "sqlserver"];
+
+        foreach (var spec in new[] { "like", "notlike" })
+        {
+            var emitted = ParityCorpus()
+                .Where(row => (string)row[2]! == spec && (string)row[3]! != "oracle")
+                .Select(row => (string)row[3]!)
+                .ToHashSet();
+            var reported = UnpushableParityCorpus()
+                .Where(row => (string)row[1]! == spec && (string)row[2]! != "oracle")
+                .Select(row => (string)row[2]!)
+                .ToHashSet();
+
+            emitted.Should().Contain(every, $"{spec} text must cover every profile");
+            reported.Should().Contain(every, $"{spec} report must cover every profile");
+        }
+    }
+
+    [Fact]
     public void EveryCaseId_IsUnique()
     {
         var ids = ParityCorpus().Select(row => (string)row[0]!).ToList();
 
         ids.Should().OnlyHaveUniqueItems();
+
+        var unpushableIds = UnpushableParityCorpus().Select(row => (string)row[0]!).ToList();
+
+        unpushableIds.Should().OnlyHaveUniqueItems();
     }
 }

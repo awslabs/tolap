@@ -296,13 +296,15 @@ describe("notLike", () => {
     expect(passes("a", "us-east", notLike("us-%"))).toBe(false);
   });
 
-  it("a stored null is a non-match, not 'unlike the pattern' (spec §7)", () => {
-    // The operator this is easiest to get wrong. SQL evaluates `NULL NOT LIKE 'x'`
-    // to NULL, which does not retain the row; reading a null as "not like" is the
-    // same fail-open bug the spec records for notEquals/notIn on a missing field,
-    // one level down. A filter written to exclude internal-% records must not keep
-    // every record whose name is null.
-    expect(passes("a", null, notLike("internal-%"))).toBe(false);
+  it("a stored null is KEPT, exactly as notEquals and notIn keep it (spec §7)", () => {
+    // Bare SQL `NULL NOT LIKE 'x'` is unknown and would drop the row, which is
+    // precisely why the rewriter emits `(col NOT LIKE 'x' OR col IS NULL)` -- so the
+    // pushed-down query and this pass select the same rows (spec §4). Dropping the
+    // row here is the divergence: it would make `notLike` disagree with its two
+    // sibling negatives for no reason the policy expresses.
+    //
+    // Distinct from the ABSENT-field rule asserted in the next case, which drops.
+    expect(passes("a", null, notLike("internal-%"))).toBe(true);
   });
 
   it("a row missing the field is dropped, not retained (spec §7)", () => {

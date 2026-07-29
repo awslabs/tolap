@@ -147,6 +147,15 @@ NESTED_PATIENTS = [
 
 STATUS_PATH = re.compile(r"^/status/(\d{3})$")
 
+# /redirect/<code>?to=<target> issues a real 3xx to <target>. Exists so a wrapper's
+# redirect handling can be tested over a socket: a permitted endpoint that redirects
+# to a denied one must not bypass the endpoint rules (connector-spec.md section 6).
+REDIRECT_PATH = re.compile(r"^/redirect/(30[1278])$")
+
+# /redirect-loop bounces to itself, so a wrapper that follows redirects without a hop
+# limit spins rather than failing.
+LOOP_PATH = "/redirect-loop"
+
 
 class TestApiHandler(BaseHTTPRequestHandler):
     """Request handler for the TOLAP test API."""
@@ -235,6 +244,28 @@ class TestApiHandler(BaseHTTPRequestHandler):
         if match:
             code = int(match.group(1))
             self._send_json(code, {"error": {"code": code, "message": "synthetic"}})
+            return
+
+        match = REDIRECT_PATH.match(path)
+        if match:
+            # Defaults to /admin/audit so the common case is the one that matters: a
+            # permitted endpoint redirecting to one the policy denies.
+            target = query.get("to", ["/admin/audit"])[0]
+            body = json.dumps({"redirectedTo": target}).encode("utf-8")
+            self.send_response(int(match.group(1)))
+            self.send_header("Location", target)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(body)
+            return
+
+        if path == LOOP_PATH:
+            self.send_response(302)
+            self.send_header("Location", LOOP_PATH)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
 
         if path == "/slow":

@@ -21,6 +21,15 @@ namespace Tolap.Core;
 ///     <see cref="UnpushableFilters"/> and are enforced only post-fetch.
 ///   </description></item>
 ///   <item><description>
+///     Not every filter means the same thing on every engine.
+///     <see cref="FilterOperator.Like"/> and <see cref="FilterOperator.NotLike"/> are pushed
+///     only where the dialect guarantees a case-sensitive <c>LIKE</c>, since a pushed-down
+///     <c>LIKE</c> inherits the column's collation while the post-fetch pass is
+///     case-sensitive everywhere. On <see cref="SqlDialect.MySql"/>,
+///     <see cref="SqlDialect.SqlServer"/> and <see cref="SqlDialect.Ansi"/> they are
+///     reported unpushable rather than emitted.
+///   </description></item>
+///   <item><description>
 ///     Masking has no SQL form here at all. Masked fields are deliberately <b>kept</b> in the
 ///     rewritten SELECT so the post-fetch pass can still mask them.
 ///   </description></item>

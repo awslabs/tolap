@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from tolap_core.context import validate_context, validate_expiry
 from tolap_core.enforcement import (
+    TARGET_ROW_UNKNOWN,
     AccessResult,
     apply_result_pipeline,
     classify_result_shape,
@@ -12,7 +13,9 @@ from tolap_core.enforcement import (
     validate_access,
     validate_endpoint,
     validate_field_access,
+    validate_write,
 )
+from tolap_core.enums import WriteOperation
 from tolap_core.models import EffectivePolicy, SecurityContext
 
 from tolap_mcp.options import SecureMcpServerOptions
@@ -142,6 +145,91 @@ class SecureMcpToolWrapper:
                 return ep_result
 
         return AccessResult(allowed=True)
+
+    def pre_write(
+        self,
+        context: SecurityContext,
+        operation: WriteOperation | str,
+        object_name: str | None = None,
+        payload: Any = None,
+        *,
+        target_row: Any = TARGET_ROW_UNKNOWN,
+        resource_fields: list[str] | None = None,
+        full_replace: bool = False,
+    ) -> AccessResult:
+        """Validate a write before it is issued (connector spec section 4).
+
+        The write counterpart to :meth:`pre_execute`. Validates the context, then
+        runs the four required pre-write checks: the operation's permission and the
+        ``readOnly`` ceiling, the target object, every field in the payload, and the
+        policy's row filters against ``target_row``.
+
+        Fails closed on the whole write: one unwritable field denies the operation
+        rather than being stripped so the rest can proceed (section 4.4).
+
+        Omitting ``target_row`` on an update or delete while the policy carries row
+        filters yields ``write target unverifiable``, never an allow -- read the row
+        first and pass it here, or push the filters into the statement's ``WHERE``.
+
+        A permitted write that returns data is a *read* of that data: pass the
+        response through :meth:`post_execute` (section 4.5).
+        """
+        ctx_result = self.validate_security_context(context)
+        if not ctx_result.allowed:
+            return ctx_result
+
+        return validate_write(
+            operation,
+            object_name,
+            payload,
+            context.effective_policy,
+            target_row=target_row,
+            resource_fields=resource_fields,
+            full_replace=full_replace,
+        )
+
+    def execute_write_with_enforcement(
+        self,
+        context: SecurityContext,
+        operation: WriteOperation | str,
+        write_fn: Callable[..., Any],
+        write_args: dict[str, Any] | None = None,
+        object_name: str | None = None,
+        payload: Any = None,
+        *,
+        target_row: Any = TARGET_ROW_UNKNOWN,
+        resource_fields: list[str] | None = None,
+        full_replace: bool = False,
+    ) -> Any:
+        """Validate a write, issue it, and enforce the policy on anything it returns.
+
+        Raises PermissionError before ``write_fn`` is called if the write is
+        denied, so a refused write never reaches the source.
+
+        Whatever the write returns is treated as a read of that data and goes
+        through the full post-execution pipeline (section 4.5) -- a masked field
+        comes back masked even though the caller just wrote it, and a hidden field
+        does not appear at all. A write that returns nothing (``None``) is passed
+        through as-is rather than being denied as an unenforceable shape: there is
+        no data to enforce a policy over.
+        """
+        pre_result = self.pre_write(
+            context,
+            operation,
+            object_name=object_name,
+            payload=payload,
+            target_row=target_row,
+            resource_fields=resource_fields,
+            full_replace=full_replace,
+        )
+        if not pre_result.allowed:
+            raise PermissionError(f"Access denied: {pre_result.reason}")
+
+        result = write_fn(**(write_args or {}))
+
+        if result is None:
+            return None
+        return self.post_execute(context, result)
 
     def post_execute(
         self,

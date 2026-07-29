@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch, fnmatchcase
 from typing import Any
 
-from tolap_core.enums import FilterOperator, MaskType, mask_restrictiveness
+from tolap_core.enums import FilterOperator, MaskType, WriteOperation, mask_restrictiveness
 from tolap_core.models import EffectivePolicy, MaskingRule, RowFilter
 
 
@@ -207,7 +207,12 @@ def _apply_mask(value: object, rule: MaskingRule) -> object:
 
         case MaskType.hash:
             algorithm = "sha256"
-            if rule.parameters and rule.parameters.algorithm:
+            # `is not None`, not truthiness: an empty string is *present and
+            # unrecognized*, not absent. Testing truthiness made "" indistinguishable
+            # from omitted and silently resolved it to sha256, while TypeScript and
+            # .NET use nullish-coalescing and correctly redact it -- so the same
+            # schema-invalid policy produced a pseudonym here and [REDACTED] there.
+            if rule.parameters is not None and rule.parameters.algorithm is not None:
                 algorithm = rule.parameters.algorithm
 
             hasher = _HASH_ALGORITHMS.get(algorithm)
@@ -653,12 +658,11 @@ def _compile_like_pattern(pattern: str) -> re.Pattern[str] | None:
 def _like_matches(pattern: object, value: object) -> bool | None:
     """Whether ``value`` matches a SQL ``LIKE`` ``pattern``.
 
-    Returns None when the comparison cannot be made at all -- a null pattern or a
-    null field value -- which callers treat as "drop the row" for both ``like``
-    and ``notLike``. SQL evaluates ``NULL LIKE 'x'`` and ``NULL NOT LIKE 'x'``
-    both to NULL, and neither retains a row; returning True for the negative case
-    would reintroduce exactly the fail-open behaviour spec section 7 records for
-    ``notEquals``/``notIn`` on a missing field.
+    Returns None when the match cannot be evaluated at all: a null pattern, a null
+    field value, or a value past the ReDoS length guard. What that *means* is the
+    caller's decision, and the two ``LIKE`` operators decide differently about a
+    null value -- ``like`` drops the row, ``notLike`` keeps it. See
+    :func:`_row_passes_filter` for why.
     """
     if value is None or pattern is None:
         return None
@@ -758,8 +762,23 @@ def _row_passes_filter(row: dict, rf: RowFilter) -> bool:
     if op is FilterOperator.like:
         return _like_matches(rf.value, value) is True
     if op is FilterOperator.not_like:
-        # None (an incomparable pair) drops the row rather than retaining it;
-        # only a definite non-match satisfies notLike.
+        # notLike is a negative operator and behaves exactly like notEquals and
+        # notIn on a null value: the row is KEPT. Two separate rules meet here and
+        # are deliberately not conflated.
+        #
+        # 1. Present-and-null is KEPT. This is what keeps the pushed-down form and
+        #    this pass equivalent: the rewriter emits
+        #    (col NOT LIKE 'x' OR col IS NULL) precisely because bare SQL
+        #    NOT LIKE is unknown-therefore-false for a null col, so without the arm
+        #    the database would drop a row this pass keeps (spec section 4).
+        # 2. An ABSENT field was already dropped above. That is the unrelated
+        #    fail-closed rule: a value that cannot be established cannot be shown
+        #    to satisfy the filter (spec section 7). It applies to every operator.
+        if value is None:
+            return True
+        # A null pattern states no constraint that any value can be shown to
+        # satisfy, so it matches nothing -- as for `like`. Likewise a value past
+        # the ReDoS length guard, which is undecided rather than known-unlike.
         return _like_matches(rf.value, value) is False
     if op is FilterOperator.is_null:
         # The field is present -- a missing field was already dropped above -- so
@@ -803,25 +822,115 @@ def apply_row_filters(results: list[dict], policy: EffectivePolicy) -> list[dict
     return [row for row in results if all(_row_passes_filter(row, rf) for rf in filters)]
 
 
+# -- Tag extraction --
+#
+# A classification level *is* a tag: there is no separate classification
+# construct, so tag filtering is the whole knowledge-base confidentiality
+# control (connector spec section 7). Extraction therefore has to be as robust as
+# masking already is. A literal lower-case ``tags`` lookup enforced the control on
+# exactly one of the five shapes real providers emit -- ``tags``, ``Tags``,
+# ``metadata.tags``, ``labels``, and a scalar ``classification`` -- so four of five
+# records tagged ``secret`` were disclosed.
+
+# The record keys that carry classification tags, matched with
+# :func:`_field_name_matches` rather than looked up literally.
+#
+# The set is deliberately small, fixed, and not configurable. Every entry is a
+# shape connector spec section 7 names; nothing is added on speculation, because
+# widening the set is not automatically safer in either direction. An unrelated
+# ``labels`` field whose value happens to appear in ``allowedTags`` would *admit*
+# a record the allow-list would otherwise have dropped as untagged, so an
+# over-broad set can fail open exactly as a too-narrow one fails to enforce. It is
+# not an integrator-supplied parameter for the same reason: the policy is signed,
+# and an unsigned knob that decides which keys count as security metadata would
+# put part of the decision outside the signature.
+_TAG_KEYS = ("tags", "labels", "classification")
+
+
+def _harvest_tag_values(value: Any, into: list[str]) -> None:
+    """Collect the tag strings carried by a matched tag key's value.
+
+    A scalar counts as a single tag: providers emit both ``{"tags": ["secret"]}``
+    and ``{"classification": "secret"}``, and connector spec section 7 requires
+    the two to behave identically. Nested lists are flattened.
+
+    Only strings are collected. ``allowedTags``/``deniedTags`` are arrays of
+    strings in the schema, so a non-string value can only match after a
+    stringification whose result differs per language (``str(True)`` is ``"True"``
+    in Python and ``"true"`` in JavaScript) -- and a confidentiality decision must
+    not depend on the host language's formatting. A non-string value still fails
+    closed under an allow-list, because it contributes no tag and therefore no
+    proof of allowance.
+    """
+    if isinstance(value, str):
+        into.append(value)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _harvest_tag_values(item, into)
+
+
+def _collect_tags(node: Any, into: list[str]) -> None:
+    """Collect tags from every recognized tag key anywhere in ``node``.
+
+    Recurses into nested mappings and lists, matching keys with the same
+    bidirectional, case-insensitive, glob-aware matcher masking and hidden-field
+    removal use (spec section 4), so ``Tags`` and ``metadata.tags`` are found
+    alongside ``tags``.
+    """
+    if isinstance(node, Mapping):
+        for key, value in node.items():
+            if any(_field_name_matches(tag_key, str(key)) for tag_key in _TAG_KEYS):
+                _harvest_tag_values(value, into)
+            # Walked whether or not the key matched: a matched key holding a
+            # mapping may still nest a tag key of its own.
+            _collect_tags(value, into)
+        return
+    if isinstance(node, (list, tuple)):
+        for item in node:
+            _collect_tags(item, into)
+
+
+def _extract_tags(record: Any) -> set[str]:
+    """Every tag on a record, lower-cased, from any tag key at any depth.
+
+    Lower-cased because tag values compare case-insensitively: ``deniedTags:
+    ["Secret"]`` must drop a record tagged ``secret`` (connector spec section 7).
+    """
+    collected: list[str] = []
+    _collect_tags(record, collected)
+    return {tag.lower() for tag in collected}
+
+
 def filter_by_tags(results: list[dict], policy: EffectivePolicy) -> list[dict]:
     """Filter results by tag rules.
 
     - If allowedTags is set, only include results with at least one allowed tag.
       An empty allowedTags list denies every record (see the null-vs-empty-array
-      rule in the canonical spec) rather than lifting the restriction.
-    - If deniedTags is set, exclude results with any denied tag.
+      rule in the canonical spec) rather than lifting the restriction. A record
+      with no recognizable tags is dropped: a classification that cannot be
+      established cannot be shown to be permitted.
+    - If deniedTags is set, exclude results with any denied tag. A denylist alone
+      does *not* drop an untagged record -- it gives no grounds to.
     - Denied takes precedence over allowed.
+
+    Tags are read by :func:`_extract_tags` and compared case-insensitively on
+    both sides.
     """
     if not policy.object_rules or not policy.object_rules.tag_rules:
         return results
 
     tag_rules = policy.object_rules.tag_rules
-    allowed_tags = set(tag_rules.allowed_tags) if tag_rules.allowed_tags is not None else None
-    denied_tags = set(tag_rules.denied_tags) if tag_rules.denied_tags else None
+    allowed_tags = (
+        {tag.lower() for tag in tag_rules.allowed_tags}
+        if tag_rules.allowed_tags is not None
+        else None
+    )
+    denied_tags = {tag.lower() for tag in tag_rules.denied_tags} if tag_rules.denied_tags else None
 
     filtered: list[dict] = []
     for item in results:
-        tags = set(item.get("tags", []))
+        tags = _extract_tags(item)
 
         # Check denied tags first (takes precedence)
         if denied_tags and tags & denied_tags:
@@ -907,3 +1016,417 @@ def validate_endpoint(path: str, method: str, policy: EffectivePolicy) -> Access
         return AccessResult(allowed=False, reason="method not allowed on a read-only policy")
 
     return AccessResult(allowed=True)
+
+
+# -- Write validation (connector spec section 4) --
+#
+# Reads filter what comes back. Writes have to be validated BEFORE they reach the
+# source, because there is nothing to filter afterwards -- the damage is already
+# committed. Everything below runs pre-execution and returns a decision the caller
+# must honour; nothing here talks to a data source.
+
+
+class _UnknownTargetRow:
+    """The type of :data:`TARGET_ROW_UNKNOWN`; exists only for its ``repr``."""
+
+    def __repr__(self) -> str:  # pragma: no cover - diagnostic only
+        return "TARGET_ROW_UNKNOWN"
+
+
+TARGET_ROW_UNKNOWN = _UnknownTargetRow()
+"""Sentinel for "the caller supplied no update/delete target row".
+
+Distinct from an empty dict, which is a row that genuinely has no fields. The
+difference decides between ``target row not permitted`` (the filters were
+evaluated and did not match) and ``write target unverifiable`` (they could not be
+evaluated at all) -- see :func:`validate_write`.
+"""
+
+# HTTP methods mapped to the permission that governs them (connector spec
+# section 6). GET/HEAD/OPTIONS are reads and are governed by canQuery, which
+# validate_endpoint already enforces, so they are absent here on purpose.
+_METHOD_WRITE_OPERATIONS: dict[str, WriteOperation] = {
+    "POST": WriteOperation.insert,
+    "PUT": WriteOperation.update,
+    "PATCH": WriteOperation.update,
+    "DELETE": WriteOperation.delete,
+}
+
+# The permission each operation consults, in the order it is reported. ``upsert``
+# requires both, which is the safe intersection connector spec section 8 mandates
+# for a call that cannot distinguish a create from an overwrite.
+_OPERATION_PERMISSIONS: dict[WriteOperation, tuple[str, ...]] = {
+    WriteOperation.insert: ("insert",),
+    WriteOperation.update: ("update",),
+    WriteOperation.delete: ("delete",),
+    WriteOperation.upsert: ("insert", "update"),
+}
+
+
+def write_operation_for_method(method: str) -> WriteOperation | None:
+    """The write operation an HTTP method performs, or None for a read method.
+
+    ``POST`` inserts, ``PUT``/``PATCH`` update, ``DELETE`` deletes;
+    ``GET``/``HEAD``/``OPTIONS`` return None because they are reads governed by
+    ``canQuery`` (connector spec section 6). An unrecognized method also returns
+    None -- it is not silently treated as a read: :func:`validate_endpoint` still
+    gates it through ``allowedMethods``, whose omitted default is the read methods,
+    so an unknown verb is denied there rather than admitted here.
+    """
+    return _METHOD_WRITE_OPERATIONS.get(method.upper())
+
+
+def _permission_granted(policy: EffectivePolicy, name: str) -> bool:
+    """Whether a write permission is granted, defaulting absent to False.
+
+    The schema default for all three is ``false`` (connector spec section 4.1), so
+    an absent flag is a denial. This is the opposite of ``can_query``, and the
+    asymmetry is the point: a policy authored before writes existed must not
+    silently acquire them.
+    """
+    return getattr(policy.permissions, f"can_{name}") is True
+
+
+def _validate_write_permission(
+    operation: WriteOperation,
+    policy: EffectivePolicy,
+) -> AccessResult:
+    """Check 1: the operation's permission, then the ``readOnly`` ceiling."""
+    for name in _OPERATION_PERMISSIONS[operation]:
+        if not _permission_granted(policy, name):
+            return AccessResult(allowed=False, reason=f"{name} not permitted")
+
+    # readOnly is a ceiling, not a peer: it denies every write regardless of the
+    # three flags. Absent means the schema default of True (canonical spec
+    # section 8), so a policy silent on readOnly cannot write.
+    if policy.permissions.read_only is not False:
+        return AccessResult(allowed=False, reason="read-only policy")
+
+    return AccessResult(allowed=True)
+
+
+def _validate_write_object(object_name: str, policy: EffectivePolicy) -> AccessResult:
+    """Check 2: the target object against hiddenObjects/allowedObjects.
+
+    Deliberately not :func:`validate_access`, which leads with ``canQuery`` and
+    would report ``query not permitted`` for a write. The object rules themselves
+    are identical, and the reasons stay the ones section 3.3 documents.
+    """
+    obj_rules = policy.object_rules
+    if obj_rules is None:
+        return AccessResult(allowed=True)
+
+    if obj_rules.hidden_objects:
+        for pattern in obj_rules.hidden_objects:
+            if _pattern_matches(pattern, object_name):
+                return AccessResult(allowed=False, reason="object is hidden")
+
+    if obj_rules.allowed_objects is not None:
+        for pattern in obj_rules.allowed_objects:
+            if _pattern_matches(pattern, object_name):
+                return AccessResult(allowed=True)
+        return AccessResult(allowed=False, reason="object not in allowed set")
+
+    return AccessResult(allowed=True)
+
+
+def _validate_written_fields(fields: list[str], policy: EffectivePolicy) -> AccessResult:
+    """Check 3: every field in the payload must be writable.
+
+    Fails closed on the *whole* write (connector spec section 4.4): the first
+    unwritable field denies the entire operation rather than being stripped so the
+    rest can proceed. This is the one place where filtering -- the correct answer
+    on the read path -- is the wrong answer. A caller that submits
+    ``{status, ssn}`` and is told the write succeeded, when only ``status`` landed,
+    holds a model of the data that is wrong in a way it cannot detect.
+
+    Field names match with the bidirectional, case-insensitive, glob-aware matcher
+    the read path uses (section 3.2), so a ``readOnlyFields`` entry of
+    ``patients.created_at`` blocks a payload key of ``created_at``.
+
+    The field is named in the reason. That discloses nothing: the caller supplied
+    it. Row denials, by contrast, never name a value.
+    """
+    field_rules = None
+    if policy.object_rules and policy.object_rules.field_rules:
+        field_rules = policy.object_rules.field_rules
+    if field_rules is None:
+        return AccessResult(allowed=True)
+
+    for name in fields:
+        # A field the caller cannot read, it cannot write.
+        if field_rules.hidden_fields:
+            for pattern in field_rules.hidden_fields:
+                if _field_name_matches(pattern, name):
+                    return AccessResult(allowed=False, reason=f"field is hidden: {name}")
+
+        # readOnlyFields: readable but not writable. This is the whole meaning of
+        # the field (connector spec section 4.3) and it has no effect on reads.
+        if field_rules.read_only_fields:
+            for pattern in field_rules.read_only_fields:
+                if _field_name_matches(pattern, name):
+                    return AccessResult(allowed=False, reason=f"field is read-only: {name}")
+
+        # None is unrestricted; [] denies every field (canonical spec section 3).
+        if field_rules.allowed_fields is not None:
+            if not any(
+                _field_name_matches(pattern, name) for pattern in field_rules.allowed_fields
+            ):
+                return AccessResult(
+                    allowed=False, reason=f"field not in allowed set: {name}"
+                )
+
+    return AccessResult(allowed=True)
+
+
+def _validate_write_target_row(
+    operation: WriteOperation,
+    target_row: Any,
+    policy: EffectivePolicy,
+) -> AccessResult:
+    """Check 4: row filters must match the row an update or delete targets.
+
+    A caller must not be able to modify a row it could not have selected, so the
+    policy's row filters are evaluated against the target and a non-match is
+    ``target row not permitted``.
+
+    When filters exist and no target row was supplied, the result is
+    ``write target unverifiable`` -- **not** an allow. The integrator's options are
+    to read the row first and pass it here, or to push the filters into the
+    statement's ``WHERE`` so the source applies them; an unqualified
+    ``DELETE FROM patients`` under a region-scoped policy has to be refused rather
+    than executed and hoped over (connector spec sections 4.2 and 5).
+
+    An insert has no pre-existing target, so this check does not apply to it. The
+    row it *creates* is governed by the field checks above: a policy scoped by
+    ``region`` cannot stop an insert writing a foreign region unless ``region`` is
+    in ``readOnlyFields`` or outside ``allowedFields``, which is a gap in the
+    policy language rather than in this implementation.
+    """
+    if operation is WriteOperation.insert:
+        return AccessResult(allowed=True)
+
+    filters = None
+    if policy.object_rules:
+        filters = policy.object_rules.row_filters
+    if not filters:
+        return AccessResult(allowed=True)
+
+    if target_row is TARGET_ROW_UNKNOWN:
+        return AccessResult(allowed=False, reason="write target unverifiable")
+
+    if not isinstance(target_row, Mapping):
+        # A target we cannot evaluate the filters against is unverifiable for the
+        # same reason an absent one is, not a target that happens to pass.
+        return AccessResult(allowed=False, reason="write target unverifiable")
+
+    # The row must satisfy every filter, exactly as it would to be returned by a
+    # read (canonical spec section 7): a missing field fails closed.
+    if not all(_row_passes_filter(dict(target_row), rf) for rf in filters):
+        # Deliberately does not name the field or the value; section 4.4 permits
+        # naming a payload field the caller supplied, never a row value.
+        return AccessResult(allowed=False, reason="target row not permitted")
+
+    return AccessResult(allowed=True)
+
+
+def payload_write_fields(
+    payload: Any,
+    resource_fields: list[str] | None = None,
+) -> list[str]:
+    """The field names a payload attempts to write.
+
+    A mapping contributes its keys; anything else contributes nothing, because
+    only a mapping names fields. Nested keys are *not* flattened into dotted
+    paths: the field matcher already reaches a bare ``ssn`` from a rule of
+    ``patients.ssn`` and vice versa (section 3.2), so walking the tree and
+    collecting every key at every depth is what a rule needs to see.
+
+    ``resource_fields`` extends the set with fields the body does not mention. It
+    exists for the full-resource-replace rule (see :func:`validate_write`'s
+    ``full_replace``); it is deliberately not inferred from anything, because only
+    the integrator knows a resource's shape.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def add(name: str) -> None:
+        if name not in seen:
+            seen.add(name)
+            names.append(name)
+
+    def walk(node: Any) -> None:
+        if isinstance(node, Mapping):
+            for key, value in node.items():
+                add(str(key))
+                walk(value)
+            return
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(payload)
+    if resource_fields is not None:
+        for name in resource_fields:
+            add(name)
+    return names
+
+
+def _protected_field_names(policy: EffectivePolicy) -> list[str]:
+    """Every field the policy forbids writing, as written in the policy.
+
+    Used to give the full-resource-replace rule (connector spec section 6) teeth
+    when the caller cannot enumerate the resource: a replace writes every field of
+    the resource, and the fields whose overwrite must be denied are exactly the
+    ones the policy protects, so treating them as present is the fail-closed
+    reading. It is *not* an approximation of the resource's shape -- it is the
+    subset of any resource's shape that the policy cares about.
+
+    ``allowedFields`` cannot be handled this way: the risk there is a resource
+    field the allow-list omits, which is unknowable without the resource's field
+    list. An integrator combining ``allowedFields`` with full-resource replaces
+    must pass ``resource_fields``.
+    """
+    field_rules = None
+    if policy.object_rules and policy.object_rules.field_rules:
+        field_rules = policy.object_rules.field_rules
+    if field_rules is None:
+        return []
+
+    return [*(field_rules.hidden_fields or []), *(field_rules.read_only_fields or [])]
+
+
+def validate_write(
+    operation: WriteOperation | str,
+    object_name: str | None,
+    payload: Any,
+    policy: EffectivePolicy,
+    *,
+    target_row: Any = TARGET_ROW_UNKNOWN,
+    resource_fields: list[str] | None = None,
+    full_replace: bool = False,
+) -> AccessResult:
+    """Validate a write before it reaches the data source (connector spec section 4).
+
+    Runs the four required pre-write checks in order -- cheapest first, all of them
+    mandatory:
+
+      1. the operation's permission (``canInsert``/``canUpdate``/``canDelete``),
+         then the ``readOnly`` ceiling
+      2. the target object against ``hiddenObjects``/``allowedObjects``
+      3. every field in the payload against ``hiddenFields``, ``readOnlyFields``
+         and ``allowedFields``
+      4. the policy's row filters against the update/delete target row
+
+    Fails closed and rejects the whole write: one unwritable field denies the
+    operation rather than being dropped so the rest can proceed (section 4.4). The
+    reason strings are part of the contract -- integrators log and branch on them.
+
+    ``operation`` accepts a :class:`WriteOperation` or its string value. An
+    ``upsert`` -- a call that cannot distinguish a create from an overwrite, such as
+    an unconditional object-store ``PUT`` -- requires **both** ``canInsert`` and
+    ``canUpdate`` (section 8).
+
+    ``target_row`` is the row an update or delete will modify. Omitting it while the
+    policy carries row filters yields ``write target unverifiable``, never an
+    allow: the caller has to read the row first or push the filters into the
+    statement's ``WHERE``.
+
+    ``full_replace`` marks a write that replaces the whole resource rather than the
+    keys it mentions -- an HTTP ``PUT`` is the canonical case (section 6). Omitting
+    a ``readOnlyFields`` field from a full replace is still an attempt to overwrite
+    it, this time with absent, so every field the policy protects is validated as
+    though the body had named it. Pair with ``resource_fields`` when the policy also
+    sets ``allowedFields``, since a resource field missing from an allow-list is
+    unknowable without the resource's field list.
+
+    A permitted write that returns data -- ``INSERT ... RETURNING``, a 201 body,
+    updated metadata -- is a *read* of that data, so run
+    :func:`apply_result_pipeline` over the response (section 4.5). A masked field
+    must come back masked even when the caller just wrote it.
+    """
+    resolved = operation if isinstance(operation, WriteOperation) else _write_operation(operation)
+    if resolved is None:
+        # An operation this SDK cannot classify is denied rather than admitted:
+        # there is no permission to consult, so there is no grant to rely on.
+        return AccessResult(allowed=False, reason="unknown write operation")
+
+    permission = _validate_write_permission(resolved, policy)
+    if not permission.allowed:
+        return permission
+
+    if object_name is not None:
+        target = _validate_write_object(object_name, policy)
+        if not target.allowed:
+            return target
+
+    written = payload_write_fields(payload, resource_fields)
+    if full_replace:
+        for name in _protected_field_names(policy):
+            if name not in written:
+                written.append(name)
+
+    fields = _validate_written_fields(written, policy)
+    if not fields.allowed:
+        return fields
+
+    return _validate_write_target_row(resolved, target_row, policy)
+
+
+_WRITE_OPERATIONS: dict[str, WriteOperation] = {op.value: op for op in WriteOperation}
+
+
+def _write_operation(value: str) -> WriteOperation | None:
+    """Resolve an operation name, case-insensitively, or None if unrecognized."""
+    return _WRITE_OPERATIONS.get(value.lower())
+
+
+def validate_http_write(
+    method: str,
+    path: str,
+    payload: Any,
+    policy: EffectivePolicy,
+    *,
+    object_name: str | None = None,
+    target_row: Any = TARGET_ROW_UNKNOWN,
+    resource_fields: list[str] | None = None,
+) -> AccessResult:
+    """Validate an HTTP write: endpoint rules, then the section 4 write checks.
+
+    Method and permission must agree and *both* are checked (connector spec
+    section 6): :func:`validate_endpoint` gates the path and the method through
+    ``allowedEndpoints``/``hiddenEndpoints``/``allowedMethods``, and the write
+    checks then gate the operation the method performs and the body it carries.
+    Neither substitutes for the other -- ``allowedMethods: ["POST"]`` says nothing
+    about ``canInsert``, and ``canInsert`` says nothing about which paths are
+    reachable.
+
+    A read method (``GET``/``HEAD``/``OPTIONS``) is not a write, so this returns
+    the endpoint decision unchanged rather than inventing a write permission for
+    it.
+
+    A ``PUT`` is treated as a **full-resource replace** (section 6): every field
+    the policy protects is validated as though the body had named it, because a
+    replace that omits a ``readOnlyFields`` field is still attempting to overwrite
+    it with absent. ``PATCH`` is a partial update, so only the keys present are
+    validated. Supply ``resource_fields`` to extend the replace to fields the policy
+    does not itself name -- needed when ``allowedFields`` is set, since a resource
+    field missing from an allow-list cannot be inferred from the policy alone.
+    """
+    endpoint = validate_endpoint(path, method, policy)
+    if not endpoint.allowed:
+        return endpoint
+
+    operation = write_operation_for_method(method)
+    if operation is None:
+        return endpoint
+
+    return validate_write(
+        operation,
+        object_name,
+        payload,
+        policy,
+        target_row=target_row,
+        resource_fields=resource_fields,
+        full_replace=method.upper() == "PUT",
+    )

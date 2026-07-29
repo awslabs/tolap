@@ -607,6 +607,28 @@ describe("buildSecurityContext", () => {
     expect(ctx.signature).toBeUndefined();
     expect(ctx.algorithm).toBeUndefined();
   });
+
+  it("rejects an array of policies instead of storing it", () => {
+    // docs/architecture.md shows the context with a `policies` array, so a caller
+    // reaching this through JS or `any` passes two policies. The type erases at
+    // runtime: the array used to be stored verbatim, sign and validate cleanly, and
+    // then crash enforcement with a bare "cannot read properties of undefined".
+    const policies = [policy(), policy()] as unknown as ReturnType<typeof policy>;
+
+    expect(() => buildSecurityContext("u", "t", policies)).toThrow(
+      /expects a single effective policy, received an array of 2/,
+    );
+  });
+
+  it("the array rejection names the remedy rather than only refusing", () => {
+    const policies = [policy()] as unknown as ReturnType<typeof policy>;
+
+    // Even a one-element array is refused: the caller believes the context is
+    // multi-policy, and silently unwrapping would leave that belief intact.
+    expect(() => buildSecurityContext("u", "t", policies)).toThrow(
+      /one context per data source/,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

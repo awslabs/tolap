@@ -18,10 +18,30 @@ def build_security_context(
     policies: list[EffectivePolicy],
     ttl: timedelta = timedelta(hours=1),
 ) -> SecurityContext:
-    """Build a SecurityContext from resolved effective policies.
+    """Build a SecurityContext from a resolved effective policy.
 
-    Uses the first policy if multiple are provided (each effective policy is per-source).
+    ``SecurityContext`` carries exactly one effective policy, and every enforcement
+    entry point in this SDK reads that single policy without being told which data
+    source the call is aimed at. Passing more than one policy is therefore refused
+    rather than truncated: this function used to keep ``policies[0]`` and drop the
+    rest with no error and no warning, so an integrator wiring up a database policy
+    and an API policy got a context that governed only the database and had no way
+    to detect that the API was governed by nothing. Build one context per data
+    source instead -- there is no per-source resolution rule for this SDK to apply.
+
+    An empty list is *not* an error: it denies everything, which is the safe
+    reading of "no policy resolved".
+
+    Raises:
+        ValueError: if more than one effective policy is supplied.
     """
+    if len(policies) > 1:
+        raise ValueError(
+            f"build_security_context accepts at most one effective policy, got "
+            f"{len(policies)}; a SecurityContext carries a single policy, so build "
+            f"one context per data source"
+        )
+
     now = datetime.now(timezone.utc)
     effective = policies[0] if policies else EffectivePolicy.deny_all()
     effective.user_id = user_id
@@ -163,12 +183,23 @@ def sign_context(
 
 
 def validate_context(context: SecurityContext, secret_key: str) -> bool:
-    """Validate the signature on a SecurityContext."""
+    """Validate the signature on a SecurityContext.
+
+    Returns False rather than raising for an algorithm this SDK cannot verify.
+    ``ed25519`` is enumerated in the schema but unimplemented, so a
+    schema-conformant context can name it: an unverifiable signature is a
+    validation *failure*, not an exception escaping an enforcement check.
+    Raising would turn a deny into a crash, and a caller wrapping this in a
+    ``try``/``except`` that swallows would turn it into an allow.
+    """
     if not context.signature or not context.algorithm:
         return False
 
     payload = _canonical_payload(context)
-    expected = _compute_signature(payload, secret_key, context.algorithm)
+    try:
+        expected = _compute_signature(payload, secret_key, context.algorithm)
+    except NotImplementedError:
+        return False
     return hmac.compare_digest(context.signature, expected)
 
 

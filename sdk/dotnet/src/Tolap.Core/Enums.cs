@@ -100,6 +100,35 @@ public enum FilterOperator
 }
 
 /// <summary>
+/// The kinds of write a policy governs (connector-spec.md section 4.1).
+/// </summary>
+/// <remarks>
+/// <see cref="Insert"/>, <see cref="Update"/> and <see cref="Delete"/> map one-to-one
+/// onto <c>canInsert</c>, <c>canUpdate</c> and <c>canDelete</c>. <see cref="Upsert"/> is
+/// for a call that cannot be classified as either a create or an overwrite — an
+/// unconditional object-store <c>PUT</c>, for example — and requires <b>both</b>
+/// <c>canInsert</c> and <c>canUpdate</c>, the safe intersection connector-spec.md
+/// section 8 mandates.
+/// </remarks>
+public enum WriteOperation
+{
+    /// <summary>Creating a new record or object. Governed by <c>canInsert</c>.</summary>
+    Insert,
+
+    /// <summary>Modifying an existing record or object. Governed by <c>canUpdate</c>.</summary>
+    Update,
+
+    /// <summary>Removing a record or object. Governed by <c>canDelete</c>.</summary>
+    Delete,
+
+    /// <summary>
+    /// A write that may create or overwrite and cannot tell which. Requires both
+    /// <c>canInsert</c> and <c>canUpdate</c>.
+    /// </summary>
+    Upsert
+}
+
+/// <summary>
 /// Type of entity receiving a policy assignment.
 /// </summary>
 public enum AssigneeType

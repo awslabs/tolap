@@ -316,6 +316,97 @@ class TestTagFilterBranches:
         assert filter_by_tags(rows, _policy(object_rules=ObjectRules())) == rows
 
 
+class TestTagExtractionShapes:
+    """Connector spec section 7: tag extraction must be robust.
+
+    Classification IS tags -- there is no separate classification construct -- so
+    tag filtering is the whole knowledge-base confidentiality control, and a
+    literal lower-case `tags` lookup silently failed to enforce it on most real
+    providers. Of five chunks tagged `secret` under `tags`, `Tags`,
+    `metadata.tags`, `labels`, and a scalar `classification`, a naive lookup
+    dropped one. Each case below is a provider shape that must now be recognized.
+    """
+
+    def _kept(self, record: dict, **tag_kwargs: object) -> bool:
+        rules = TagRules(**tag_kwargs)  # type: ignore[arg-type]
+        policy = _policy(object_rules=ObjectRules(tag_rules=rules))
+        return filter_by_tags([record], policy) == [record]
+
+    @pytest.mark.parametrize(
+        "record",
+        [
+            pytest.param({"tags": ["secret"]}, id="tags-list"),
+            pytest.param({"Tags": ["secret"]}, id="cased-key"),
+            pytest.param({"metadata": {"tags": ["secret"]}}, id="nested-in-metadata"),
+            pytest.param({"labels": ["secret"]}, id="alternate-key-labels"),
+            pytest.param({"classification": "secret"}, id="scalar-classification"),
+            pytest.param({"tags": "secret"}, id="scalar-tags"),
+            pytest.param({"METADATA": {"LABELS": "secret"}}, id="nested-cased-scalar"),
+            pytest.param({"chunks": [{"tags": ["secret"]}]}, id="inside-an-array"),
+        ],
+    )
+    def test_a_denied_tag_is_found_in_every_provider_shape(self, record: dict) -> None:
+        assert not self._kept(record, denied_tags=["secret"])
+
+    def test_the_recognized_key_set_is_closed(self) -> None:
+        """A key outside the documented set is ordinary data, not security metadata.
+
+        The set is exactly the shapes connector spec section 7 names. Widening it is
+        not automatically safer: an unrelated field whose value happens to appear in
+        `allowedTags` would *admit* a record the allow-list would otherwise have
+        dropped as untagged, so an over-broad set fails open just as a too-narrow one
+        fails to enforce. Both directions are asserted so a future addition to
+        `_TAG_KEYS` is a deliberate, reviewed change rather than a silent one.
+        """
+        assert self._kept({"categories": ["secret"]}, denied_tags=["secret"])
+        assert not self._kept({"categories": ["public"]}, allowed_tags=["public"])
+
+    def test_tag_values_compare_case_insensitively_in_both_directions(self) -> None:
+        """Connector spec section 7: `deniedTags: ["Secret"]` MUST drop `secret`."""
+        assert not self._kept({"tags": ["secret"]}, denied_tags=["Secret"])
+        assert not self._kept({"tags": ["SECRET"]}, denied_tags=["secret"])
+        assert not self._kept({"classification": "Secret"}, denied_tags=["sEcReT"])
+
+        # And the same folding admits a record through an allow-list.
+        assert self._kept({"tags": ["PUBLIC"]}, allowed_tags=["public"])
+
+    def test_a_scalar_counts_as_a_one_element_tag_list(self) -> None:
+        """A scalar tag satisfies an allow-list exactly as a one-element list does."""
+        assert self._kept({"tags": "public"}, allowed_tags=["public"])
+        assert self._kept({"classification": "public"}, allowed_tags=["public"])
+        assert self._kept({"tags": ["public"]}, allowed_tags=["public"])
+
+    def test_a_non_string_tag_value_contributes_no_tag(self) -> None:
+        """A non-string cannot match a string tag without a per-language cast.
+
+        `str(True)` is "True" in Python and "true" in JavaScript, so admitting
+        non-strings would make a confidentiality decision depend on the host
+        language. Contributing no tag fails closed under an allow-list.
+        """
+        assert not self._kept({"tags": 42}, allowed_tags=["42"])
+        assert self._kept({"tags": 42}, denied_tags=["42"])
+        assert not self._kept({"tags": [True]}, allowed_tags=["true", "True"])
+
+    def test_a_recognized_key_holding_a_mapping_is_still_walked(self) -> None:
+        """`{"tags": {"tags": [...]}}` must not hide a tag inside a tag key."""
+        assert not self._kept({"tags": {"tags": ["secret"]}}, denied_tags=["secret"])
+
+    def test_untagged_handling_is_unchanged(self) -> None:
+        """Enforcement spec section 4: dropped under an allow-list, kept under a denylist.
+
+        A classification that cannot be established cannot be shown to be
+        permitted -- but a denylist alone gives no grounds to drop it.
+        """
+        for untagged in ({"id": 1}, {"id": 1, "tags": []}, {"id": 1, "tags": 42}):
+            assert not self._kept(untagged, allowed_tags=["public"])
+            assert self._kept(untagged, denied_tags=["secret"])
+
+    def test_denied_still_beats_allowed_across_different_keys(self) -> None:
+        record = {"tags": ["public"], "classification": "secret"}
+
+        assert not self._kept(record, allowed_tags=["public"], denied_tags=["secret"])
+
+
 class TestMaskingBranches:
     def test_unknown_mask_type_is_treated_as_redact(self) -> None:
         """Spec section 6: an unrecognized maskType must not return the raw value."""
@@ -1083,6 +1174,34 @@ class TestSigningBranches:
         assert context.effective_policy.tenant_id == "tenant-9"
         assert context.issued_at is not None and context.issued_at.endswith("Z")
         assert context.expires_at is not None and context.expires_at.endswith("Z")
+
+    def test_build_security_context_refuses_more_than_one_policy(self) -> None:
+        """Multiple policies must raise, never be truncated to the first.
+
+        A SecurityContext carries one policy and enforcement reads it without being
+        told which data source the call targets. This previously kept ``policies[0]``
+        and discarded the rest silently, so a caller wiring up a database policy and
+        an API policy got a context governing only the database -- with no error, no
+        warning, and no way to detect that the API was governed by nothing.
+        """
+        db_policy = _policy()
+        api_policy = _policy()
+
+        with pytest.raises(ValueError, match="at most one effective policy, got 2"):
+            build_security_context("u", "t", [db_policy, api_policy], ttl=timedelta(hours=1))
+
+    def test_build_security_context_refusal_names_the_remedy(self) -> None:
+        """The refusal must tell the caller what to do instead, not just say no."""
+        with pytest.raises(ValueError, match="one context per data source"):
+            build_security_context("u", "t", [_policy(), _policy(), _policy()])
+
+    def test_build_security_context_accepts_exactly_one_policy(self) -> None:
+        """The single-policy case is the supported one and must not be caught by the guard."""
+        only = _policy()
+
+        context = build_security_context("u", "t", [only], ttl=timedelta(hours=1))
+
+        assert context.effective_policy is only
 
     def test_unsupported_algorithm_fails_closed_with_a_named_reason(self) -> None:
         """An algorithm this SDK cannot compute must raise, never sign weakly."""

@@ -72,6 +72,22 @@ class FilterOperator(Enum):
     between = "between"
 
 
+class WriteOperation(Enum):
+    """The kinds of write a policy governs (connector spec section 4.1).
+
+    ``insert``/``update``/``delete`` map one-to-one onto ``canInsert``,
+    ``canUpdate`` and ``canDelete``. ``upsert`` is for a call that cannot be
+    classified as either a create or an overwrite -- an unconditional object-store
+    ``PUT``, for example -- and requires **both** ``canInsert`` and ``canUpdate``,
+    the safe intersection connector spec section 8 mandates.
+    """
+
+    insert = "insert"
+    update = "update"
+    delete = "delete"
+    upsert = "upsert"
+
+
 class AssigneeType(Enum):
     user = "user"
     group = "group"

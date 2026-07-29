@@ -250,6 +250,16 @@ describe("FilterOperator: every member is an operator the engine implements", ()
     // verification and then hit the unknown-operator default -- dropping every row
     // in TypeScript while .NET enforced the filter correctly. Reading the schema
     // rather than restating the list means the two cannot drift again silently.
+    //
+    // The full five-enum conformance suite -- MaskType, AssigneeType,
+    // SigningAlgorithm and mask `parameters.algorithm` alongside this one, each in
+    // both directions -- lives in `schema-conformance.test.ts`, held in the same
+    // shape as its Python and .NET counterparts. This assertion is kept here
+    // because the tests above establish that every member is *enforceable*, and the
+    // pairing of "enforceable" with "matches the schema" is what makes either
+    // meaningful: an enum that matched the schema but fell through the switch, or
+    // one that handled every member of a list the schema no longer agreed with,
+    // would each pass half of this file.
     const schemaPath = resolvePath(
       __dirname,
       "..","..","..","..","..",
@@ -315,6 +325,23 @@ describe("AssigneeType: every member resolves through the assignee switch", () =
     expect(AssigneeType.Role).toBe("role");
     expect(AssigneeType.ServiceAccount).toBe("serviceAccount");
   });
+
+  it("the enum matches the shared assignment schema's type enum exactly", () => {
+    // Read from disk for the same reason as the operator enum above: an assignee
+    // type the schema permits but this switch cannot resolve means an
+    // administrator's grant silently does nothing, and the literals asserted just
+    // above would keep passing while the schema moved. Both directions, so an enum
+    // that gained a value the schema forbids also fails.
+    const schemaPath = resolvePath(
+      __dirname,
+      "..","..","..","..","..",
+      "schema","v1.0","policy-assignment.schema.json",
+    );
+    const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+    const schemaTypes: string[] = schema.properties.assignee.properties.type.enum;
+
+    expect([...schemaTypes].sort()).toEqual(Object.values(AssigneeType).sort());
+  });
 });
 
 describe("SigningAlgorithm carries the wire spellings", () => {
@@ -323,6 +350,40 @@ describe("SigningAlgorithm carries the wire spellings", () => {
     expect(SigningAlgorithm.HmacSha512).toBe("hmac-sha512");
     // ed25519 is in the schema enum but unimplemented in this SDK, which is why
     // validateContext/validatePolicy must DENY rather than throw when they see it.
+    // The member must stay: dropping it would replace a refusal that names the
+    // algorithm with an unrecognized-value path. Asserted against the schema file
+    // in `schema-conformance.test.ts`.
     expect(SigningAlgorithm.Ed25519).toBe("ed25519");
+  });
+
+  it("the enum matches the shared effective-policy schema's algorithm enum exactly", () => {
+    const schemaPath = resolvePath(
+      __dirname,
+      "..","..","..","..","..",
+      "schema","v1.0","effective-policy.schema.json",
+    );
+    const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+    const schemaAlgorithms: string[] =
+      schema.properties.integrity.properties.algorithm.enum;
+
+    expect([...schemaAlgorithms].sort()).toEqual(Object.values(SigningAlgorithm).sort());
+  });
+});
+
+describe("MaskType matches the shared policy schema's maskType enum", () => {
+  it("matches exactly, in both directions", () => {
+    // The `maskRestrictiveness` tests above prove every member is ranked; this
+    // proves the members are the right ones. A schema-valid mask type missing from
+    // the enum would rank as "unknown" and win every merge it should have lost.
+    const schemaPath = resolvePath(
+      __dirname,
+      "..","..","..","..","..",
+      "schema","v1.0","policy-definition.schema.json",
+    );
+    const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+    const schemaMaskTypes: string[] =
+      schema.$defs.maskingRule.properties.maskType.enum;
+
+    expect([...schemaMaskTypes].sort()).toEqual(Object.values(MaskType).sort());
   });
 });

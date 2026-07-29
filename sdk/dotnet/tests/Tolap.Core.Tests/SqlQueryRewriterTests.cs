@@ -18,6 +18,13 @@ public class SqlQueryRewriterTests
 {
     private readonly SqlQueryRewriter _rewriter = new();
 
+    /// <summary>
+    /// A rewriter on a dialect whose <c>LIKE</c> is case-sensitive, so <c>like</c> and
+    /// <c>notLike</c> are pushable at all. The default dialect makes no collation promise
+    /// and therefore declines them; that is asserted in the dialect tests, not here.
+    /// </summary>
+    private readonly SqlQueryRewriter _likeRewriter = new(dialect: SqlDialect.Postgres);
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -755,16 +762,22 @@ public class SqlQueryRewriterTests
     [Fact]
     public void BuildWhereClause_Like()
     {
-        _rewriter.BuildWhereClause(new[] { new RowFilter("region", FilterOperator.Like, "us-%") })
+        // A case-sensitive dialect, so the operator is pushed rather than declined for
+        // collation reasons.
+        _likeRewriter
+            .BuildWhereClause(new[] { new RowFilter("region", FilterOperator.Like, "us-%") })
             .Should().Be("\"region\" LIKE 'us-%'");
     }
 
     [Fact]
     public void BuildWhereClause_NotLike()
     {
-        // No IS NULL arm: SQL NOT LIKE and the post-fetch pass both drop a null-valued row.
-        _rewriter.BuildWhereClause(new[] { new RowFilter("region", FilterOperator.NotLike, "eu-%") })
-            .Should().Be("\"region\" NOT LIKE 'eu-%'");
+        // The IS NULL arm, on the same footing as NotEquals and NotIn: NULL NOT LIKE 'x'
+        // is unknown, so the bare form would drop a null-valued row the post-fetch pass
+        // keeps, and the two paths would disagree.
+        _likeRewriter
+            .BuildWhereClause(new[] { new RowFilter("region", FilterOperator.NotLike, "eu-%") })
+            .Should().Be("(\"region\" NOT LIKE 'eu-%' OR \"region\" IS NULL)");
     }
 
     [Fact]
@@ -897,7 +910,10 @@ public class SqlQueryRewriterTests
     [InlineData(FilterOperator.NotLike)]
     public void BuildWhereClause_LikeAgainstNullPattern_AdmitsNoRow(FilterOperator op)
     {
-        _rewriter.BuildWhereClause(new[] { new RowFilter("region", op, null) }).Should().Be("1 = 0");
+        // A case-sensitive dialect, so the null-pattern path is what is under test rather
+        // than the collation refusal.
+        _likeRewriter.BuildWhereClause(new[] { new RowFilter("region", op, null) })
+            .Should().Be("1 = 0");
     }
 
     [Fact]

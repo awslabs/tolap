@@ -21,8 +21,9 @@ def merge(policies: list[PolicyDefinition]) -> EffectivePolicy:
     Merge rules:
     - Empty list -> deny_all()
     - Permissions: absent booleans take their schema default first (can_query
-      True, can_export False, read_only True), then AND for can_query/can_export
-      and OR for read_only
+      True, can_insert/can_update/can_delete/can_export False, read_only True),
+      then AND for can_query/can_insert/can_update/can_delete/can_export and OR
+      for read_only
     - Allowed sets: Intersection (None means unrestricted from that policy; an
       empty result means deny-all and is retained, never discarded)
     - Hidden/denied sets: Union
@@ -53,14 +54,28 @@ def _merge_permissions(policies: list[PolicyDefinition]) -> PolicyPermissions:
     Excluding an absent flag from the fold inverts the outcome: policy A silent
     on read_only plus policy B with read_only=False must yield True (the
     restrictive reading of "A did not grant write access"), not False.
+
+    The three write permissions default to False and fold with AND, so *every*
+    applicable policy has to grant a write for the merged policy to. ``read_only``
+    keeps its True default and its OR fold, so *any* policy can impose the
+    ceiling. Both directions therefore compose most-restrictively, and the
+    asymmetry with ``can_query`` (default True) is intentional: a policy written
+    before writes existed must not silently acquire them (connector spec
+    section 4.1).
     """
     # Schema defaults for absent flags, applied BEFORE folding.
     can_query_values = [p.permissions.can_query if p.permissions.can_query is not None else True for p in policies]
+    can_insert_values = [p.permissions.can_insert if p.permissions.can_insert is not None else False for p in policies]
+    can_update_values = [p.permissions.can_update if p.permissions.can_update is not None else False for p in policies]
+    can_delete_values = [p.permissions.can_delete if p.permissions.can_delete is not None else False for p in policies]
     can_export_values = [p.permissions.can_export if p.permissions.can_export is not None else False for p in policies]
     read_only_values = [p.permissions.read_only if p.permissions.read_only is not None else True for p in policies]
 
     return PolicyPermissions(
         can_query=all(can_query_values),
+        can_insert=all(can_insert_values),
+        can_update=all(can_update_values),
+        can_delete=all(can_delete_values),
         can_export=all(can_export_values),
         read_only=any(read_only_values),
     )

@@ -4,7 +4,9 @@
  * Merges multiple PolicyDefinitions into a single EffectivePolicy.
  *
  * Merge rules:
- *   - Permissions: AND for canQuery/canExport, OR for readOnly
+ *   - Permissions: AND for canQuery/canInsert/canUpdate/canDelete/canExport,
+ *     OR for readOnly. Absent booleans take their schema default first
+ *     (canQuery true, the write permissions and canExport false, readOnly true).
  *   - Allowed sets (objects, fields, endpoints, tags, methods): intersection
  *   - Hidden/denied sets: union
  *   - Row filters: concatenation (AND logic)
@@ -77,18 +79,38 @@ function unionArrays(
 // Sub-mergers
 // ---------------------------------------------------------------------------
 
+/**
+ * Fold the permission flags, defaulting absent values before folding.
+ *
+ * The three write permissions default to `false` and fold with AND, so *every*
+ * applicable policy has to grant a write for the merged policy to. `readOnly` keeps
+ * its `true` default and its OR fold, so *any* policy can impose the ceiling. Both
+ * directions therefore compose most-restrictively, and the asymmetry with `canQuery`
+ * (default `true`) is intentional: a policy written before writes existed must not
+ * silently acquire them (connector spec §4.1).
+ *
+ * Defaulting rather than skipping an absent flag is load-bearing: excluding it from
+ * the fold inverts the outcome, so a policy silent on `readOnly` merged with one
+ * setting `readOnly: false` must yield `true` (canonical spec §8).
+ */
 function mergePermissions(policies: PolicyDefinition[]): PolicyPermissions {
   let canQuery = true;
+  let canInsert = true;
+  let canUpdate = true;
+  let canDelete = true;
   let canExport = true;
   let readOnly = false;
 
   for (const p of policies) {
     canQuery = canQuery && p.permissions.canQuery;
+    canInsert = canInsert && (p.permissions.canInsert ?? false);
+    canUpdate = canUpdate && (p.permissions.canUpdate ?? false);
+    canDelete = canDelete && (p.permissions.canDelete ?? false);
     canExport = canExport && (p.permissions.canExport ?? false);
     readOnly = readOnly || (p.permissions.readOnly ?? true);
   }
 
-  return { canQuery, canExport, readOnly };
+  return { canQuery, canInsert, canUpdate, canDelete, canExport, readOnly };
 }
 
 function mergeMaskedFields(

@@ -73,8 +73,29 @@ public sealed record ObjectRules(
 /// <summary>
 /// Top-level permission flags for a policy.
 /// </summary>
+/// <remarks>
+/// <para>
+/// The three write permissions are <c>bool?</c> rather than <c>bool</c> so that absent
+/// stays distinguishable from an explicit <c>false</c>. Both readings deny — the schema
+/// default is <c>false</c> (connector-spec.md section 4.1) — but the distinction is
+/// load-bearing for <b>signing</b>: <c>null</c> is omitted from the canonical form
+/// (canonical-enforcement-spec.md section 1), so a policy that never mentioned a write
+/// permission signs to the same bytes here as it does in the Python and TypeScript SDKs,
+/// where the fields are simply absent. Declaring them non-nullable would emit
+/// <c>"canDelete":false,"canInsert":false,"canUpdate":false</c> into every signed payload
+/// and make .NET the only SDK unable to verify a context the others produced.
+/// </para>
+/// <para>
+/// The default is deliberately the opposite of <see cref="CanQuery"/>'s: a policy authored
+/// before writes existed must not silently gain them, and an author who omitted a write
+/// permission has not asked for write access.
+/// </para>
+/// </remarks>
 public sealed record PolicyPermissions(
     bool CanQuery,
+    bool? CanInsert = null,
+    bool? CanUpdate = null,
+    bool? CanDelete = null,
     bool CanExport = false,
     bool ReadOnly = true);
 
@@ -164,13 +185,56 @@ public sealed record EffectivePolicy(
 }
 
 /// <summary>
-/// A signed, time-bound container holding effective policies for transport to the tool execution environment.
+/// A signed, time-bound container carrying one effective policy for transport to the
+/// tool execution environment.
 /// </summary>
-public sealed record SecurityContext(
-    string Version,
-    string UserId,
-    string TenantId,
-    DateTimeOffset IssuedAt,
-    DateTimeOffset ExpiresAt,
-    EffectivePolicy[] Policies,
-    IntegrityBlock? Integrity = null);
+/// <remarks>
+/// <para><see cref="Policies"/> is an array because that is the wire shape the canonical
+/// signing projection uses (spec section 2 rule 3), but a context governs exactly
+/// <b>one</b> data source. Every enforcement path reads only the first element, so a
+/// context carrying two policies would sign both and enforce one — a silent truncation
+/// at enforcement time rather than at construction. The constructor therefore refuses
+/// more than one policy, matching the Python and TypeScript SDKs, which refuse the same
+/// shape. A deployment spanning several sources issues one context per source.</para>
+/// </remarks>
+public sealed record SecurityContext
+{
+    public SecurityContext(
+        string Version,
+        string UserId,
+        string TenantId,
+        DateTimeOffset IssuedAt,
+        DateTimeOffset ExpiresAt,
+        EffectivePolicy[] Policies,
+        IntegrityBlock? Integrity = null)
+    {
+        // A null array is left alone deliberately: a context deserialized without a
+        // "policies" key must still produce signable bytes rather than throwing here,
+        // and the signing projection renders it as an empty array. Carrying *no* policy
+        // is safe -- it grants nothing -- whereas carrying two is the ambiguity worth
+        // refusing.
+        if (Policies is { Length: > 1 })
+        {
+            throw new ArgumentException(
+                $"A SecurityContext carries a single effective policy, got {Policies.Length}; " +
+                "build one context per data source.",
+                nameof(Policies));
+        }
+
+        this.Version = Version;
+        this.UserId = UserId;
+        this.TenantId = TenantId;
+        this.IssuedAt = IssuedAt;
+        this.ExpiresAt = ExpiresAt;
+        this.Policies = Policies;
+        this.Integrity = Integrity;
+    }
+
+    public string Version { get; init; }
+    public string UserId { get; init; }
+    public string TenantId { get; init; }
+    public DateTimeOffset IssuedAt { get; init; }
+    public DateTimeOffset ExpiresAt { get; init; }
+    public EffectivePolicy[] Policies { get; init; }
+    public IntegrityBlock? Integrity { get; init; }
+}

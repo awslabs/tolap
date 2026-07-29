@@ -16,10 +16,11 @@ from tolap_core.context import build_security_context, sign_context
 from tolap_core.models import (
     EffectivePolicy,
     EndpointRules,
+    FieldRules,
     ObjectRules,
     PolicyPermissions,
 )
-from tolap_mcp.http_wrapper import SecureHttpToolWrapper
+from tolap_mcp.http_wrapper import SecureHttpToolWrapper, UpstreamHttpError
 from tolap_mcp.options import SecureMcpServerOptions
 
 
@@ -55,14 +56,26 @@ def _wrapper(handler):
 
 
 class TestUpstreamErrorPropagation:
+    """A non-2xx raises -- but as :class:`UpstreamHttpError`, not ``HTTPStatusError``.
+
+    These previously asserted ``httpx.HTTPStatusError``, which was the leak rather
+    than the contract. ``raise_for_status`` ran before enforcement, so the response
+    never reached the pipeline and the raised exception carried ``.response`` with
+    the raw unenforced payload -- a caller catching the error read every
+    ``hiddenFields`` entry in cleartext. Connector spec section 6 requires error
+    bodies to be enforced, so the wrapper enforces first and raises an exception
+    that exposes only the enforced body.
+    """
+
     def test_404_response_raises_after_policy_passes(self) -> None:
         def handler(_: httpx.Request) -> httpx.Response:
             return httpx.Response(404, json={"error": "not found"})
 
         wrapper, client = _wrapper(handler)
         try:
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(UpstreamHttpError) as exc_info:
                 wrapper.request(_signed_ctx(), "GET", "/drug/event.json")
+            assert exc_info.value.status_code == 404
         finally:
             client.close()
 
@@ -72,8 +85,9 @@ class TestUpstreamErrorPropagation:
 
         wrapper, client = _wrapper(handler)
         try:
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(UpstreamHttpError) as exc_info:
                 wrapper.request(_signed_ctx(), "GET", "/drug/event.json")
+            assert exc_info.value.status_code == 429
         finally:
             client.close()
 
@@ -83,8 +97,45 @@ class TestUpstreamErrorPropagation:
 
         wrapper, client = _wrapper(handler)
         try:
-            with pytest.raises(httpx.HTTPStatusError):
+            with pytest.raises(UpstreamHttpError) as exc_info:
                 wrapper.request(_signed_ctx(), "GET", "/drug/event.json")
+            assert exc_info.value.status_code == 500
+            # A non-JSON error body cannot have policy applied to it, so it is
+            # withheld rather than handed back unenforced (spec section 5).
+            assert exc_info.value.body is None
+        finally:
+            client.close()
+
+    def test_the_raised_error_exposes_no_route_to_the_unenforced_body(self) -> None:
+        """The exception must not carry a handle on the raw payload.
+
+        The whole point of enforcing an error body is defeated if the exception
+        also ships the response object it came from. ``httpx.HTTPStatusError``
+        does exactly that via ``.response``; ``UpstreamHttpError`` deliberately
+        holds a status, an enforced body and a URL, and nothing else.
+        """
+
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(422, json={"error": {"rejected_ssn": "111-22-3333"}})
+
+        policy = _allow_drug_policy()
+        policy.object_rules.field_rules = FieldRules(hidden_fields=["error"])
+        context = sign_context(
+            build_security_context("u", "t", [policy], ttl=timedelta(hours=1)), SIGNING_KEY
+        )
+
+        wrapper, client = _wrapper(handler)
+        try:
+            with pytest.raises(UpstreamHttpError) as exc_info:
+                wrapper.request(context, "GET", "/drug/event.json")
+
+            error = exc_info.value
+            assert error.body == {}, "the hidden field is removed from the error body"
+            assert not hasattr(error, "response")
+            assert "111-22-3333" not in str(error)
+            # Nothing reachable on the exception carries the raw payload.
+            for value in vars(error).values():
+                assert "111-22-3333" not in repr(value)
         finally:
             client.close()
 

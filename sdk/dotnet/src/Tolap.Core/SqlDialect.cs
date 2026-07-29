@@ -55,19 +55,36 @@ internal enum RowLimitForm
 }
 
 /// <summary>
-/// The emitted-text rules for one engine.
+/// The emitted-text rules for one engine, plus the one semantic it must promise.
 /// </summary>
 /// <remarks>
-/// Only <i>text</i> lives here. Which operators are pushable, which values are refused, and
-/// every fail-closed rule are profile-independent by design (connector-spec.md section 5.1): a
-/// filter unpushable in one profile is unpushable in all of them, so selecting a profile never
-/// changes which rows a policy admits.
+/// Almost everything here is <i>text</i>: which values are refused and every fail-closed rule
+/// are profile-independent by design (connector-spec.md section 5.1), so selecting a profile
+/// never changes which rows a policy admits.
+/// <para>
+/// <paramref name="CaseSensitiveLike"/> is the single exception, and it is not a text rule — it
+/// records whether the engine's <c>LIKE</c> compares the way the post-fetch pass does. A profile
+/// that cannot promise that declines to push <c>like</c>/<c>notLike</c> at all, which keeps the
+/// invariant above intact by <i>narrowing</i> what is pushed rather than by emitting a comparison
+/// whose meaning the profile does not know.
+/// </para>
 /// </remarks>
+/// <param name="CaseSensitiveLike">
+/// Whether this engine's <c>LIKE</c> is case-sensitive, and therefore whether
+/// <c>like</c>/<c>notLike</c> may be pushed down at all (canonical-enforcement-spec.md section
+/// 4). The post-fetch pass compares case-SENSITIVELY and is engine-independent, but a
+/// pushed-down <c>LIKE</c> inherits the <i>column's</i> collation:
+/// <c>SELECT 'ALICE JONES' LIKE 'alice%'</c> is false on Postgres and true on MySQL under the
+/// default <c>utf8mb4_0900_ai_ci</c>. So on MySQL a <c>name notLike 'alice%'</c> filter drops
+/// <c>'ALICE JONES'</c> when pushed down and keeps it when applied post-fetch — a difference in
+/// which <i>real</i> records a caller sees, not an edge-case null.
+/// </param>
 internal sealed record DialectProfile(
     SqlDialect Dialect,
     char QuoteOpen,
     char QuoteClose,
-    RowLimitForm RowLimit)
+    RowLimitForm RowLimit,
+    bool CaseSensitiveLike)
 {
     /// <summary>
     /// The characters this profile uses to delimit an identifier.
@@ -90,13 +107,27 @@ internal static class DialectProfiles
     /// <summary>What an omitted dialect selects.</summary>
     public const SqlDialect Default = SqlDialect.Ansi;
 
+    /// <summary>
+    /// A profile whose <c>LIKE</c> is case-sensitive, so the operator may be pushed down.
+    /// </summary>
+    private const bool CaseSensitiveLike = true;
+
+    /// <summary>
+    /// A profile whose <c>LIKE</c> follows the column's collation, so the operator is declined.
+    /// </summary>
+    private const bool CollationDependentLike = false;
+
     private static readonly Dictionary<SqlDialect, DialectProfile> Profiles = new()
     {
-        [SqlDialect.Ansi] = new(SqlDialect.Ansi, '"', '"', RowLimitForm.LimitSuffix),
-        [SqlDialect.Postgres] = new(SqlDialect.Postgres, '"', '"', RowLimitForm.LimitSuffix),
-        [SqlDialect.Trino] = new(SqlDialect.Trino, '"', '"', RowLimitForm.LimitSuffix),
-        [SqlDialect.MySql] = new(SqlDialect.MySql, '`', '`', RowLimitForm.LimitSuffix),
-        [SqlDialect.SqlServer] = new(SqlDialect.SqlServer, '[', ']', RowLimitForm.TopPrefix)
+        // Ansi is the strict intersection and makes no collation promise at all, so it takes
+        // the same answer as the engines that are known to be insensitive.
+        [SqlDialect.Ansi] = new(SqlDialect.Ansi, '"', '"', RowLimitForm.LimitSuffix, CollationDependentLike),
+        [SqlDialect.Postgres] = new(SqlDialect.Postgres, '"', '"', RowLimitForm.LimitSuffix, CaseSensitiveLike),
+        [SqlDialect.Trino] = new(SqlDialect.Trino, '"', '"', RowLimitForm.LimitSuffix, CaseSensitiveLike),
+        // MySQL's default collation, utf8mb4_0900_ai_ci, is case- and accent-insensitive;
+        // SQL Server's default is case-insensitive too.
+        [SqlDialect.MySql] = new(SqlDialect.MySql, '`', '`', RowLimitForm.LimitSuffix, CollationDependentLike),
+        [SqlDialect.SqlServer] = new(SqlDialect.SqlServer, '[', ']', RowLimitForm.TopPrefix, CollationDependentLike)
     };
 
     /// <summary>

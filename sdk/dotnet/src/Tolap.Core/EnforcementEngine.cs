@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Tolap.Core;
@@ -15,6 +16,28 @@ public sealed record AccessResult(bool Allowed, string? Reason = null);
 /// Result of a field access validation check.
 /// </summary>
 public sealed record FieldAccessResult(string[] Allowed, string[] Denied);
+
+/// <summary>
+/// Optional inputs to <see cref="EnforcementEngine.ValidateWrite"/>.
+/// </summary>
+/// <param name="TargetRow">
+/// The row an update or delete will modify. <c>null</c> means the caller supplied none,
+/// which yields <c>write target unverifiable</c> when the policy carries row filters —
+/// never an allow.
+/// </param>
+/// <param name="ResourceFields">
+/// Fields of the resource the payload does not mention, for a full-resource replace.
+/// Required alongside <paramref name="FullReplace"/> when the policy sets
+/// <c>allowedFields</c>.
+/// </param>
+/// <param name="FullReplace">
+/// Whether this write replaces the whole resource rather than the keys it names. An HTTP
+/// <c>PUT</c> is the canonical case (connector-spec.md section 6).
+/// </param>
+public sealed record WriteValidationOptions(
+    IReadOnlyDictionary<string, object?>? TargetRow = null,
+    string[]? ResourceFields = null,
+    bool FullReplace = false);
 
 /// <summary>
 /// Thrown when a tool result cannot have policy applied to it.
@@ -368,6 +391,14 @@ public static class EnforcementEngine
     /// Filters results by tag rules. Documents must have at least one allowed tag
     /// and must not have any denied tags.
     /// </summary>
+    /// <remarks>
+    /// A null <c>AllowedTags</c> is unrestricted; an empty one denies every record (spec
+    /// section 3). A record with no recognizable tags is dropped under an allow-list — a
+    /// classification that cannot be established cannot be shown to be permitted — and
+    /// kept under a denylist alone, which gives no grounds to drop it. Denied takes
+    /// precedence over allowed. Tags are read by <see cref="ExtractTags"/> and compared
+    /// case-insensitively on both sides.
+    /// </remarks>
     public static IReadOnlyList<Dictionary<string, object?>> FilterByTags(
         IReadOnlyList<Dictionary<string, object?>> results,
         EffectivePolicy policy)
@@ -383,11 +414,11 @@ public static class EnforcementEngine
             var tags = ExtractTags(result);
 
             // Check denied tags first (takes precedence)
-            if (tagRules.DeniedTags is not null && tags.Any(t => tagRules.DeniedTags.Contains(t)))
+            if (tagRules.DeniedTags is not null && tagRules.DeniedTags.Any(tags.Contains))
                 continue;
 
             // Check allowed tags (document must have at least one)
-            if (tagRules.AllowedTags is not null && !tags.Any(t => tagRules.AllowedTags.Contains(t)))
+            if (tagRules.AllowedTags is not null && !tagRules.AllowedTags.Any(tags.Contains))
                 continue;
 
             filtered.Add(result);
@@ -708,15 +739,42 @@ public static class EnforcementEngine
             case FilterOperator.LessThanOrEqual:
                 return CompareNullable(value, rf.Value) is int le && le <= 0;
             case FilterOperator.Like:
-                if (value is null || rf.Value is null) return false;
-                return LikeMatches(rf.Value.ToString()!, value.ToString()!);
+            {
+                // Normalize before the null test: a JSON null arrives as a JsonElement of
+                // kind Null, which is NOT a CLR null, and whose ToString() is the empty
+                // string. Testing `value is null` alone would compare the pattern against
+                // "" instead of dropping the row, so `like '%'` would match a null-valued
+                // row (spec section 7 says a null value is a non-match).
+                var likeValue = Normalize(value);
+                var likePattern = Normalize(rf.Value);
+                if (likeValue is null || likePattern is null) return false;
+                return LikeMatches(likePattern.ToString()!, likeValue.ToString()!);
+            }
             case FilterOperator.NotLike:
-                // A null field value is not "unlike" the pattern, it is incomparable:
-                // SQL evaluates NULL NOT LIKE 'x' to NULL, which does not retain the row.
-                // Returning true here would be the same fail-open bug spec section 7
-                // records for notEquals/notIn on a missing field.
-                if (value is null || rf.Value is null) return false;
-                return !LikeMatches(rf.Value.ToString()!, value.ToString()!);
+            {
+                // notLike is a negative operator and behaves exactly like NotEquals and
+                // NotIn on a null value: the row is KEPT. Two separate rules meet here and
+                // are deliberately not conflated.
+                //
+                // 1. Present-and-null is KEPT. This is what keeps the pushed-down form and
+                //    this pass equivalent: the rewriter emits
+                //    (col NOT LIKE 'x' OR col IS NULL) precisely because bare SQL
+                //    NOT LIKE is unknown-therefore-false for a null col, so without the arm
+                //    the database would drop a row this pass keeps (spec section 4).
+                // 2. An ABSENT field was already dropped above. That is the unrelated
+                //    fail-closed rule: a value that cannot be established cannot be shown
+                //    to satisfy the filter (spec section 7). It applies to every operator.
+                //
+                // Normalize is load-bearing for the same reason as in Like above: a JSON
+                // null is a JsonElement of kind Null, not a CLR null.
+                var notLikeValue = Normalize(value);
+                if (notLikeValue is null) return true;
+                // A null pattern states no constraint any value can be shown to satisfy,
+                // so it matches nothing -- as for Like.
+                var notLikePattern = Normalize(rf.Value);
+                if (notLikePattern is null) return false;
+                return !LikeMatches(notLikePattern.ToString()!, notLikeValue.ToString()!);
+            }
             case FilterOperator.IsNull:
                 // The field is present (a missing field was already dropped above), so
                 // this is the genuine "present and null" case.
@@ -998,6 +1056,521 @@ public static class EnforcementEngine
         return new AccessResult(true);
     }
 
+    // -- Write validation (connector-spec.md section 4) --
+    //
+    // Reads filter what comes back. Writes have to be validated BEFORE they reach the
+    // source, because there is nothing to filter afterwards -- the damage is already
+    // committed. Everything below runs pre-execution and returns a decision the caller
+    // must honour; nothing here talks to a data source.
+
+    /// <summary>
+    /// HTTP methods mapped to the write operation they perform (connector-spec.md
+    /// section 6). <c>GET</c>/<c>HEAD</c>/<c>OPTIONS</c> are reads governed by
+    /// <c>canQuery</c>, which <see cref="ValidateEndpoint"/> already enforces, so they are
+    /// absent on purpose.
+    /// </summary>
+    private static readonly Dictionary<string, WriteOperation> MethodWriteOperations =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["POST"] = WriteOperation.Insert,
+            ["PUT"] = WriteOperation.Update,
+            ["PATCH"] = WriteOperation.Update,
+            ["DELETE"] = WriteOperation.Delete
+        };
+
+    /// <summary>
+    /// The write operation an HTTP method performs, or null for a read method.
+    /// </summary>
+    /// <remarks>
+    /// <c>POST</c> inserts, <c>PUT</c>/<c>PATCH</c> update, <c>DELETE</c> deletes;
+    /// <c>GET</c>/<c>HEAD</c>/<c>OPTIONS</c> return null because they are reads governed by
+    /// <c>canQuery</c> (connector-spec.md section 6). An unrecognized method also returns
+    /// null — it is not silently treated as a read: <see cref="ValidateEndpoint"/> still
+    /// gates it through <c>allowedMethods</c>, whose omitted default is the read methods, so
+    /// an unknown verb is denied there rather than admitted here.
+    /// </remarks>
+    public static WriteOperation? WriteOperationForMethod(string method)
+        => MethodWriteOperations.TryGetValue(method, out var operation) ? operation : null;
+
+    /// <summary>
+    /// Validates a write before it reaches the data source (connector-spec.md section 4).
+    /// </summary>
+    /// <remarks>
+    /// <para>Runs the four required pre-write checks in order — cheapest first, all of them
+    /// mandatory:</para>
+    /// <list type="number">
+    ///   <item><description>the operation's permission
+    ///     (<c>canInsert</c>/<c>canUpdate</c>/<c>canDelete</c>), then the <c>readOnly</c>
+    ///     ceiling</description></item>
+    ///   <item><description>the target object against
+    ///     <c>hiddenObjects</c>/<c>allowedObjects</c></description></item>
+    ///   <item><description>every field in the payload against <c>hiddenFields</c>,
+    ///     <c>readOnlyFields</c> and <c>allowedFields</c></description></item>
+    ///   <item><description>the policy's row filters against the update/delete target
+    ///     row</description></item>
+    /// </list>
+    /// <para>
+    /// Fails closed and rejects the whole write: one unwritable field denies the operation
+    /// rather than being dropped so the rest can proceed (section 4.4). The reason strings
+    /// are part of the contract — integrators log and branch on them.
+    /// </para>
+    /// <para>
+    /// <see cref="WriteOperation.Upsert"/> — a call that cannot distinguish a create from an
+    /// overwrite, such as an unconditional object-store <c>PUT</c> — requires <b>both</b>
+    /// <c>canInsert</c> and <c>canUpdate</c> (section 8).
+    /// </para>
+    /// <para>
+    /// A permitted write that returns data — <c>INSERT ... RETURNING</c>, a 201 body, updated
+    /// metadata — is a <i>read</i> of that data, so run
+    /// <see cref="ApplyResultPipeline"/> over the response (section 4.5). A masked field must
+    /// come back masked even when the caller just wrote it.
+    /// </para>
+    /// </remarks>
+    /// <param name="operation">The write being attempted.</param>
+    /// <param name="objectName">
+    /// The table, resource, or key being written, or null to skip the object check.
+    /// </param>
+    /// <param name="payload">
+    /// The record being written. Its keys, at every depth, are the fields validated.
+    /// </param>
+    /// <param name="policy">The effective policy governing the write.</param>
+    /// <param name="options">
+    /// The target row, resource fields, and full-replace flag. Null selects the defaults,
+    /// which means no target row is supplied.
+    /// </param>
+    public static AccessResult ValidateWrite(
+        WriteOperation operation,
+        string? objectName,
+        object? payload,
+        EffectivePolicy policy,
+        WriteValidationOptions? options = null)
+    {
+        options ??= new WriteValidationOptions();
+
+        var permission = ValidateWritePermission(operation, policy);
+        if (!permission.Allowed) return permission;
+
+        if (objectName is not null)
+        {
+            var target = ValidateWriteObject(objectName, policy);
+            if (!target.Allowed) return target;
+        }
+
+        var written = PayloadWriteFields(payload, options.ResourceFields);
+        if (options.FullReplace)
+        {
+            foreach (var name in ProtectedFieldNames(policy))
+            {
+                if (!written.Contains(name)) written.Add(name);
+            }
+        }
+
+        var fields = ValidateWrittenFields(written, policy);
+        if (!fields.Allowed) return fields;
+
+        return ValidateWriteTargetRow(operation, options.TargetRow, policy);
+    }
+
+    /// <summary>
+    /// Validates an HTTP write: endpoint rules, then the section 4 write checks.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Method and permission must agree and <b>both</b> are checked (connector-spec.md
+    /// section 6): <see cref="ValidateEndpoint"/> gates the path and the method through
+    /// <c>allowedEndpoints</c>/<c>hiddenEndpoints</c>/<c>allowedMethods</c>, and the write
+    /// checks then gate the operation the method performs and the body it carries. Neither
+    /// substitutes for the other — <c>allowedMethods: ["POST"]</c> says nothing about
+    /// <c>canInsert</c>, and <c>canInsert</c> says nothing about which paths are reachable.
+    /// </para>
+    /// <para>
+    /// A read method (<c>GET</c>/<c>HEAD</c>/<c>OPTIONS</c>) is not a write, so this returns
+    /// the endpoint decision unchanged rather than inventing a write permission for it.
+    /// </para>
+    /// <para>
+    /// A <c>PUT</c> is treated as a <b>full-resource replace</b> (section 6): every field the
+    /// policy protects is validated as though the body had named it, because a replace that
+    /// omits a <c>readOnlyFields</c> field is still attempting to overwrite it with absent.
+    /// <c>PATCH</c> is a partial update, so only the keys present are validated. Supply
+    /// <see cref="WriteValidationOptions.ResourceFields"/> to extend the replace to fields the
+    /// policy does not itself name — needed when <c>allowedFields</c> is set, since a resource
+    /// field missing from an allow-list cannot be inferred from the policy alone.
+    /// </para>
+    /// </remarks>
+    public static AccessResult ValidateHttpWrite(
+        string method,
+        string path,
+        object? payload,
+        EffectivePolicy policy,
+        string? objectName = null,
+        WriteValidationOptions? options = null)
+    {
+        var endpoint = ValidateEndpoint(path, method, policy);
+        if (!endpoint.Allowed) return endpoint;
+
+        var operation = WriteOperationForMethod(method);
+        if (operation is null) return endpoint;
+
+        options ??= new WriteValidationOptions();
+        return ValidateWrite(
+            operation.Value,
+            objectName,
+            payload,
+            policy,
+            options with { FullReplace = string.Equals(method, "PUT", StringComparison.OrdinalIgnoreCase) });
+    }
+
+    /// <summary>
+    /// Check 1: the operation's permission, then the <c>readOnly</c> ceiling.
+    /// </summary>
+    /// <remarks>
+    /// An absent write permission is a denial: the schema default for all three is
+    /// <c>false</c> (connector-spec.md section 4.1), the opposite of <c>canQuery</c>. The
+    /// asymmetry is the point — a policy authored before writes existed must not silently
+    /// acquire them.
+    /// </remarks>
+    private static AccessResult ValidateWritePermission(
+        WriteOperation operation,
+        EffectivePolicy policy)
+    {
+        var permissions = policy.Permissions;
+
+        // Upsert consults both, which is the safe intersection connector-spec.md section 8
+        // mandates for a call that cannot distinguish a create from an overwrite.
+        if (operation is WriteOperation.Insert or WriteOperation.Upsert
+            && permissions.CanInsert != true)
+        {
+            return new AccessResult(false, "insert not permitted");
+        }
+
+        if (operation is WriteOperation.Update or WriteOperation.Upsert
+            && permissions.CanUpdate != true)
+        {
+            return new AccessResult(false, "update not permitted");
+        }
+
+        if (operation is WriteOperation.Delete && permissions.CanDelete != true)
+        {
+            return new AccessResult(false, "delete not permitted");
+        }
+
+        // readOnly is a ceiling, not a peer: it denies every write regardless of the three
+        // flags. It defaults to true, matching the schema default that spec section 8
+        // requires be applied before folding, so a policy silent on readOnly cannot write.
+        if (permissions.ReadOnly)
+        {
+            return new AccessResult(false, "read-only policy");
+        }
+
+        return new AccessResult(true);
+    }
+
+    /// <summary>
+    /// Check 2: the target object against <c>hiddenObjects</c>/<c>allowedObjects</c>.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not <see cref="ValidateAccess"/>: that method is the read-path entry
+    /// point and would be the wrong gate to lean on if it ever grows a <c>canQuery</c> check
+    /// like its Python and TypeScript counterparts. The object rules themselves are
+    /// identical, and the reasons stay the ones connector-spec.md section 3.3 documents.
+    /// </remarks>
+    private static AccessResult ValidateWriteObject(string objectName, EffectivePolicy policy)
+    {
+        var objectRules = policy.ObjectRules;
+
+        if (objectRules?.HiddenObjects is not null)
+        {
+            foreach (var hidden in objectRules.HiddenObjects)
+            {
+                if (GlobMatch(hidden, objectName))
+                    return new AccessResult(false, "object is hidden");
+            }
+        }
+
+        if (objectRules?.AllowedObjects is not null
+            && !objectRules.AllowedObjects.Any(a => GlobMatch(a, objectName)))
+        {
+            return new AccessResult(false, "object not in allowed set");
+        }
+
+        return new AccessResult(true);
+    }
+
+    /// <summary>
+    /// Check 3: every field in the payload must be writable.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Fails closed on the <i>whole</i> write (connector-spec.md section 4.4): the first
+    /// unwritable field denies the entire operation rather than being stripped so the rest
+    /// can proceed. This is the one place where filtering — the correct answer on the read
+    /// path — is the wrong answer. A caller that submits <c>{status, ssn}</c> and is told the
+    /// write succeeded, when only <c>status</c> landed, holds a model of the data that is
+    /// wrong in a way it cannot detect.
+    /// </para>
+    /// <para>
+    /// Field names match with the bidirectional, case-insensitive, glob-aware matcher the
+    /// read path uses (section 3.2), so a <c>readOnlyFields</c> entry of
+    /// <c>patients.created_at</c> blocks a payload key of <c>created_at</c>.
+    /// </para>
+    /// <para>
+    /// The field is named in the reason. That discloses nothing: the caller supplied it. Row
+    /// denials, by contrast, never name a value.
+    /// </para>
+    /// </remarks>
+    private static AccessResult ValidateWrittenFields(
+        IReadOnlyList<string> fields,
+        EffectivePolicy policy)
+    {
+        var fieldRules = policy.ObjectRules?.FieldRules;
+        if (fieldRules is null) return new AccessResult(true);
+
+        foreach (var name in fields)
+        {
+            // A field the caller cannot read, it cannot write.
+            if (fieldRules.HiddenFields is not null
+                && fieldRules.HiddenFields.Any(p => FieldNameMatches(p, name)))
+            {
+                return new AccessResult(false, $"field is hidden: {name}");
+            }
+
+            // readOnlyFields: readable but not writable. This is the whole meaning of the
+            // field (connector-spec.md section 4.3) and it has no effect on reads.
+            if (fieldRules.ReadOnlyFields is not null
+                && fieldRules.ReadOnlyFields.Any(p => FieldNameMatches(p, name)))
+            {
+                return new AccessResult(false, $"field is read-only: {name}");
+            }
+
+            // A null allow-list is unrestricted; an empty one denies every field (spec
+            // section 3), so this tests for null rather than for emptiness.
+            if (fieldRules.AllowedFields is not null
+                && !fieldRules.AllowedFields.Any(p => FieldNameMatches(p, name)))
+            {
+                return new AccessResult(false, $"field not in allowed set: {name}");
+            }
+        }
+
+        return new AccessResult(true);
+    }
+
+    /// <summary>
+    /// Check 4: row filters must match the row an update or delete targets.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A caller must not be able to modify a row it could not have selected, so the policy's
+    /// row filters are evaluated against the target and a non-match is
+    /// <c>target row not permitted</c>.
+    /// </para>
+    /// <para>
+    /// When filters exist and no target row was supplied, the result is
+    /// <c>write target unverifiable</c> — <b>not</b> an allow. The integrator's options are to
+    /// read the row first and pass it here, or to push the filters into the statement's
+    /// <c>WHERE</c> so the source applies them; an unqualified <c>DELETE FROM patients</c>
+    /// under a region-scoped policy has to be refused rather than executed and hoped over
+    /// (connector-spec.md sections 4.2 and 5).
+    /// </para>
+    /// <para>
+    /// An insert has no pre-existing target, so this check does not apply to it. The row it
+    /// <i>creates</i> is governed by the field checks above: a policy scoped by <c>region</c>
+    /// cannot stop an insert writing a foreign region unless <c>region</c> is in
+    /// <c>readOnlyFields</c> or outside <c>allowedFields</c>, which is a gap in the policy
+    /// language rather than in this implementation.
+    /// </para>
+    /// </remarks>
+    private static AccessResult ValidateWriteTargetRow(
+        WriteOperation operation,
+        IReadOnlyDictionary<string, object?>? targetRow,
+        EffectivePolicy policy)
+    {
+        if (operation == WriteOperation.Insert) return new AccessResult(true);
+
+        var filters = policy.ObjectRules?.RowFilters;
+        if (filters is null || filters.Length == 0) return new AccessResult(true);
+
+        if (targetRow is null)
+        {
+            return new AccessResult(false, "write target unverifiable");
+        }
+
+        // The row must satisfy every filter, exactly as it would to be returned by a read
+        // (spec section 7): a missing field fails closed.
+        var row = targetRow as Dictionary<string, object?>
+                  ?? new Dictionary<string, object?>(targetRow);
+        if (!filters.All(f => RowPassesFilter(row, f)))
+        {
+            // Deliberately does not name the field or the value; section 4.4 permits naming
+            // a payload field the caller supplied, never a row value.
+            return new AccessResult(false, "target row not permitted");
+        }
+
+        return new AccessResult(true);
+    }
+
+    /// <summary>
+    /// The field names a payload attempts to write.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Nested keys are <b>not</b> flattened into dotted paths: the field matcher already
+    /// reaches a bare <c>ssn</c> from a rule of <c>patients.ssn</c> and vice versa
+    /// (section 3.2), so walking the tree and collecting every key at every depth is what a
+    /// rule needs to see.
+    /// </para>
+    /// <para>
+    /// Four payload shapes are enumerated: a string-keyed dictionary, a
+    /// <see cref="System.Text.Json.JsonElement"/>, a sequence of any of these, and — via
+    /// reflection over public readable instance properties — a POCO or anonymous type. The
+    /// last arm exists because <see cref="Tolap.Mcp"/>'s HTTP wrapper takes an
+    /// <c>object?</c> body and integrators naturally pass
+    /// <c>new { full_name = "..." }</c>. Without it a POCO body would contribute no field
+    /// names at all and every field rule would silently pass — a fail-open on the write path,
+    /// where there is nothing to filter afterwards.
+    /// </para>
+    /// <para>
+    /// <paramref name="resourceFields"/> extends the set with fields the payload does not
+    /// mention. It exists for the full-resource-replace rule (see
+    /// <see cref="WriteValidationOptions.FullReplace"/>); it is deliberately not inferred
+    /// from anything, because only the integrator knows a resource's shape.
+    /// </para>
+    /// </remarks>
+    public static List<string> PayloadWriteFields(
+        object? payload,
+        string[]? resourceFields = null)
+    {
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // Guards against a cyclic object graph, which reflection can reach even though JSON
+        // cannot. Reference identity, so two equal-but-distinct records are both walked.
+        var visited = new HashSet<object>(ReferenceEqualityComparer.Instance);
+
+        void Add(string name)
+        {
+            if (seen.Add(name)) names.Add(name);
+        }
+
+        void Walk(object? node)
+        {
+            switch (node)
+            {
+                case null:
+                    return;
+                case IReadOnlyDictionary<string, object?> record:
+                    if (!visited.Add(record)) return;
+                    foreach (var (key, value) in record)
+                    {
+                        Add(key);
+                        Walk(value);
+                    }
+                    return;
+                case System.Text.Json.JsonElement element:
+                    WalkJson(element);
+                    return;
+                case string:
+                    // A string is IEnumerable; without this arm it would be walked
+                    // character by character to no purpose.
+                    return;
+                case System.Collections.IEnumerable sequence:
+                    if (!visited.Add(sequence)) return;
+                    foreach (var item in sequence) Walk(item);
+                    return;
+                default:
+                    WalkProperties(node);
+                    return;
+            }
+        }
+
+        void WalkProperties(object node)
+        {
+            var type = node.GetType();
+            // A primitive or value-like leaf names no fields. Checked before the visited
+            // guard because boxing means every int would otherwise consume a slot.
+            if (type.IsPrimitive || node is decimal or DateTime or DateTimeOffset
+                or TimeSpan or Guid || type.IsEnum)
+            {
+                return;
+            }
+            if (!visited.Add(node)) return;
+
+            foreach (var property in type.GetProperties(
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+            {
+                if (!property.CanRead || property.GetIndexParameters().Length > 0) continue;
+                Add(property.Name);
+
+                object? value;
+                try
+                {
+                    value = property.GetValue(node);
+                }
+                catch (System.Reflection.TargetInvocationException)
+                {
+                    // A throwing getter names its field either way -- the name is what a rule
+                    // matches on -- so the property is already recorded above. Swallowed
+                    // rather than propagated because a write must be denied or allowed on
+                    // policy grounds, never crash on the shape of the caller's DTO.
+                    continue;
+                }
+                Walk(value);
+            }
+        }
+
+        void WalkJson(System.Text.Json.JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case System.Text.Json.JsonValueKind.Object:
+                    foreach (var property in element.EnumerateObject())
+                    {
+                        Add(property.Name);
+                        WalkJson(property.Value);
+                    }
+                    return;
+                case System.Text.Json.JsonValueKind.Array:
+                    foreach (var item in element.EnumerateArray()) WalkJson(item);
+                    return;
+            }
+        }
+
+        Walk(payload);
+
+        if (resourceFields is not null)
+        {
+            foreach (var name in resourceFields) Add(name);
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// Every field the policy forbids writing, as written in the policy.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Used to give the full-resource-replace rule (connector-spec.md section 6) teeth when
+    /// the caller cannot enumerate the resource: a replace writes every field of the
+    /// resource, and the fields whose overwrite must be denied are exactly the ones the
+    /// policy protects, so treating them as present is the fail-closed reading. It is
+    /// <i>not</i> an approximation of the resource's shape — it is the subset of any
+    /// resource's shape that the policy cares about.
+    /// </para>
+    /// <para>
+    /// <c>allowedFields</c> cannot be handled this way: the risk there is a resource field
+    /// the allow-list omits, which is unknowable without the resource's field list. An
+    /// integrator combining <c>allowedFields</c> with full-resource replaces must pass
+    /// <see cref="WriteValidationOptions.ResourceFields"/>.
+    /// </para>
+    /// </remarks>
+    private static IEnumerable<string> ProtectedFieldNames(EffectivePolicy policy)
+    {
+        var fieldRules = policy.ObjectRules?.FieldRules;
+        if (fieldRules is null) return Array.Empty<string>();
+
+        return (fieldRules.HiddenFields ?? Array.Empty<string>())
+            .Concat(fieldRules.ReadOnlyFields ?? Array.Empty<string>());
+    }
+
     /// <summary>
     /// Applies a masking rule to a single value.
     /// </summary>
@@ -1137,26 +1710,146 @@ public static class EnforcementEngine
         return node;
     }
 
-    private static string[] ExtractTags(Dictionary<string, object?> record)
+    // -- Tag extraction --
+    //
+    // A classification level *is* a tag: there is no separate classification construct,
+    // so tag filtering is the whole knowledge-base confidentiality control
+    // (connector-spec.md section 7). Extraction therefore has to be as robust as masking
+    // already is. A literal lower-case "tags" TryGetValue enforced the control on exactly
+    // one of the five shapes real providers emit -- "tags", "Tags", "metadata.tags",
+    // "labels", and a scalar "classification" -- so four of five records tagged "secret"
+    // were disclosed.
+
+    /// <summary>
+    /// The record keys that carry classification tags, matched with
+    /// <see cref="FieldNameMatches"/> rather than looked up literally.
+    /// </summary>
+    /// <remarks>
+    /// The set is deliberately small, fixed, and not configurable. Every entry is a shape
+    /// connector spec section 7 names; nothing is added on speculation, because widening
+    /// the set is not automatically safer in either direction. An unrelated
+    /// <c>labels</c> field whose value happens to appear in <c>allowedTags</c> would
+    /// <i>admit</i> a record the allow-list would otherwise have dropped as untagged, so
+    /// an over-broad set can fail open exactly as a too-narrow one fails to enforce. It is
+    /// not an integrator-supplied parameter for the same reason: the policy is signed, and
+    /// an unsigned knob deciding which keys count as security metadata would put part of
+    /// the decision outside the signature.
+    /// </remarks>
+    private static readonly string[] TagKeys = { "tags", "labels", "classification" };
+
+    /// <summary>
+    /// Every tag on a record, from any recognized tag key at any depth.
+    /// </summary>
+    /// <remarks>
+    /// The set is <see cref="StringComparer.OrdinalIgnoreCase"/> because tag values
+    /// compare case-insensitively: <c>deniedTags: ["Secret"]</c> must drop a record tagged
+    /// <c>secret</c> (connector spec section 7).
+    /// </remarks>
+    private static HashSet<string> ExtractTags(Dictionary<string, object?> record)
     {
-        if (!record.TryGetValue("tags", out var tagsObj) || tagsObj is null)
-            return Array.Empty<string>();
+        var tags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        CollectTags(record, tags);
+        return tags;
+    }
 
-        if (tagsObj is string[] strArray)
-            return strArray;
-
-        if (tagsObj is IEnumerable<object> enumerable)
-            return enumerable.Select(o => o?.ToString() ?? "").ToArray();
-
-        if (tagsObj is System.Text.Json.JsonElement jsonElement
-            && jsonElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+    /// <summary>
+    /// Collects tags from every recognized tag key anywhere in a node tree.
+    /// </summary>
+    /// <remarks>
+    /// Recurses into nested maps and lists, matching keys with the same bidirectional,
+    /// case-insensitive, glob-aware matcher masking and hidden-field removal use (spec
+    /// section 4), so <c>Tags</c> and <c>metadata.tags</c> are found alongside
+    /// <c>tags</c>.
+    /// </remarks>
+    private static void CollectTags(object? node, HashSet<string> into)
+    {
+        if (node is Dictionary<string, object?> dict)
         {
-            return jsonElement.EnumerateArray()
-                .Select(e => e.GetString() ?? "")
-                .ToArray();
+            foreach (var (key, value) in dict)
+            {
+                if (TagKeys.Any(tagKey => FieldNameMatches(tagKey, key)))
+                    HarvestTagValues(value, into);
+                // Walked whether or not the key matched: a matched key holding a map may
+                // still nest a tag key of its own.
+                CollectTags(value, into);
+            }
+            return;
         }
 
-        return Array.Empty<string>();
+        if (node is JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (TagKeys.Any(tagKey => FieldNameMatches(tagKey, property.Name)))
+                        HarvestTagValues(property.Value, into);
+                    CollectTags(property.Value, into);
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                    CollectTags(item, into);
+            }
+            return;
+        }
+
+        // A string is a leaf, not a character sequence to walk. Every other enumerable
+        // -- List<object?>, object[], string[], a materialized record sequence -- may
+        // hold records that nest a tag key.
+        if (node is string) return;
+        if (node is System.Collections.IEnumerable enumerable)
+        {
+            foreach (var item in enumerable)
+                CollectTags(item, into);
+        }
+    }
+
+    /// <summary>
+    /// Collects the tag strings carried by a matched tag key's value.
+    /// </summary>
+    /// <remarks>
+    /// A scalar counts as a single tag: providers emit both <c>{"tags": ["secret"]}</c>
+    /// and <c>{"classification": "secret"}</c>, and connector spec section 7 requires the
+    /// two to behave identically. Nested arrays are flattened.
+    /// <para>
+    /// Only strings are collected. <c>allowedTags</c>/<c>deniedTags</c> are arrays of
+    /// strings in the schema, so a non-string value could only match after a
+    /// stringification whose result differs per language (<c>true.ToString()</c> is
+    /// <c>"True"</c> here and <c>"true"</c> in JavaScript) -- and a confidentiality
+    /// decision must not depend on the host language's formatting. A non-string value
+    /// still fails closed under an allow-list, because it contributes no tag and therefore
+    /// no proof of allowance.
+    /// </para>
+    /// </remarks>
+    private static void HarvestTagValues(object? value, HashSet<string> into)
+    {
+        if (value is string str)
+        {
+            into.Add(str);
+            return;
+        }
+
+        if (value is JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.String)
+            {
+                into.Add(element.GetString()!);
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in element.EnumerateArray())
+                    HarvestTagValues(item, into);
+            }
+            return;
+        }
+
+        if (value is System.Collections.IEnumerable enumerable)
+        {
+            foreach (var item in enumerable)
+                HarvestTagValues(item, into);
+        }
     }
 
     /// <summary>

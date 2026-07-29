@@ -5,6 +5,7 @@ from tolap_core.enums import (
     FilterOperator,
     MaskType,
     SigningAlgorithm,
+    WriteOperation,
     mask_restrictiveness,
 )
 from tolap_core.models import (
@@ -56,6 +57,7 @@ from tolap_core.sql_rewriter import (
     validate_query,
 )
 from tolap_core.enforcement import (
+    TARGET_ROW_UNKNOWN,
     AccessResult,
     FieldAccessResult,
     UnenforceableResultError,
@@ -69,11 +71,15 @@ from tolap_core.enforcement import (
     classify_result_shape,
     describe_result_shape,
     filter_by_tags,
+    payload_write_fields,
     project_allowed_fields,
     strip_hidden_fields,
     validate_access,
     validate_endpoint,
     validate_field_access,
+    validate_http_write,
+    validate_write,
+    write_operation_for_method,
 )
 
 __all__ = [
@@ -82,6 +88,7 @@ __all__ = [
     "FilterOperator",
     "MaskType",
     "SigningAlgorithm",
+    "WriteOperation",
     "mask_restrictiveness",
     # Models
     "Assignee",
@@ -136,6 +143,12 @@ __all__ = [
     "validate_access",
     "validate_endpoint",
     "validate_field_access",
+    # Write validation (connector spec section 4) -- pre-execution, fail-closed
+    "TARGET_ROW_UNKNOWN",
+    "payload_write_fields",
+    "validate_http_write",
+    "validate_write",
+    "write_operation_for_method",
     # SQL query rewriting (a resource optimization; never replaces the pipeline)
     "DEFAULT_DIALECT",
     "SqlDialect",

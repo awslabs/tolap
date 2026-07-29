@@ -25,7 +25,12 @@ import {
   type EffectivePolicy,
   type SecurityContext,
 } from "@tolap/core";
-import { SecureHttpToolWrapper, type FetchLike } from "../../src/http-wrapper.js";
+import {
+  MAX_REDIRECTS,
+  SecureHttpToolWrapper,
+  UpstreamHttpError,
+  type FetchLike,
+} from "../../src/http-wrapper.js";
 
 const SIGNING_KEY = "live-http-api-key";
 const PORT = Number(process.env.TOLAP_TS_TEST_API_PORT ?? 8889);
@@ -82,10 +87,22 @@ afterAll(() => {
   if (ownsServer && child && child.exitCode === null) child.kill("SIGTERM");
 });
 
-/** Real-socket transport. Deliberately does not paper over a non-2xx status. */
-const liveFetch: FetchLike = async ({ method, url, body, headers }) => {
+/**
+ * Real-socket transport. Deliberately does not paper over a non-2xx status.
+ *
+ * `redirect` is forwarded straight to `fetch`, which is the whole point of the
+ * parameter: `fetch` follows redirects by default, so without it a 302 to a denied
+ * endpoint would be followed before the wrapper ever saw the hop (connector spec
+ * §6). `headers` is surfaced so the wrapper can read `Location`, and `redirected`
+ * so it can detect a transport that followed anyway.
+ *
+ * A 3xx body is not parsed: the wrapper is about to discard it in favour of the
+ * hop it re-validates, and a bodiless 302 (the loop endpoint) has nothing to parse.
+ */
+const liveFetch: FetchLike = async ({ method, url, body, headers, redirect }) => {
   const response = await fetch(url, {
     method,
+    redirect,
     headers: {
       "User-Agent": "tolap-ts-tests/1.0",
       ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
@@ -94,8 +111,16 @@ const liveFetch: FetchLike = async ({ method, url, body, headers }) => {
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(10_000),
   });
-  const parsed = await response.json();
-  return { ok: response.ok, status: response.status, json: async () => parsed };
+  const isRedirect = response.status >= 300 && response.status < 400;
+  const parsed = isRedirect ? undefined : await response.json();
+  return {
+    ok: response.ok,
+    status: response.status,
+    json: async () => parsed,
+    headers: response.headers,
+    redirected: response.redirected,
+    url: response.url,
+  };
 };
 
 function policy(
@@ -450,7 +475,96 @@ describe("real HTTP statuses propagate as denials", () => {
         wrapper().request(signed(p), { method: "GET", path: `/status/${status}` }),
       ).rejects.toThrow(new RegExp(`HTTP ${status}`));
     });
+
+    it(`the ${status} body runs the same pipeline as a success body`, async (ctx) => {
+      requireServer(ctx);
+      // LEAK: /status/<code> returns {"error": {"code": .., "message": ..}}, so
+      // hiddenFields: ["error"] must empty it. The wrapper previously threw on
+      // !response.ok before parsing, so the error payload was never enforced --
+      // and the transport had already handed the caller a response object holding
+      // it. Connector spec §6: "A 4xx/5xx payload carries the same fields as a
+      // success payload."
+      const p = policy({
+        endpointRules: { allowedEndpoints: ["/status/*"], allowedMethods: ["GET"] },
+        fieldRules: { hiddenFields: ["error"] },
+      });
+
+      const error = await wrapper()
+        .request(signed(p), { method: "GET", path: `/status/${status}` })
+        .then(
+          () => undefined,
+          (e: unknown) => e as UpstreamHttpError,
+        );
+
+      expect(error).toBeInstanceOf(UpstreamHttpError);
+      expect(error!.status).toBe(status);
+      expect(error!.body).toEqual({});
+      expect(error!.message).not.toContain("synthetic");
+    });
   }
+
+  it("an error body is masked rather than returned in cleartext", async (ctx) => {
+    requireServer(ctx);
+    const p = policy({
+      endpointRules: { allowedEndpoints: ["/status/*"], allowedMethods: ["GET"] },
+      fieldRules: { maskedFields: [{ field: "message", maskType: "redact" }] },
+    });
+
+    const error = await wrapper()
+      .request(signed(p), { method: "GET", path: "/status/400" })
+      .then(
+        () => undefined,
+        (e: unknown) => e as UpstreamHttpError,
+      );
+
+    expect(error!.body).toEqual({ error: { code: 400, message: "[REDACTED]" } });
+  });
+
+  it("the record-dropping steps also reach an error body", async (ctx) => {
+    requireServer(ctx);
+    // The body {"error": {...}} is a single record (spec §4, "Single records"), and
+    // a filter on a field it does not carry fails closed and drops it, so the
+    // enforced body is null -- "the language's null value ... **not** an empty
+    // record". Only observable if the record-dropping pass really ran -- a wrapper
+    // that merely stripped fields from an error body would return the record.
+    const p = policy({
+      endpointRules: { allowedEndpoints: ["/status/*"], allowedMethods: ["GET"] },
+      rowFilters: [{ field: "account", operator: "notEquals", value: "other" }],
+    });
+
+    const error = await wrapper()
+      .request(signed(p), { method: "GET", path: "/status/404" })
+      .then(
+        () => undefined,
+        (e: unknown) => e as UpstreamHttpError,
+      );
+
+    expect(error!.status).toBe(404);
+    expect(error!.body).toBeNull();
+  });
+
+  it("the raised error exposes no route to the unenforced body", async (ctx) => {
+    requireServer(ctx);
+    // The point of enforcing an error body is defeated if the exception also ships
+    // a handle on the raw one. UpstreamHttpError carries a status, an enforced body
+    // and a URL, and nothing else.
+    const p = policy({
+      endpointRules: { allowedEndpoints: ["/status/*"], allowedMethods: ["GET"] },
+      fieldRules: { hiddenFields: ["error"] },
+    });
+
+    const error = (await wrapper()
+      .request(signed(p), { method: "GET", path: "/status/500" })
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      )) as UpstreamHttpError & Record<string, unknown>;
+
+    expect(error.response).toBeUndefined();
+    for (const value of Object.values(error)) {
+      expect(JSON.stringify(value) ?? "").not.toContain("synthetic");
+    }
+  });
 
   it("a 2xx body is enforced rather than raised", async (ctx) => {
     requireServer(ctx);
@@ -502,9 +616,40 @@ describe("request shaping over a real socket", () => {
 
   it("a POST body is transmitted when the policy permits the method", async (ctx) => {
     requireServer(ctx);
-    // Permitting a write takes BOTH allowedMethods and readOnly: false. readOnly is
-    // a permission-level ceiling over the method (canonical spec §9), so a policy
-    // still declaring itself read-only cannot POST however its allowedMethods reads.
+    // Permitting a write takes allowedMethods, readOnly: false, AND canInsert.
+    // Three independent gates (canonical spec §9, connector spec §4 and §6):
+    // allowedMethods makes the verb reachable on the path, readOnly is the ceiling
+    // over every write, and canInsert is the permission for the operation POST
+    // performs. None of the three implies another.
+    const p = policy(
+      {
+        endpointRules: {
+          allowedEndpoints: ["/patients"],
+          allowedMethods: ["GET", "POST"],
+        },
+      },
+      undefined,
+      { canQuery: true, canInsert: true, canExport: false, readOnly: false },
+    );
+
+    const body = (await wrapper().request(signed(p), {
+      method: "POST",
+      path: "/patients",
+      body: { full_name: "New Patient" },
+    })) as { created: boolean; received: Record<string, unknown> };
+
+    expect(body.created).toBe(true);
+    expect(body.received.full_name).toBe("New Patient");
+  });
+
+  it("a POST is denied when canInsert is absent", async (ctx) => {
+    requireServer(ctx);
+    // The method is allowed and the policy is not read-only, so both of the older
+    // gates open -- the only thing refusing this POST is the absent write
+    // permission. Absent defaults to false (connector spec §4.1), deliberately
+    // opposite to canQuery, so a policy authored before writes existed does not
+    // silently acquire them. The server accepts POST /patients by design, so the
+    // denial is TOLAP's work.
     const p = policy(
       {
         endpointRules: {
@@ -516,14 +661,13 @@ describe("request shaping over a real socket", () => {
       { canQuery: true, canExport: false, readOnly: false },
     );
 
-    const body = (await wrapper().request(signed(p), {
-      method: "POST",
-      path: "/patients",
-      body: { full_name: "New Patient" },
-    })) as { created: boolean; received: Record<string, unknown> };
-
-    expect(body.created).toBe(true);
-    expect(body.received.full_name).toBe("New Patient");
+    await expect(
+      wrapper().request(signed(p), {
+        method: "POST",
+        path: "/patients",
+        body: { full_name: "New Patient" },
+      }),
+    ).rejects.toThrow(/insert not permitted/);
   });
 
   it("a GET-only policy denies the POST before it reaches the socket", async (ctx) => {
@@ -596,5 +740,294 @@ describe("request shaping over a real socket", () => {
 
     expect(body.results.length).toBe(1);
     expect(body.results[0].safetyreportid).toMatch(/^[a-f0-9]{16}$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Redirects (connector spec §6) -- what a mock transport cannot catch
+// ---------------------------------------------------------------------------
+
+/**
+ * `fetch` follows redirects by default, so this SDK was exposed right now: a
+ * permitted endpoint that 302s to a denied one bypassed the endpoint check
+ * entirely and the wrapper never saw the hop. Nothing in the wrapper configured
+ * redirect behavior at all -- it inherited the transport's.
+ *
+ * These run over a real socket on purpose. A mock cannot reproduce the actual
+ * failure mode, which is a client that follows a redirect before the wrapper's
+ * code sees it.
+ */
+describe("spec §6: redirects are re-validated, never followed blind", () => {
+  const REDIRECT_AND_ADMIN = {
+    endpointRules: {
+      allowedEndpoints: ["/redirect/*"],
+      hiddenEndpoints: ["/admin/*"],
+      allowedMethods: ["GET"],
+    },
+  } satisfies EffectivePolicy["objectRules"];
+
+  it("LEAK: a redirect to a denied endpoint is refused, not followed", async (ctx) => {
+    requireServer(ctx);
+    // The server really serves /admin/audit, so a wrapper that followed the 302
+    // handed back data the policy denies by name.
+    await expect(
+      wrapper().request(signed(policy(REDIRECT_AND_ADMIN)), {
+        method: "GET",
+        path: "/redirect/302",
+      }),
+    ).rejects.toThrow(/redirect target rejected: endpoint is hidden/);
+  });
+
+  it("the denial names the endpoint rule that refused the hop", async (ctx) => {
+    requireServer(ctx);
+    const p = policy({
+      endpointRules: { allowedEndpoints: ["/redirect/*"], allowedMethods: ["GET"] },
+    });
+
+    await expect(
+      wrapper().request(signed(p), { method: "GET", path: "/redirect/302" }),
+    ).rejects.toThrow(/endpoint not in allowed set/);
+  });
+
+  for (const code of [301, 302, 307, 308]) {
+    it(`a ${code} is re-validated like every other redirect`, async (ctx) => {
+      requireServer(ctx);
+      // 307/308 preserve the method and body; 301/302 downgrade to GET. Both
+      // re-check, so neither shape is a way past the rules.
+      await expect(
+        wrapper().request(signed(policy(REDIRECT_AND_ADMIN)), {
+          method: "GET",
+          path: `/redirect/${code}`,
+        }),
+      ).rejects.toThrow(/endpoint is hidden/);
+    });
+  }
+
+  it("a redirect to a permitted endpoint is followed and the body enforced", async (ctx) => {
+    requireServer(ctx);
+    // Re-validating is not refusing. And the followed hop's body still runs the
+    // full pipeline, so a redirect is not a way around field rules either.
+    const p = policy({
+      endpointRules: {
+        allowedEndpoints: ["/redirect/*", "/patients"],
+        allowedMethods: ["GET"],
+      },
+      fieldRules: { hiddenFields: ["ssn"] },
+    });
+
+    const body = (await wrapper().request(signed(p), {
+      method: "GET",
+      path: "/redirect/302?to=%2Fpatients",
+      collectionPath: "results",
+    })) as { results: Array<Record<string, unknown>> };
+
+    expect(body.results.length).toBeGreaterThan(0);
+    for (const record of body.results) {
+      expect(record.ssn).toBeUndefined();
+    }
+  });
+
+  it("a cross-host redirect is refused rather than re-globbed", async (ctx) => {
+    requireServer(ctx);
+    // `allowedEndpoints: ["/*"]` describes paths on the source this policy was
+    // resolved for. Matching that glob against a path on another host would
+    // "permit" an origin the author never considered, so the hop is refused on the
+    // host change rather than re-globbed on the path.
+    const p = policy({
+      endpointRules: { allowedEndpoints: ["/*", "/**"], allowedMethods: ["GET"] },
+    });
+
+    await expect(
+      wrapper().request(signed(p), {
+        method: "GET",
+        path: "/redirect/302?to=http%3A%2F%2F127.0.0.1%3A9%2Fblocked",
+      }),
+    ).rejects.toThrow(/redirect crosses origin/);
+  });
+
+  it("a redirect loop is bounded rather than followed forever", async (ctx) => {
+    requireServer(ctx);
+    // /redirect-loop points at itself. The hop budget has to be ours, not the
+    // transport's: every client's own limit differs (fetch 20, httpx 20, .NET 50).
+    // The target is permitted at every hop, which makes this the bound's test
+    // rather than the endpoint rules'.
+    const p = policy({
+      endpointRules: { allowedEndpoints: ["/redirect-loop"], allowedMethods: ["GET"] },
+    });
+
+    await expect(
+      wrapper().request(signed(p), { method: "GET", path: "/redirect-loop" }),
+    ).rejects.toThrow(/too many redirects \(limit 5\)/);
+  });
+
+  it("the hop budget permits a chain up to the limit and denies one past it", async (ctx) => {
+    requireServer(ctx);
+    // Pins the number rather than merely "some bound exists", so the three SDKs
+    // can be asserted identical.
+    expect(MAX_REDIRECTS).toBe(5);
+
+    const p = policy({
+      endpointRules: {
+        allowedEndpoints: ["/redirect/*", "/patients"],
+        allowedMethods: ["GET"],
+      },
+    });
+
+    /** A chain of `hops` redirects ending at /patients. */
+    const chain = (hops: number): string => {
+      let target = "/patients";
+      for (let i = 0; i < hops; i++) {
+        target = `/redirect/302?to=${encodeURIComponent(target)}`;
+      }
+      return target;
+    };
+
+    const body = (await wrapper().request(signed(p), {
+      method: "GET",
+      path: chain(MAX_REDIRECTS),
+      collectionPath: "results",
+    })) as { results: unknown[] };
+    expect(body.results.length).toBeGreaterThan(0);
+
+    await expect(
+      wrapper().request(signed(p), { method: "GET", path: chain(MAX_REDIRECTS + 1) }),
+    ).rejects.toThrow(/too many redirects/);
+  });
+
+  it("a transport that follows a redirect anyway is refused, not enforced", async (ctx) => {
+    requireServer(ctx);
+    // The specific inheritance §6 forbids relying on. This transport ignores
+    // `redirect: "manual"` and follows -- exactly what plain `fetch` does by
+    // default. The body it returns came from a hop no check approved, so the
+    // wrapper refuses it rather than enforcing it and calling that safe.
+    const followingFetch: FetchLike = async ({ method, url, body, headers }) => {
+      const response = await fetch(url, {
+        method,
+        redirect: "follow",
+        headers: headers ?? {},
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const parsed = await response.json();
+      return {
+        ok: response.ok,
+        status: response.status,
+        json: async () => parsed,
+        headers: response.headers,
+        redirected: response.redirected,
+        url: response.url,
+      };
+    };
+    const following = new SecureHttpToolWrapper(
+      { signingKey: SIGNING_KEY, baseUrl: BASE_URL },
+      followingFetch,
+    );
+
+    await expect(
+      following.request(signed(policy(REDIRECT_AND_ADMIN)), {
+        method: "GET",
+        path: "/redirect/302",
+      }),
+    ).rejects.toThrow(/transport followed a redirect that was not re-validated/);
+
+    // The transport really does follow: used directly it lands on the audit log.
+    const direct = await fetch(`${BASE_URL}/redirect/302`);
+    expect(new URL(direct.url).pathname).toBe("/admin/audit");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Object rules on the HTTP path (connector spec §6, last bullet)
+// ---------------------------------------------------------------------------
+
+/**
+ * No resource name is derived from a path -- the spec is explicit that an author
+ * "MUST express API restrictions as `endpointRules`", and inferring a resource from
+ * a route is unspecified guesswork. But an integrator who names the object gets the
+ * check, on every method rather than only on a write.
+ */
+describe("spec §6: allowedObjects/hiddenObjects are honoured when named", () => {
+  const ALLOW_ALL_GET = {
+    allowedEndpoints: ["/*", "/**"],
+    allowedMethods: ["GET"],
+  };
+
+  it("a hidden object named by the caller denies a GET", async (ctx) => {
+    requireServer(ctx);
+    const p = policy({ endpointRules: ALLOW_ALL_GET, hiddenObjects: ["patients"] });
+
+    await expect(
+      wrapper().request(signed(p), {
+        method: "GET",
+        path: "/patients",
+        objectName: "patients",
+      }),
+    ).rejects.toThrow(/object is hidden/);
+  });
+
+  it("an object outside the allow-list denies a GET", async (ctx) => {
+    requireServer(ctx);
+    const p = policy({ endpointRules: ALLOW_ALL_GET, allowedObjects: ["encounters"] });
+
+    await expect(
+      wrapper().request(signed(p), {
+        method: "GET",
+        path: "/patients",
+        objectName: "patients",
+      }),
+    ).rejects.toThrow(/object not in allowed set/);
+  });
+
+  it("a permitted object name still returns an enforced body", async (ctx) => {
+    requireServer(ctx);
+    const p = policy({
+      endpointRules: ALLOW_ALL_GET,
+      allowedObjects: ["patients"],
+      fieldRules: { hiddenFields: ["ssn"] },
+    });
+
+    const body = (await wrapper().request(signed(p), {
+      method: "GET",
+      path: "/patients",
+      objectName: "patients",
+      collectionPath: "results",
+    })) as { results: Array<Record<string, unknown>> };
+
+    expect(body.results.length).toBeGreaterThan(0);
+    for (const record of body.results) expect(record.ssn).toBeUndefined();
+  });
+
+  it("omitting the object name skips the check rather than guessing", async (ctx) => {
+    requireServer(ctx);
+    // A wrapper that derived "patients" from /patients would deny this, which is
+    // exactly the unspecified behaviour §6 marks with a warning.
+    const p = policy({ endpointRules: ALLOW_ALL_GET, hiddenObjects: ["patients"] });
+
+    const body = (await wrapper().request(signed(p), {
+      method: "GET",
+      path: "/patients",
+      collectionPath: "results",
+    })) as { results: unknown[] };
+
+    expect(body.results.length).toBeGreaterThan(0);
+  });
+
+  it("a redirect hop re-checks the named object", async (ctx) => {
+    requireServer(ctx);
+    const p = policy({
+      endpointRules: {
+        allowedEndpoints: ["/redirect/*", "/patients"],
+        allowedMethods: ["GET"],
+      },
+      hiddenObjects: ["patients"],
+    });
+
+    await expect(
+      wrapper().request(signed(p), {
+        method: "GET",
+        path: "/redirect/302?to=%2Fpatients",
+        objectName: "patients",
+      }),
+    ).rejects.toThrow(/object is hidden/);
   });
 });

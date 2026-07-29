@@ -60,7 +60,22 @@ public static class SecurityContextSigner
             return false;
 
         var payload = BuildCanonicalPayload(context);
-        var expectedSignature = ComputeSignature(payload, secretKey, context.Integrity.Algorithm);
+
+        string expectedSignature;
+        try
+        {
+            expectedSignature = ComputeSignature(payload, secretKey, context.Integrity.Algorithm);
+        }
+        catch (NotSupportedException)
+        {
+            // `ed25519` is enumerated in the schema but unimplemented here, so a
+            // schema-conformant context can name it. An algorithm this SDK cannot
+            // verify is a validation FAILURE -- it means the signature cannot be
+            // confirmed -- not an exception escaping an enforcement check. Throwing
+            // would turn a deny into a crash, and a caller wrapping Validate in a
+            // try/catch that swallows would turn it into an allow.
+            return false;
+        }
 
         // The provided signature is attacker-controlled: malformed Base64 is an invalid
         // signature, not a FormatException escaping to the caller.

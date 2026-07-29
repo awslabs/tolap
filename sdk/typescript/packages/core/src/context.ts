@@ -171,7 +171,24 @@ function computeHmac(data: string, key: string, algorithm: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a SecurityContext wrapping an EffectivePolicy.
+ * Build a SecurityContext wrapping a single EffectivePolicy.
+ *
+ * `SecurityContext` carries exactly one policy, and every enforcement entry point
+ * reads `context.effectivePolicy` without being told which data source the call is
+ * aimed at. An array is therefore rejected here rather than stored.
+ *
+ * The type signature already says "one policy", but types are erased at runtime and
+ * `docs/architecture.md` shows the context with a `policies` **array**, so a
+ * JavaScript caller — or a TypeScript one reaching this through `any`/JSON — would
+ * follow the docs and pass `[dbPolicy, apiPolicy]`. That array was stored verbatim,
+ * signed, and validated successfully; enforcement then read
+ * `policy.permissions.canQuery` off the array and crashed with a bare
+ * `TypeError: Cannot read properties of undefined`, naming neither the real mistake
+ * nor the fix. Failing here instead makes the mistake unmissable at the point it is
+ * made. Build one context per data source; there is no per-source resolution rule
+ * for this SDK to apply.
+ *
+ * @throws Error if `policy` is an array rather than a single policy.
  */
 export function buildSecurityContext(
   userId: string,
@@ -179,6 +196,14 @@ export function buildSecurityContext(
   policy: EffectivePolicy,
   ttlMs: number = 3_600_000,
 ): SecurityContext {
+  if (Array.isArray(policy)) {
+    throw new Error(
+      `buildSecurityContext expects a single effective policy, received an array of ` +
+        `${policy.length}; a SecurityContext carries one policy, so build one context ` +
+        `per data source`,
+    );
+  }
+
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlMs);
   return {

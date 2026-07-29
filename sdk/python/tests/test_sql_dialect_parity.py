@@ -26,6 +26,14 @@ missed, both in the WHERE-injection path and both since fixed:
 
 Neither was a dialect bug. Both were found only because parity was asserted
 across SDKs on a shared corpus.
+
+There are two corpora here, and both must agree across SDKs:
+:data:`PARITY_CORPUS` fixes the emitted SQL text, and
+:data:`UNPUSHABLE_PARITY_CORPUS` fixes how many filters each SDK reports as
+unpushable. The second exists because ``like``/``notLike`` are *declined* on the
+profiles whose collation could make ``LIKE`` case-insensitive, and a decline is only
+correct if it is also reported -- text parity alone cannot tell "not pushed, and the
+post pass is carrying it" apart from "silently dropped".
 """
 
 from __future__ import annotations
@@ -41,7 +49,7 @@ from tolap_core.models import (
     PolicyPermissions,
     RowFilter,
 )
-from tolap_core.sql_rewriter import rewrite_query
+from tolap_core.sql_rewriter import rewrite_query, unpushable_filters
 
 
 def _policy(spec: str) -> EffectivePolicy:
@@ -83,6 +91,10 @@ def _policy(spec: str) -> EffectivePolicy:
     elif spec == "like":
         row_filters = [
             RowFilter(field="region", operator=FilterOperator.like, value="us-%")
+        ]
+    elif spec == "notlike":
+        row_filters = [
+            RowFilter(field="region", operator=FilterOperator.not_like, value="us-%")
         ]
     elif spec == "backslash":
         row_filters = eq("region", "us\\' OR 1=1 --")
@@ -394,12 +406,79 @@ PARITY_CORPUS: list[tuple[str, str, str, str, str]] = [
         "mysql",
         "SELECT a FROM t WHERE `deleted_at` IS NULL",
     ),
+    # like/notLike, every profile x both operators. The emitted text is the whole
+    # point of the case: `postgres`/`trino` push a real LIKE, and `mysql`,
+    # `sqlserver` and `ansi` emit the query untouched because their collation could
+    # make the comparison case-insensitive (spec section 4).
+    (
+        "like-postgres",
+        "SELECT a FROM t",
+        "like",
+        "postgres",
+        "SELECT a FROM t WHERE \"region\" LIKE 'us-%'",
+    ),
+    (
+        "like-trino",
+        "SELECT a FROM t",
+        "like",
+        "trino",
+        "SELECT a FROM t WHERE \"region\" LIKE 'us-%'",
+    ),
     (
         "like-mysql",
         "SELECT a FROM t",
         "like",
         "mysql",
-        "SELECT a FROM t WHERE `region` LIKE 'us-%'",
+        "SELECT a FROM t",
+    ),
+    (
+        "like-sqlserver",
+        "SELECT a FROM t",
+        "like",
+        "sqlserver",
+        "SELECT a FROM t",
+    ),
+    (
+        "like-ansi",
+        "SELECT a FROM t",
+        "like",
+        "ansi",
+        "SELECT a FROM t",
+    ),
+    (
+        "notlike-postgres",
+        "SELECT a FROM t",
+        "notlike",
+        "postgres",
+        "SELECT a FROM t WHERE (\"region\" NOT LIKE 'us-%' OR \"region\" IS NULL)",
+    ),
+    (
+        "notlike-trino",
+        "SELECT a FROM t",
+        "notlike",
+        "trino",
+        "SELECT a FROM t WHERE (\"region\" NOT LIKE 'us-%' OR \"region\" IS NULL)",
+    ),
+    (
+        "notlike-mysql",
+        "SELECT a FROM t",
+        "notlike",
+        "mysql",
+        "SELECT a FROM t",
+    ),
+    (
+        "notlike-sqlserver",
+        "SELECT a FROM t",
+        "notlike",
+        "sqlserver",
+        "SELECT a FROM t",
+    ),
+    (
+        "notlike-ansi",
+        "SELECT a FROM t",
+        "notlike",
+        "ansi",
+        "SELECT a FROM t",
     ),
     (
         "backslash-mysql",
@@ -492,6 +571,49 @@ def test_the_emitted_sql_matches_the_cross_sdk_corpus(
     assert rewrite_query(query, _policy(spec), dialect=dialect) == expected
 
 
+#: (case id, policy spec, dialect, how many filters all three SDKs must report as
+#: unpushable). The emitted text and this report are two halves of one contract: a
+#: filter that vanishes from the SQL without being reported would be a silent loss of
+#: the optimization at best, and at worst an integrator's `fully_pushed_down`
+#: assertion passing while the database returns unfiltered rows. Duplicated verbatim
+#: in all three SDKs alongside PARITY_CORPUS.
+UNPUSHABLE_PARITY_CORPUS: list[tuple[str, str, str, int]] = [
+    # like/notLike: pushed on the case-sensitive profiles, reported on the others.
+    ("like-postgres", "like", "postgres", 0),
+    ("like-trino", "like", "trino", 0),
+    ("like-mysql", "like", "mysql", 1),
+    ("like-sqlserver", "like", "sqlserver", 1),
+    ("like-ansi", "like", "ansi", 1),
+    ("notlike-postgres", "notlike", "postgres", 0),
+    ("notlike-trino", "notlike", "trino", 0),
+    ("notlike-mysql", "notlike", "mysql", 1),
+    ("notlike-sqlserver", "notlike", "sqlserver", 1),
+    ("notlike-ansi", "notlike", "ansi", 1),
+    # The decline paths that were already dialect-independent, held here so the two
+    # kinds of decline are asserted by the same mechanism.
+    ("contains-mysql", "contains", "mysql", 1),
+    ("contains-postgres", "contains", "postgres", 1),
+    ("backslash-postgres", "backslash", "postgres", 1),
+    ("backslash-mysql", "backslash", "mysql", 1),
+    ("equals-postgres", "us_filter", "postgres", 0),
+    ("equals-mysql", "us_filter", "mysql", 0),
+    # An unrecognized dialect rewrites nothing, so every filter is reported.
+    ("like-unknown", "like", "oracle", 1),
+    ("equals-unknown", "us_filter", "oracle", 1),
+]
+
+
+@pytest.mark.parametrize(
+    ("case_id", "spec", "dialect", "expected_count"),
+    UNPUSHABLE_PARITY_CORPUS,
+    ids=[row[0] for row in UNPUSHABLE_PARITY_CORPUS],
+)
+def test_the_unpushable_report_matches_the_cross_sdk_corpus(
+    case_id: str, spec: str, dialect: str, expected_count: int
+) -> None:
+    assert len(unpushable_filters(_policy(spec), dialect=dialect)) == expected_count
+
+
 def test_the_corpus_covers_every_profile_and_both_decline_paths() -> None:
     """A guard on the corpus itself, so it cannot quietly stop covering a profile."""
     dialects = {row[3] for row in PARITY_CORPUS}
@@ -501,7 +623,28 @@ def test_the_corpus_covers_every_profile_and_both_decline_paths() -> None:
     assert "oracle" in dialects
 
 
+def test_the_like_gate_is_covered_for_every_profile_and_both_operators() -> None:
+    """``like``/``notLike`` are the one operator pair whose *pushability* depends on
+    the dialect, so the corpus must state an answer for all five profiles rather
+    than sampling one or two."""
+    for spec in ("like", "notlike"):
+        covered = {
+            row[3] for row in PARITY_CORPUS if row[2] == spec and row[3] != "oracle"
+        }
+        assert covered == {"ansi", "postgres", "trino", "mysql", "sqlserver"}, spec
+
+        reported = {
+            row[2] for row in UNPUSHABLE_PARITY_CORPUS
+            if row[1] == spec and row[2] != "oracle"
+        }
+        assert reported == {"ansi", "postgres", "trino", "mysql", "sqlserver"}, spec
+
+
 def test_every_case_id_is_unique() -> None:
     ids = [row[0] for row in PARITY_CORPUS]
 
     assert len(ids) == len(set(ids))
+
+    unpushable_ids = [row[0] for row in UNPUSHABLE_PARITY_CORPUS]
+
+    assert len(unpushable_ids) == len(set(unpushable_ids))

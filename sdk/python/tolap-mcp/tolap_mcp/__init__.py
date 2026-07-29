@@ -8,6 +8,11 @@ from tolap_mcp.extractors import (
     JwtIdentityExtractor,
     TolapIdentityError,
 )
+from tolap_mcp.http_wrapper import (
+    MAX_REDIRECTS,
+    SecureHttpToolWrapper,
+    UpstreamHttpError,
+)
 
 __all__ = [
     "RequestIdentityExtractor",
@@ -16,4 +21,7 @@ __all__ = [
     "HeaderIdentityExtractor",
     "JwtIdentityExtractor",
     "TolapIdentityError",
+    "MAX_REDIRECTS",
+    "SecureHttpToolWrapper",
+    "UpstreamHttpError",
 ]

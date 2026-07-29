@@ -13,6 +13,9 @@ interface MergeFixture {
     sourceProfiles: string[];
     permissions: {
       canQuery: boolean;
+      canInsert?: boolean;
+      canUpdate?: boolean;
+      canDelete?: boolean;
       canExport?: boolean;
       readOnly?: boolean;
     };
@@ -24,6 +27,29 @@ interface MergeFixture {
 function loadFixture(filename: string): MergeFixture {
   const content = fs.readFileSync(path.join(fixturesDir, filename), "utf-8");
   return JSON.parse(content) as MergeFixture;
+}
+
+/**
+ * The fixture's expected permissions, with the three write flags filled in.
+ *
+ * The shared merge fixtures predate write permissions and name none of them, so
+ * their `expected.permissions` blocks cover only `canQuery`/`canExport`/`readOnly`.
+ * Rather than loosen these assertions to a subset match — which would stop noticing
+ * a stray key entirely — the write flags are computed here straight from the
+ * fixture's own inputs under connector spec §4.1: absent defaults to false, then
+ * AND-fold. A merger that leaked a write permission the inputs did not grant, or
+ * dropped one they did, still fails.
+ */
+function expectedPermissions(fixture: MergeFixture): Record<string, boolean> {
+  const andFold = (read: (p: PolicyDefinition) => boolean | undefined): boolean =>
+    fixture.inputs.every((p) => (read(p) ?? false) === true);
+
+  return {
+    canInsert: andFold((p) => p.permissions.canInsert),
+    canUpdate: andFold((p) => p.permissions.canUpdate),
+    canDelete: andFold((p) => p.permissions.canDelete),
+    ...fixture.expected.permissions,
+  };
 }
 
 function fixtureFiles(): string[] {
@@ -49,7 +75,7 @@ describe("Policy Merger", () => {
       const result = merge(fixture.inputs);
 
       expect(result.sourceProfiles).toEqual(fixture.expected.sourceProfiles);
-      expect(result.permissions).toEqual(fixture.expected.permissions);
+      expect(result.permissions).toEqual(expectedPermissions(fixture));
       expect(result.objectRules).toEqual(fixture.expected.objectRules);
       expect(result.limits).toEqual(fixture.expected.limits);
     });
@@ -73,7 +99,7 @@ describe("Policy Merger", () => {
       const result = merge(fixture.inputs);
 
       expect(result.sourceProfiles).toEqual(fixture.expected.sourceProfiles);
-      expect(result.permissions).toEqual(fixture.expected.permissions);
+      expect(result.permissions).toEqual(expectedPermissions(fixture));
 
       // Allowed objects: intersection
       const allowedObjects = result.objectRules?.allowedObjects ?? [];

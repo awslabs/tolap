@@ -362,13 +362,52 @@ public class EnforcementBranchCoverageTests
     }
 
     [Fact]
-    public void FilterByTags_TagsInAnUnreadableShape_IsTreatedAsUntagged()
+    public void FilterByTags_TagsNestedInsideAJsonElementObject_AreRead()
     {
-        // A scalar in the tags slot yields no tags, so an allow-list drops the row.
-        // Fails closed rather than throwing on malformed data.
-        var policy = Policy(new ObjectRules(TagRules: new TagRules(AllowedTags: new[] { "public" })));
+        // A raw HTTP response reaches the filter with whole sub-objects still held as
+        // JsonElement, so the walk must descend into a JsonElement object as well as a
+        // Dictionary. Otherwise the identical policy filters on the MCP path and
+        // discloses on the HTTP path (connector spec section 7).
+        var policy = Policy(new ObjectRules(TagRules: new TagRules(DeniedTags: new[] { "secret" })));
 
-        EnforcementEngine.FilterByTags(Rows(new Dictionary<string, object?>() { ["tags"] = 42 }), policy).Should().BeEmpty();
+        var metadata = JsonDocument.Parse("""{"metadata":{"Tags":["secret"]}}""")
+            .RootElement.GetProperty("metadata");
+        EnforcementEngine.FilterByTags(
+            Rows(new Dictionary<string, object?>() { ["metadata"] = metadata }), policy)
+            .Should().BeEmpty();
+
+        // A JsonElement array of chunk objects, and a scalar classification held as a
+        // JsonElement string -- both are the same walk.
+        var chunks = JsonDocument.Parse("""{"chunks":[{"classification":"secret"}]}""")
+            .RootElement.GetProperty("chunks");
+        EnforcementEngine.FilterByTags(
+            Rows(new Dictionary<string, object?>() { ["chunks"] = chunks }), policy)
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void FilterByTags_NonStringTagValue_ContributesNoTag()
+    {
+        // allowedTags/deniedTags hold strings, so a number could only match after a
+        // stringification whose result differs per language -- a confidentiality decision
+        // must not depend on the host language's formatting. Contributing no tag fails
+        // closed under an allow-list and leaves a denylist nothing to match.
+        var row = Rows(new Dictionary<string, object?>() { ["tags"] = 42 });
+
+        EnforcementEngine.FilterByTags(
+            row, Policy(new ObjectRules(TagRules: new TagRules(AllowedTags: new[] { "42" }))))
+            .Should().BeEmpty();
+
+        EnforcementEngine.FilterByTags(
+            row, Policy(new ObjectRules(TagRules: new TagRules(DeniedTags: new[] { "42" }))))
+            .Should().HaveCount(1);
+
+        // A JsonElement number in the tags slot takes the same path.
+        var jsonNumber = JsonDocument.Parse("""{"tags":42}""").RootElement.GetProperty("tags");
+        EnforcementEngine.FilterByTags(
+            Rows(new Dictionary<string, object?>() { ["tags"] = jsonNumber }),
+            Policy(new ObjectRules(TagRules: new TagRules(AllowedTags: new[] { "42" }))))
+            .Should().BeEmpty();
     }
 
     // -- Spec section 7: row filters fail closed --

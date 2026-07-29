@@ -73,7 +73,20 @@ class ObjectRules:
 
 @dataclass
 class PolicyPermissions:
+    """Top-level permission flags.
+
+    The three write permissions default to ``None``, which the merger and the
+    write-validation path both read as the schema default of **False**. That is
+    deliberately the opposite of ``can_query``'s ``True`` default: a policy
+    authored before writes existed must not silently gain them, and an author who
+    omitted a write permission has not asked for write access (connector spec
+    section 4.1).
+    """
+
     can_query: bool = False
+    can_insert: bool | None = None
+    can_update: bool | None = None
+    can_delete: bool | None = None
     can_export: bool | None = None
     read_only: bool | None = None
 
@@ -152,6 +165,11 @@ class EffectivePolicy:
         return cls(
             version="1.0",
             source_profiles=[],
+            # The three write permissions are deliberately left absent rather than
+            # written as False. Absent already *means* False on the write path
+            # (connector spec section 4.1), and ``read_only=True`` is a ceiling that
+            # denies every write regardless -- so a deny-all policy denies writes
+            # twice over without carrying three redundant keys into the signed bytes.
             permissions=PolicyPermissions(
                 can_query=False,
                 can_export=False,

@@ -22,6 +22,7 @@ import sys
 import time
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -41,7 +42,11 @@ from tolap_core.models import (
     SecurityContext,
     TagRules,
 )
-from tolap_mcp.http_wrapper import SecureHttpToolWrapper
+from tolap_mcp.http_wrapper import (
+    MAX_REDIRECTS,
+    SecureHttpToolWrapper,
+    UpstreamHttpError,
+)
 from tolap_mcp.options import SecureMcpServerOptions
 
 
@@ -123,25 +128,41 @@ def _wrapper(client: httpx.Client, **options) -> SecureHttpToolWrapper:
 def _policy(
     *,
     can_query: bool = True,
+    can_insert: bool | None = None,
+    can_update: bool | None = None,
+    can_delete: bool | None = None,
     read_only: bool | None = True,
     endpoint_rules: EndpointRules | None = None,
     field_rules: FieldRules | None = None,
     row_filters: list[RowFilter] | None = None,
     tag_rules: TagRules | None = None,
+    allowed_objects: list[str] | None = None,
+    hidden_objects: list[str] | None = None,
     limits: PolicyLimits | None = None,
 ) -> EffectivePolicy:
-    has_object_rules = any([endpoint_rules, field_rules, row_filters, tag_rules])
+    has_object_rules = any(
+        [endpoint_rules, field_rules, row_filters, tag_rules, allowed_objects, hidden_objects]
+    )
     return EffectivePolicy(
         version="1.0",
         user_id="live-user",
         tenant_id="live-tenant",
         source_profiles=["live-http"],
-        permissions=PolicyPermissions(can_query=can_query, can_export=False, read_only=read_only),
+        permissions=PolicyPermissions(
+            can_query=can_query,
+            can_insert=can_insert,
+            can_update=can_update,
+            can_delete=can_delete,
+            can_export=False,
+            read_only=read_only,
+        ),
         object_rules=ObjectRules(
             endpoint_rules=endpoint_rules,
             field_rules=field_rules,
             row_filters=row_filters,
             tag_rules=tag_rules,
+            allowed_objects=allowed_objects,
+            hidden_objects=hidden_objects,
         )
         if has_object_rules
         else None,
@@ -464,13 +485,16 @@ class TestEndpointRulesOverRealHttp:
             )
 
     def test_post_succeeds_when_the_policy_permits_it(self, live_client: httpx.Client) -> None:
-        """Permitting a write takes BOTH allowedMethods and readOnly=False.
+        """Permitting a write takes allowedMethods, readOnly=False, AND canInsert.
 
-        readOnly is a permission-level gate over the method, so a policy still
-        declaring itself read-only cannot POST however its allowedMethods reads.
+        Three independent gates, all of which must open (connector spec sections 4
+        and 6). ``allowedMethods`` makes the verb reachable on the path, ``readOnly``
+        is the ceiling over every write, and ``canInsert`` is the permission for the
+        operation ``POST`` performs -- none of the three implies another.
         """
         context = _signed(
             _policy(
+                can_insert=True,
                 read_only=False,
                 endpoint_rules=EndpointRules(
                     allowed_endpoints=["/patients*"], allowed_methods=["GET", "POST"]
@@ -484,6 +508,29 @@ class TestEndpointRulesOverRealHttp:
 
         assert body["created"] is True
         assert body["received"] == {"full_name": "New Person"}
+
+    def test_post_is_denied_when_can_insert_is_absent(self, live_client: httpx.Client) -> None:
+        """An omitted canInsert is a denial, not an unstated grant.
+
+        The method is allowed and the policy is not read-only, so ``allowedMethods``
+        and ``readOnly`` both open -- the only thing refusing this POST is the
+        absent write permission. Absent defaults to false (connector spec
+        section 4.1), deliberately opposite to ``canQuery``, so a policy authored
+        before writes existed does not silently acquire them.
+        """
+        context = _signed(
+            _policy(
+                read_only=False,
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/patients*"], allowed_methods=["GET", "POST"]
+                ),
+            )
+        )
+
+        with pytest.raises(PermissionError, match="insert not permitted"):
+            _wrapper(live_client).request(
+                context, "POST", "/patients", json={"full_name": "New Person"}
+            )
 
     def test_post_is_denied_when_the_policy_is_still_read_only(
         self, live_client: httpx.Client
@@ -617,13 +664,90 @@ class TestUpstreamErrorsOverRealHttp:
 
         Returning ``{}`` or ``[]`` here would let a caller mistake an upstream
         outage for "the policy filtered everything out".
+
+        The exception is ``UpstreamHttpError`` rather than ``httpx.HTTPStatusError``:
+        the latter exposes ``.response``, which handed the caller the raw
+        unenforced payload (connector spec section 6, "error bodies are enforced").
         """
         context = _signed(_policy(endpoint_rules=ALLOW_ALL_GET))
 
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        with pytest.raises(UpstreamHttpError) as exc_info:
             _wrapper(live_client).request(context, "GET", f"/status/{status}")
 
-        assert exc_info.value.response.status_code == status
+        assert exc_info.value.status_code == status
+
+    @pytest.mark.parametrize("status", [400, 403, 404, 429, 500, 503])
+    def test_the_error_body_runs_the_same_pipeline_as_a_success_body(
+        self, live_client: httpx.Client, status: int
+    ) -> None:
+        """LEAK: a hidden field survived in a 4xx/5xx body over a real socket.
+
+        The server's ``/status/<code>`` returns ``{"error": {"code": .., "message":
+        ..}}``, so ``hiddenFields: ["error"]`` must empty it. Before the fix
+        ``raise_for_status`` ran before the pipeline, the response never reached
+        enforcement, and ``e.response.text`` on the raised ``HTTPStatusError``
+        carried the field in cleartext -- an ordinary ``except`` block was enough
+        to read it. Connector spec section 6: "A 4xx/5xx payload carries the same
+        fields as a success payload."
+        """
+        context = _signed(
+            _policy(
+                endpoint_rules=ALLOW_ALL_GET,
+                field_rules=FieldRules(hidden_fields=["error"]),
+            )
+        )
+
+        with pytest.raises(UpstreamHttpError) as exc_info:
+            _wrapper(live_client).request(context, "GET", f"/status/{status}")
+
+        assert exc_info.value.body == {}, "the hidden field is gone from the error body"
+        assert "synthetic" not in str(exc_info.value)
+
+    def test_an_error_body_is_masked_rather_than_returned_in_cleartext(
+        self, live_client: httpx.Client
+    ) -> None:
+        """Masking reaches an error payload's nested fields, not only a success one's."""
+        context = _signed(
+            _policy(
+                endpoint_rules=ALLOW_ALL_GET,
+                field_rules=FieldRules(
+                    masked_fields=[MaskingRule(field="message", mask_type=MaskType.redact)]
+                ),
+            )
+        )
+
+        with pytest.raises(UpstreamHttpError) as exc_info:
+            _wrapper(live_client).request(context, "GET", "/status/400")
+
+        assert exc_info.value.body == {"error": {"code": 400, "message": "[REDACTED]"}}
+
+    def test_the_record_dropping_steps_also_reach_an_error_body(
+        self, live_client: httpx.Client
+    ) -> None:
+        """Row filters run over an error body, not only the field-level steps.
+
+        The body ``{"error": {...}}`` is a single record (spec section 4, "Single
+        records"), and a filter on a field it does not carry fails closed and drops
+        it, so the enforced body is ``None``. That is the fail-closed direction and
+        it is only observable if the record-dropping pass really ran -- a wrapper
+        that only stripped fields from an error body would return the record.
+        """
+        context = _signed(
+            _policy(
+                endpoint_rules=ALLOW_ALL_GET,
+                row_filters=[
+                    RowFilter(
+                        field="account", operator=FilterOperator.not_equals, value="other"
+                    )
+                ],
+            )
+        )
+
+        with pytest.raises(UpstreamHttpError) as exc_info:
+            _wrapper(live_client).request(context, "GET", "/status/404")
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.body is None, "a dropped single record is None, not {}"
 
     def test_denial_short_circuits_before_the_error_status_is_reached(
         self, live_client: httpx.Client
@@ -647,6 +771,352 @@ class TestUpstreamErrorsOverRealHttp:
         with httpx.Client(base_url=live_api_base_url, timeout=0.25) as client:
             with pytest.raises(httpx.TimeoutException):
                 _wrapper(client).request(context, "GET", "/slow", params={"ms": 3000})
+
+
+class TestRedirectsOverRealHttp:
+    """Connector spec section 6: "Redirects are re-validated ... or not followed."
+
+    A permitted endpoint that 302s to a denied one otherwise bypasses the endpoint
+    check entirely. Nothing in the wrapper configured redirect behavior at all
+    before this: it inherited whatever the client was constructed with. ``httpx``
+    defaults ``follow_redirects`` to ``False``, so Python was safe only by luck --
+    an integrator writing ``httpx.Client(follow_redirects=True)``, which is common
+    and reasonable, silently lost every endpoint check on a redirect. These tests
+    therefore build a *following* client deliberately: that is the configuration
+    that used to be exploitable.
+    """
+
+    def test_a_redirect_to_a_denied_endpoint_is_refused(
+        self, live_api_base_url: str
+    ) -> None:
+        """LEAK: /redirect/302 -> /admin/audit returned the audit log.
+
+        The policy allows ``/redirect/*`` and hides ``/admin/*``. The server really
+        does serve ``/admin/audit``, so a wrapper that followed the redirect handed
+        back data the policy denies by name.
+        """
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/redirect/*"],
+                    hidden_endpoints=["/admin/*"],
+                    allowed_methods=["GET"],
+                )
+            )
+        )
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            with pytest.raises(PermissionError, match="redirect target rejected"):
+                _wrapper(client).request(context, "GET", "/redirect/302")
+
+    def test_the_denial_names_the_endpoint_rule_that_refused_the_hop(
+        self, live_api_base_url: str
+    ) -> None:
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/redirect/*"], allowed_methods=["GET"]
+                )
+            )
+        )
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            with pytest.raises(PermissionError, match="endpoint not in allowed set"):
+                _wrapper(client).request(context, "GET", "/redirect/302")
+
+    @pytest.mark.parametrize("code", [301, 302, 307, 308])
+    def test_every_redirect_code_is_re_validated(
+        self, live_api_base_url: str, code: int
+    ) -> None:
+        """A 307/308 preserves the method; a 301/302 downgrades to GET. Both re-check."""
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/redirect/*"],
+                    hidden_endpoints=["/admin/*"],
+                    allowed_methods=["GET"],
+                )
+            )
+        )
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            with pytest.raises(PermissionError, match="endpoint is hidden"):
+                _wrapper(client).request(context, "GET", f"/redirect/{code}")
+
+    def test_a_redirect_to_a_permitted_endpoint_is_followed_and_enforced(
+        self, live_api_base_url: str
+    ) -> None:
+        """Re-validating is not refusing: a permitted target still works.
+
+        And the body that comes back runs the full pipeline, so the hop is not a
+        way around field rules either.
+        """
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/redirect/*", "/patients"],
+                    allowed_methods=["GET"],
+                ),
+                field_rules=FieldRules(hidden_fields=["ssn"]),
+            )
+        )
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            body = _wrapper(client).request(
+                context,
+                "GET",
+                "/redirect/302",
+                params={"to": "/patients"},
+                collection_path="results",
+            )
+
+        assert body["results"], "the redirect was followed to the real collection"
+        for record in body["results"]:
+            assert "ssn" not in record, "the followed hop's body is still enforced"
+
+    def test_a_cross_host_redirect_is_refused_rather_than_re_globbed(
+        self, live_api_base_url: str
+    ) -> None:
+        """An absolute URL to another host is outside the policy's frame of reference.
+
+        ``allowedEndpoints: ["/*"]`` describes paths on the source this policy was
+        resolved for. Matching that glob against a path on another host would
+        "permit" an origin the policy author never considered, so the hop is refused
+        on the host change rather than re-globbed on the path.
+        """
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/*", "/**"], allowed_methods=["GET"]
+                )
+            )
+        )
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            with pytest.raises(PermissionError, match="redirect crosses origin"):
+                _wrapper(client).request(
+                    context,
+                    "GET",
+                    "/redirect/302",
+                    params={"to": "http://127.0.0.1:9/blocked"},
+                )
+
+    def test_a_redirect_loop_is_bounded_rather_than_followed_forever(
+        self, live_api_base_url: str
+    ) -> None:
+        """/redirect-loop points at itself; the hop budget has to be ours, not the client's.
+
+        Every client's own limit differs (httpx 20, .NET 50, fetch 20), so the
+        wrapper states its own and denies on it. The target is permitted at every
+        hop, which is what makes this the bound's test rather than the endpoint
+        rules'.
+        """
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/redirect-loop"], allowed_methods=["GET"]
+                )
+            )
+        )
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            with pytest.raises(PermissionError, match="too many redirects"):
+                _wrapper(client).request(context, "GET", "/redirect-loop")
+
+    def test_the_hop_budget_permits_a_chain_up_to_the_limit(
+        self, live_api_base_url: str
+    ) -> None:
+        """MAX_REDIRECTS hops succeed; the (n+1)th is the one that is denied.
+
+        Pins the number rather than merely "some bound exists", so the three SDKs
+        can be asserted identical.
+        """
+        assert MAX_REDIRECTS == 5
+
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/redirect/*", "/patients"], allowed_methods=["GET"]
+                )
+            )
+        )
+
+        # A chain of exactly MAX_REDIRECTS hops ending at a real endpoint: each
+        # /redirect/302 points at the next one, the last at /patients.
+        target = "/patients"
+        for _ in range(MAX_REDIRECTS - 1):
+            target = f"/redirect/302?to={quote(target, safe='')}"
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            body = _wrapper(client).request(
+                context, "GET", f"/redirect/302?to={quote(target, safe='')}",
+                collection_path="results",
+            )
+
+        assert body["results"], "a chain at the limit is followed to its end"
+
+    def test_a_chain_one_hop_past_the_limit_is_denied(
+        self, live_api_base_url: str
+    ) -> None:
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/redirect/*", "/patients"], allowed_methods=["GET"]
+                )
+            )
+        )
+
+        target = "/patients"
+        for _ in range(MAX_REDIRECTS):
+            target = f"/redirect/302?to={quote(target, safe='')}"
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            with pytest.raises(PermissionError, match="too many redirects"):
+                _wrapper(client).request(
+                    context, "GET", f"/redirect/302?to={quote(target, safe='')}"
+                )
+
+    def test_a_redirect_is_not_followed_even_when_the_client_says_to(
+        self, live_api_base_url: str
+    ) -> None:
+        """The caller's follow_redirects=True must not reach the transport.
+
+        This is the specific inheritance the spec forbids relying on: the wrapper
+        passes follow_redirects=False per request, which overrides the client, so
+        the wrapper -- not the client -- decides every hop. Proven by observing
+        that the denied hop was never fetched: the audit log is unreachable even
+        though the client would have followed the 302 to it.
+        """
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/redirect/*"],
+                    hidden_endpoints=["/admin/*"],
+                    allowed_methods=["GET"],
+                )
+            )
+        )
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            with pytest.raises(PermissionError):
+                _wrapper(client).request(context, "GET", "/redirect/302")
+
+            # The client really does follow redirects: the same client, used
+            # directly, lands on the audit log the wrapper refused.
+            assert client.get("/redirect/302").url.path == "/admin/audit"
+
+
+class TestObjectRulesOnTheHttpPathOverRealHttp:
+    """Connector spec section 6, last bullet: object rules are honoured when *named*.
+
+    No resource name is derived from a path -- the spec is explicit that an author
+    "MUST express API restrictions as endpointRules", and inferring a resource from
+    a route is unspecified guesswork. But an integrator who names the object gets
+    the check, on every method rather than only on a write.
+    """
+
+    def test_a_hidden_object_named_by_the_caller_denies_a_get(
+        self, live_client: httpx.Client
+    ) -> None:
+        context = _signed(
+            _policy(
+                endpoint_rules=ALLOW_ALL_GET,
+                hidden_objects=["patients"],
+            )
+        )
+
+        with pytest.raises(PermissionError, match="object is hidden"):
+            _wrapper(live_client).request(
+                context, "GET", "/patients", object_name="patients"
+            )
+
+    def test_an_object_outside_the_allow_list_denies_a_get(
+        self, live_client: httpx.Client
+    ) -> None:
+        context = _signed(
+            _policy(endpoint_rules=ALLOW_ALL_GET, allowed_objects=["encounters"])
+        )
+
+        with pytest.raises(PermissionError, match="object not in allowed set"):
+            _wrapper(live_client).request(
+                context, "GET", "/patients", object_name="patients"
+            )
+
+    def test_a_permitted_object_name_still_returns_an_enforced_body(
+        self, live_client: httpx.Client
+    ) -> None:
+        context = _signed(
+            _policy(
+                endpoint_rules=ALLOW_ALL_GET,
+                allowed_objects=["patients"],
+                field_rules=FieldRules(hidden_fields=["ssn"]),
+            )
+        )
+
+        body = _wrapper(live_client).request(
+            context, "GET", "/patients", object_name="patients", collection_path="results"
+        )
+
+        assert body["results"]
+        for record in body["results"]:
+            assert "ssn" not in record
+
+    def test_omitting_the_object_name_skips_the_check_rather_than_guessing(
+        self, live_client: httpx.Client
+    ) -> None:
+        """No inference: the identical policy allows the call when nothing is named.
+
+        A wrapper that derived "patients" from ``/patients`` would deny this, which
+        is exactly the unspecified behaviour section 6 marks with a warning.
+        """
+        context = _signed(_policy(endpoint_rules=ALLOW_ALL_GET, hidden_objects=["patients"]))
+
+        body = _wrapper(live_client).request(
+            context, "GET", "/patients", collection_path="results"
+        )
+
+        assert body["results"]
+
+    def test_a_redirect_hop_re_checks_the_named_object(
+        self, live_api_base_url: str
+    ) -> None:
+        """The object check is part of a hop, so a redirect cannot shed it."""
+        context = _signed(
+            _policy(
+                endpoint_rules=EndpointRules(
+                    allowed_endpoints=["/redirect/*", "/patients"],
+                    allowed_methods=["GET"],
+                ),
+                hidden_objects=["patients"],
+            )
+        )
+
+        with httpx.Client(
+            base_url=live_api_base_url, timeout=10.0, follow_redirects=True
+        ) as client:
+            with pytest.raises(PermissionError, match="object is hidden"):
+                _wrapper(client).request(
+                    context, "GET", "/redirect/302", params={"to": "/patients"},
+                    object_name="patients",
+                )
 
 
 class TestRecordedFixturesOverRealHttp:

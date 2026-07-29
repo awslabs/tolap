@@ -27,6 +27,13 @@
  *
  * Neither was a dialect bug. Both were found only because parity was asserted across
  * SDKs on a shared corpus.
+ *
+ * There are two corpora here, and both must agree across SDKs: {@link PARITY_CORPUS}
+ * fixes the emitted SQL text, and {@link UNPUSHABLE_PARITY_CORPUS} fixes how many
+ * filters each SDK reports as unpushable. The second exists because `like`/`notLike`
+ * are *declined* on the profiles whose collation could make `LIKE` case-insensitive,
+ * and a decline is only correct if it is also reported — text parity alone cannot tell
+ * "not pushed, and the post pass is carrying it" apart from "silently dropped".
  */
 
 import { describe, expect, it } from "vitest";
@@ -87,6 +94,9 @@ function policyFor(spec: string): EffectivePolicy {
       break;
     case "like":
       rowFilters = [{ field: "region", operator: FilterOperator.Like, value: "us-%" }];
+      break;
+    case "notlike":
+      rowFilters = [{ field: "region", operator: FilterOperator.NotLike, value: "us-%" }];
       break;
     case "backslash":
       rowFilters = eq("region", "us\\' OR 1=1 --");
@@ -413,12 +423,79 @@ const PARITY_CORPUS: Array<[string, string, string, string, string]> = [
     "mysql",
     "SELECT a FROM t WHERE `deleted_at` IS NULL",
   ],
+  // like/notLike, every profile x both operators. The emitted text is the whole point
+  // of the case: `postgres`/`trino` push a real LIKE, and `mysql`, `sqlserver` and
+  // `ansi` emit the query untouched because their collation could make the comparison
+  // case-insensitive (spec §4).
+  [
+    "like-postgres",
+    "SELECT a FROM t",
+    "like",
+    "postgres",
+    "SELECT a FROM t WHERE \"region\" LIKE 'us-%'",
+  ],
+  [
+    "like-trino",
+    "SELECT a FROM t",
+    "like",
+    "trino",
+    "SELECT a FROM t WHERE \"region\" LIKE 'us-%'",
+  ],
   [
     "like-mysql",
     "SELECT a FROM t",
     "like",
     "mysql",
-    "SELECT a FROM t WHERE `region` LIKE 'us-%'",
+    "SELECT a FROM t",
+  ],
+  [
+    "like-sqlserver",
+    "SELECT a FROM t",
+    "like",
+    "sqlserver",
+    "SELECT a FROM t",
+  ],
+  [
+    "like-ansi",
+    "SELECT a FROM t",
+    "like",
+    "ansi",
+    "SELECT a FROM t",
+  ],
+  [
+    "notlike-postgres",
+    "SELECT a FROM t",
+    "notlike",
+    "postgres",
+    "SELECT a FROM t WHERE (\"region\" NOT LIKE 'us-%' OR \"region\" IS NULL)",
+  ],
+  [
+    "notlike-trino",
+    "SELECT a FROM t",
+    "notlike",
+    "trino",
+    "SELECT a FROM t WHERE (\"region\" NOT LIKE 'us-%' OR \"region\" IS NULL)",
+  ],
+  [
+    "notlike-mysql",
+    "SELECT a FROM t",
+    "notlike",
+    "mysql",
+    "SELECT a FROM t",
+  ],
+  [
+    "notlike-sqlserver",
+    "SELECT a FROM t",
+    "notlike",
+    "sqlserver",
+    "SELECT a FROM t",
+  ],
+  [
+    "notlike-ansi",
+    "SELECT a FROM t",
+    "notlike",
+    "ansi",
+    "SELECT a FROM t",
   ],
   [
     "backslash-mysql",
@@ -499,6 +576,43 @@ const PARITY_CORPUS: Array<[string, string, string, string, string]> = [
   ],
 ];
 
+/**
+ * `[case id, policy spec, dialect, how many filters all three SDKs must report as
+ * unpushable]`.
+ *
+ * The emitted text and this report are two halves of one contract: a filter that
+ * vanishes from the SQL without being reported would be a silent loss of the
+ * optimization at best, and at worst an integrator's "fully pushed down" assertion
+ * passing while the database returns unfiltered rows. Duplicated verbatim in all three
+ * SDKs alongside {@link PARITY_CORPUS}.
+ */
+const UNPUSHABLE_PARITY_CORPUS: ReadonlyArray<
+  readonly [string, string, string, number]
+> = [
+  // like/notLike: pushed on the case-sensitive profiles, reported on the others.
+  ["like-postgres", "like", "postgres", 0],
+  ["like-trino", "like", "trino", 0],
+  ["like-mysql", "like", "mysql", 1],
+  ["like-sqlserver", "like", "sqlserver", 1],
+  ["like-ansi", "like", "ansi", 1],
+  ["notlike-postgres", "notlike", "postgres", 0],
+  ["notlike-trino", "notlike", "trino", 0],
+  ["notlike-mysql", "notlike", "mysql", 1],
+  ["notlike-sqlserver", "notlike", "sqlserver", 1],
+  ["notlike-ansi", "notlike", "ansi", 1],
+  // The decline paths that were already dialect-independent, held here so the two
+  // kinds of decline are asserted by the same mechanism.
+  ["contains-mysql", "contains", "mysql", 1],
+  ["contains-postgres", "contains", "postgres", 1],
+  ["backslash-postgres", "backslash", "postgres", 1],
+  ["backslash-mysql", "backslash", "mysql", 1],
+  ["equals-postgres", "us_filter", "postgres", 0],
+  ["equals-mysql", "us_filter", "mysql", 0],
+  // An unrecognized dialect rewrites nothing, so every filter is reported.
+  ["like-unknown", "like", "oracle", 1],
+  ["equals-unknown", "us_filter", "oracle", 1],
+];
+
 describe("cross-SDK emitted-SQL parity", () => {
   const rewriter = new SqlQueryRewriter();
 
@@ -506,6 +620,15 @@ describe("cross-SDK emitted-SQL parity", () => {
     "%s emits the cross-SDK corpus text",
     (_caseId, query, spec, dialect, expected) => {
       expect(rewriter.rewriteQuery(query, policyFor(spec), dialect).query).toBe(expected);
+    },
+  );
+
+  it.each(UNPUSHABLE_PARITY_CORPUS)(
+    "%s reports the cross-SDK unpushable count",
+    (_caseId, spec, dialect, expectedCount) => {
+      expect(rewriter.unpushableFilters(policyFor(spec), dialect)).toHaveLength(
+        expectedCount,
+      );
     },
   );
 
@@ -520,9 +643,36 @@ describe("cross-SDK emitted-SQL parity", () => {
     expect(dialects.has("oracle")).toBe(true);
   });
 
+  it("covers the like gate for every profile and both operators", () => {
+    // like/notLike are the one operator pair whose *pushability* depends on the
+    // dialect, so the corpus must state an answer for all five profiles rather than
+    // sampling one or two.
+    for (const spec of ["like", "notlike"]) {
+      const emitted = new Set(
+        PARITY_CORPUS.filter((row) => row[2] === spec && row[3] !== "oracle").map(
+          (row) => row[3],
+        ),
+      );
+      const reported = new Set(
+        UNPUSHABLE_PARITY_CORPUS.filter(
+          (row) => row[1] === spec && row[2] !== "oracle",
+        ).map((row) => row[2]),
+      );
+
+      for (const d of ["ansi", "postgres", "trino", "mysql", "sqlserver"]) {
+        expect(emitted.has(d), `${spec} text: ${d}`).toBe(true);
+        expect(reported.has(d), `${spec} report: ${d}`).toBe(true);
+      }
+    }
+  });
+
   it("has a unique id per case", () => {
     const ids = PARITY_CORPUS.map((row) => row[0]);
 
     expect(new Set(ids).size).toBe(ids.length);
+
+    const unpushableIds = UNPUSHABLE_PARITY_CORPUS.map((row) => row[0]);
+
+    expect(new Set(unpushableIds).size).toBe(unpushableIds.length);
   });
 });

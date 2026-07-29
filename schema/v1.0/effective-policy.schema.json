@@ -53,8 +53,7 @@
       "items": {
         "type": "string"
       },
-      "minItems": 1,
-      "description": "Names of the policy definitions that were merged to produce this effective policy. Included for audit trail."
+      "description": "Names of the policy definitions that were merged to produce this effective policy. Included for audit trail. An EMPTY array is valid and meaningful: it is the deny-all sentinel every SDK produces when no policy matched, so a minItems constraint here would forbid serializing the fail-closed result."
     },
     "permissions": {
       "type": "object",
@@ -279,7 +278,7 @@
       "properties": {
         "maxResults": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 0
         },
         "maxQueryTimeSeconds": {
           "type": "integer",

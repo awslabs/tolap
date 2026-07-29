@@ -49,6 +49,21 @@ from tolap_core.sql_rewriter import (
 )
 
 
+#: The profiles whose ``LIKE`` is case-sensitive, and which may therefore push
+#: ``like``/``notLike`` (spec section 4). Both quote with double quotes, so one
+#: expected string covers them.
+CASE_SENSITIVE_LIKE_DIALECTS = [SqlDialect.postgres, SqlDialect.trino]
+
+#: The profiles that must decline ``like``/``notLike``. ``mysql`` and ``sqlserver``
+#: have case-insensitive default collations; ``ansi`` is the strict intersection and
+#: promises no collation at all.
+COLLATION_DEPENDENT_LIKE_DIALECTS = [
+    SqlDialect.mysql,
+    SqlDialect.sqlserver,
+    SqlDialect.ansi,
+]
+
+
 def _policy(
     *,
     can_query: bool = True,
@@ -757,14 +772,6 @@ class TestOperatorSqlForms:
                 RowFilter(field="a", operator=FilterOperator.not_in, values=[1, 2]),
                 '("a" NOT IN (1, 2) OR "a" IS NULL)',
             ),
-            (
-                RowFilter(field="a", operator=FilterOperator.like, value="x%"),
-                "\"a\" LIKE 'x%'",
-            ),
-            (
-                RowFilter(field="a", operator=FilterOperator.not_like, value="x%"),
-                "\"a\" NOT LIKE 'x%'",
-            ),
             (RowFilter(field="a", operator=FilterOperator.is_null), '"a" IS NULL'),
             (RowFilter(field="a", operator=FilterOperator.is_not_null), '"a" IS NOT NULL'),
             (
@@ -774,8 +781,48 @@ class TestOperatorSqlForms:
         ],
         ids=lambda rf: rf.operator.value if isinstance(rf, RowFilter) else "",
     )
-    def test_each_pushable_operator_renders(self, row_filter: RowFilter, expected: str) -> None:
+    def test_each_dialect_independent_pushable_operator_renders(
+        self, row_filter: RowFilter, expected: str
+    ) -> None:
+        """These operators render identically under every profile.
+
+        ``like``/``notLike`` are deliberately absent: they are the one pair whose
+        pushability depends on the dialect, so they are asserted separately under
+        the profiles that may push them and under those that may not. Every other
+        operator is pushable everywhere, which is what lets this case use the
+        default profile.
+        """
         assert build_condition(row_filter) == expected
+
+    @pytest.mark.parametrize(
+        ("row_filter", "expected"),
+        [
+            (
+                RowFilter(field="a", operator=FilterOperator.like, value="x%"),
+                "\"a\" LIKE 'x%'",
+            ),
+            (
+                # The IS NULL arm, on the same footing as notEquals and notIn above:
+                # NULL NOT LIKE 'x' is unknown, so the bare form would drop a
+                # null-valued row the post-fetch pass keeps. Only ever emitted for a
+                # case-sensitive profile, since the others do not push at all.
+                RowFilter(field="a", operator=FilterOperator.not_like, value="x%"),
+                "(\"a\" NOT LIKE 'x%' OR \"a\" IS NULL)",
+            ),
+        ],
+        ids=lambda rf: rf.operator.value if isinstance(rf, RowFilter) else "",
+    )
+    @pytest.mark.parametrize("dialect", CASE_SENSITIVE_LIKE_DIALECTS)
+    def test_like_renders_under_a_case_sensitive_profile(
+        self, dialect: SqlDialect, row_filter: RowFilter, expected: str
+    ) -> None:
+        """The SQL rendering, which is still exercised -- just not everywhere.
+
+        ``postgres`` and ``trino`` promise a case-sensitive ``LIKE``, so the
+        comparison means what the post-fetch pass means and may be pushed. Both
+        quote identifiers with double quotes, hence one shared expectation.
+        """
+        assert build_condition(row_filter, dialect=dialect) == expected
 
     @pytest.mark.parametrize(
         "operator",
@@ -814,9 +861,12 @@ class TestOperatorSqlForms:
     ) -> None:
         assert build_condition(RowFilter(field="a", operator=operator, value=None)) == "1 = 0"
 
-    def test_a_like_against_a_null_pattern_selects_no_row(self) -> None:
+    @pytest.mark.parametrize("dialect", CASE_SENSITIVE_LIKE_DIALECTS)
+    def test_a_like_against_a_null_pattern_selects_no_row(self, dialect: SqlDialect) -> None:
+        """Under a profile that may push at all -- the collation-dependent ones
+        decline the operator before the pattern is even looked at."""
         assert build_condition(
-            RowFilter(field="a", operator=FilterOperator.like, value=None)
+            RowFilter(field="a", operator=FilterOperator.like, value=None), dialect=dialect
         ) == "1 = 0"
 
     def test_in_with_a_null_values_array_selects_no_row(self) -> None:
@@ -899,6 +949,153 @@ class TestUnpushableFilterReporting:
         refused = RowFilter(field="n", operator=FilterOperator.equals, value="back\\slash")
 
         assert unpushable_filters(_policy(row_filters=[refused])) == [refused]
+
+
+# ---------------------------------------------------------------------------
+# like/notLike pushdown is gated on the dialect's collation
+# ---------------------------------------------------------------------------
+
+
+#: Both operators, since the rule applies to the pair and not to one of them.
+LIKE_OPERATORS = [FilterOperator.like, FilterOperator.not_like]
+
+
+class TestLikePushdownRequiresACaseSensitiveDialect:
+    """``like``/``notLike`` are pushed only where ``LIKE`` is case-sensitive.
+
+    A **measured** divergence, not a theorised one. The post-fetch pass compares
+    case-sensitively and is engine-independent, but a pushed-down ``LIKE`` inherits
+    the *column's* collation::
+
+        postgres:  SELECT 'ALICE JONES' LIKE 'alice%'   ->  f
+        mysql:     SELECT 'ALICE JONES' LIKE 'alice%'   ->  1
+
+    so a ``name notLike 'alice%'`` policy drops ``'ALICE JONES'`` on MySQL when the
+    filter is pushed and keeps it when it is not. That is a difference in which
+    **real records** a user sees, which is worse than a null-row asymmetry.
+
+    Driven from the dialect list rather than written out per profile, so adding a
+    profile without deciding its answer cannot pass by omission -- see
+    :meth:`test_every_profile_is_classified`.
+    """
+
+    @pytest.mark.parametrize("operator", LIKE_OPERATORS, ids=lambda op: op.value)
+    @pytest.mark.parametrize(
+        "dialect", CASE_SENSITIVE_LIKE_DIALECTS, ids=lambda d: d.value
+    )
+    def test_a_case_sensitive_profile_emits_the_operator(
+        self, dialect: SqlDialect, operator: FilterOperator
+    ) -> None:
+        rf = RowFilter(field="name", operator=operator, value="alice%")
+        policy = _policy(row_filters=[rf])
+
+        sql = rewrite_query("SELECT id, name FROM patients", policy, dialect=dialect)
+
+        assert "LIKE 'alice%'" in sql
+        assert unpushable_filters(policy, dialect=dialect) == []
+
+    @pytest.mark.parametrize("operator", LIKE_OPERATORS, ids=lambda op: op.value)
+    @pytest.mark.parametrize(
+        "dialect", COLLATION_DEPENDENT_LIKE_DIALECTS, ids=lambda d: d.value
+    )
+    def test_a_collation_dependent_profile_declines_the_operator(
+        self, dialect: SqlDialect, operator: FilterOperator
+    ) -> None:
+        """No ``LIKE`` in the text, and the filter reported through the existing
+        unpushable mechanism so the post pass is known to be carrying it."""
+        rf = RowFilter(field="name", operator=operator, value="alice%")
+        policy = _policy(row_filters=[rf])
+        query = "SELECT id, name FROM patients"
+
+        sql = rewrite_query(query, policy, dialect=dialect)
+
+        assert "LIKE" not in sql.upper()
+        assert sql == query
+        assert unpushable_filters(policy, dialect=dialect) == [rf]
+
+    @pytest.mark.parametrize("operator", LIKE_OPERATORS, ids=lambda op: op.value)
+    @pytest.mark.parametrize(
+        "dialect", COLLATION_DEPENDENT_LIKE_DIALECTS, ids=lambda d: d.value
+    )
+    def test_a_declined_filter_reaches_prepare_sql_querys_report(
+        self, dialect: SqlDialect, operator: FilterOperator
+    ) -> None:
+        """The integrator-facing surface, which is how a caller learns the post pass
+        is still doing the filtering."""
+        rf = RowFilter(field="name", operator=operator, value="alice%")
+
+        prep = prepare_sql_query(
+            "SELECT id, name FROM patients", _policy(row_filters=[rf]), dialect=dialect
+        )
+
+        assert prep.allowed is True
+        assert prep.unpushable_filters == [rf]
+        assert prep.fully_pushed_down is False
+
+    def test_every_profile_is_classified(self) -> None:
+        """A guard on the two lists above, so a new profile cannot skip the decision.
+
+        Without this, adding a sixth dialect would silently be covered by neither
+        list and its ``LIKE`` behavior would go unasserted.
+        """
+        classified = {*CASE_SENSITIVE_LIKE_DIALECTS, *COLLATION_DEPENDENT_LIKE_DIALECTS}
+
+        assert classified == set(SqlDialect)
+        # Disjoint: a profile is one or the other, never both.
+        assert not set(CASE_SENSITIVE_LIKE_DIALECTS) & set(
+            COLLATION_DEPENDENT_LIKE_DIALECTS
+        )
+
+    def test_the_default_profile_declines(self) -> None:
+        """An omitted dialect selects ``ansi``, which promises no collation.
+
+        Worth pinning separately: the default is the profile an integrator gets
+        without thinking about it, and it is the conservative answer here.
+        """
+        rf = RowFilter(field="name", operator=FilterOperator.not_like, value="alice%")
+
+        assert build_condition(rf) is None
+        assert DEFAULT_DIALECT in COLLATION_DEPENDENT_LIKE_DIALECTS
+
+    def test_no_collate_clause_is_ever_emitted(self) -> None:
+        """``COLLATE`` *could* force case-sensitivity on MySQL, and is deliberately
+        not used: the right collation name depends on the column's character set,
+        which a rewriter holding only a policy and a query string does not know.
+        Guessing wrong either fails the query or silently changes the comparison."""
+        for dialect in SqlDialect:
+            for operator in LIKE_OPERATORS:
+                sql = rewrite_query(
+                    "SELECT id, name FROM patients",
+                    _policy(
+                        row_filters=[
+                            RowFilter(field="name", operator=operator, value="alice%")
+                        ]
+                    ),
+                    dialect=dialect,
+                )
+
+                assert "COLLATE" not in sql.upper()
+                assert "BINARY" not in sql.upper()
+
+    @pytest.mark.parametrize(
+        "dialect", COLLATION_DEPENDENT_LIKE_DIALECTS, ids=lambda d: d.value
+    )
+    def test_declining_like_does_not_decline_the_other_operators(
+        self, dialect: SqlDialect
+    ) -> None:
+        """The gate is on ``like``/``notLike`` alone. Every other operator stays
+        pushable under every profile, which is what keeps the connector-spec claim
+        that a profile choice is otherwise a text choice."""
+        equals = RowFilter(field="region", operator=FilterOperator.equals, value="us-east")
+        like = RowFilter(field="name", operator=FilterOperator.like, value="alice%")
+        policy = _policy(row_filters=[equals, like])
+
+        sql = rewrite_query("SELECT id FROM patients", policy, dialect=dialect)
+
+        assert "WHERE" in sql
+        assert "us-east" in sql
+        assert "LIKE" not in sql.upper()
+        assert unpushable_filters(policy, dialect=dialect) == [like]
 
 
 # ---------------------------------------------------------------------------

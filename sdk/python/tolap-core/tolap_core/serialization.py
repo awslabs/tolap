@@ -215,9 +215,20 @@ def _deser_limits(data: dict | None) -> PolicyLimits | None:
 
 
 def _deser_permissions(data: dict) -> PolicyPermissions:
+    """Read the permission block, preserving "absent" as ``None``.
+
+    Absent is kept distinct from an explicit ``false`` so the merger can apply
+    each flag's schema default before folding (canonical spec section 8). The
+    three write permissions default to ``False`` and are AND-folded, while
+    ``read_only`` defaults to ``True`` and is OR-folded, so collapsing absent into
+    ``False`` here would let a policy silent on ``read_only`` grant writes.
+    """
     d = _convert_keys_to_snake(data)
     return PolicyPermissions(
         can_query=d.get("can_query", False),
+        can_insert=d.get("can_insert"),
+        can_update=d.get("can_update"),
+        can_delete=d.get("can_delete"),
         can_export=d.get("can_export"),
         read_only=d.get("read_only"),
     )

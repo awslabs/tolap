@@ -13,13 +13,59 @@ import {
 import { merge } from "./merger.js";
 
 // ---------------------------------------------------------------------------
-// Simple glob matching (zero dependencies)
+// Enforcement glob matching (zero dependencies)
 // ---------------------------------------------------------------------------
+//
+// This is the *enforcement* glob dialect: objects, fields, endpoints and storage
+// prefixes. It is deliberately NOT the dialect `sourcePatternMatch` below uses, and
+// the difference is load-bearing (spec §3.1). Do not unify them — see the note on
+// `sourcePatternMatch` for what each direction breaks.
 
 /**
- * Convert a simple glob pattern to a RegExp.
- * Supports `*` (match any segment chars except `/`), `**` (match anything
- * including `/`), and `?` (match single char).
+ * Characters that must be escaped so a glob is a glob and not a regex.
+ *
+ * `[` and `]` are included, so a bracket in a pattern is a literal bracket rather
+ * than a character class. That mirrors .NET's `EnforcementEngine.GlobMatch`, which
+ * `Regex.Escape`s before expanding `*`, and it is the fail-closed reading: a literal
+ * `[` matches strictly fewer names than a character class would, so an
+ * `allowedObjects` entry cannot silently reach objects the administrator never
+ * spelled out.
+ */
+const GLOB_METACHARACTERS = /[.+^$(){}|[\]\\]/;
+
+/**
+ * Convert an enforcement glob pattern to a RegExp (spec §3.1).
+ *
+ * `*` matches **any** run of characters, crossing every separator including `/` and
+ * `.`; `?` matches exactly one character, also crossing separators. Every other
+ * character is literal. The returned RegExp carries the `i` and `s` flags, so
+ * matching is case-insensitive and a `*` spans a newline.
+ *
+ * Both properties are parity requirements rather than preferences:
+ *
+ * - **Case-insensitivity** closes a fail-open hole. Without the `i` flag,
+ *   `hiddenObjects: ["patients"]` did not hide an object named `PATIENTS`, so a
+ *   table Python and .NET both denied was reachable in TypeScript purely by case.
+ *   Spec §3.1: "All enforcement matching is case-insensitive and
+ *   platform-independent."
+ * - **Crossing separators** closes a fail-closed divergence. `*` previously
+ *   compiled to `[^/]*`, so `allowedEndpoints: ["/api/*"]` denied `/api/v1/x` that
+ *   the same signed policy allowed under Python. The same policy must grant the
+ *   same access in every SDK; §3.1 gives the worked example
+ *   (`/api/v1/patients/*` reaches `/api/v1/patients/123/labs` but not the bare
+ *   collection `/api/v1/patients`).
+ *
+ * `**` is accepted but is now a plain alias for `*`: once `*` crosses everything
+ * there is nothing left for a second star to widen. Runs of consecutive stars are
+ * collapsed to one `.*` rather than emitted as several, which keeps the compiled
+ * source free of the adjacent-quantifier shapes that backtrack badly. Patterns in
+ * the wild that spell `**` therefore keep working and mean exactly what they did.
+ *
+ * Mirrors Python's `_pattern_matches` (`fnmatchcase` over pre-lowered strings) and
+ * .NET's `EnforcementEngine.GlobMatch` (`Regex.Escape` + `\* -> .*`,
+ * `RegexOptions.IgnoreCase`). Python's choice of `fnmatchcase` over `fnmatch` is
+ * itself deliberate: `fnmatch` applies `os.path.normcase`, which made the same
+ * signed policy decide differently on Windows than on Linux.
  */
 export function globToRegex(pattern: string): RegExp {
   let regex = "";
@@ -27,43 +73,34 @@ export function globToRegex(pattern: string): RegExp {
   while (i < pattern.length) {
     const ch = pattern[i];
     if (ch === "*") {
-      if (pattern[i + 1] === "*") {
-        // ** matches everything including path separators
-        regex += ".*";
-        i += 2;
-        // consume trailing /
-        if (pattern[i] === "/") i++;
-        continue;
-      }
-      // * matches everything except /
-      regex += "[^/]*";
-    } else if (ch === "?") {
-      regex += "[^/]";
-    } else if (
-      ch === "." ||
-      ch === "+" ||
-      ch === "^" ||
-      ch === "$" ||
-      ch === "{" ||
-      ch === "}" ||
-      ch === "(" ||
-      ch === ")" ||
-      ch === "|" ||
-      ch === "[" ||
-      ch === "]" ||
-      ch === "\\"
-    ) {
+      // Collapse `*`, `**`, `***`… to a single `.*`. `**` is a historical alias:
+      // `*` already crosses every separator, so a second star adds nothing.
+      while (pattern[i] === "*") i++;
+      regex += ".*";
+      continue;
+    }
+    if (ch === "?") {
+      // One character, separators included, matching Python's `?` -> `.` under
+      // `(?s:…)`. `[^/]` would have made `?` the only enforcement wildcard that
+      // still respected a path boundary.
+      regex += ".";
+    } else if (GLOB_METACHARACTERS.test(ch)) {
       regex += "\\" + ch;
     } else {
       regex += ch;
     }
     i++;
   }
-  return new RegExp("^" + regex + "$");
+  // `i`: case-insensitive (§3.1). `s`: `.` spans a newline, so `*` crosses one too,
+  // which is what Python's `(?s:…)` wrapper does.
+  return new RegExp("^" + regex + "$", "is");
 }
 
 /**
- * Test whether a string matches a simple glob pattern.
+ * Test whether a string matches an enforcement glob pattern (spec §3.1).
+ *
+ * Case-insensitive, and `*` crosses every separator. For `sourcePatterns` use
+ * {@link sourcePatternMatch} instead — its `*` must not cross `:`.
  */
 export function globMatch(pattern: string, value: string): boolean {
   return globToRegex(pattern).test(value);
@@ -76,14 +113,18 @@ export function globMatch(pattern: string, value: string): boolean {
 /**
  * Match a `sourcePatterns` glob against a `sourceConnectionId`.
  *
- * A deliberately *different* glob dialect from {@link globMatch}: source
- * identifiers are `category:namespace:name`, so `*` matches within one segment and
- * must not cross the `:` separator (spec §10). `globMatch` is `/`-oriented — its
- * `*` expands to `[^/]*`, which crosses a colon freely — so reusing it would let
- * `db:*` capture every database source in every namespace, including ones the
- * administrator deliberately left out. Mirrors .NET's
+ * A deliberately *different* glob dialect from {@link globMatch}, and the two must
+ * not be unified (spec §3.1 tabulates the split). Source identifiers are
+ * `category:namespace:name`, so `*` matches within one segment and must not cross
+ * the `:` separator (spec §10). `globMatch` is the enforcement dialect — its `*`
+ * expands to `.*` and crosses every separator, a colon included — so reusing it
+ * would let `db:*` capture every database source in every namespace, including ones
+ * the administrator deliberately left out. Mirrors .NET's
  * `PolicyResolutionEngine.GlobMatch` (`[^:]*`) rather than its
  * `EnforcementEngine.GlobMatch` (`.*`).
+ *
+ * Unifying on `.*` would silently widen every source-scoped policy; unifying on
+ * `[^:]*` would break endpoint and prefix rules. Tests pin both directions.
  *
  * Matching is case-insensitive. Every other character is literal, so a `.` or `+`
  * in a pattern is not a regex operator.

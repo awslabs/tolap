@@ -12,13 +12,20 @@ import {
   type MaskingRule,
   type RowFilter,
   FilterOperator,
+  WriteOperation,
   maskRestrictiveness,
 } from "./types.js";
 import { globToRegex } from "./resolution.js";
 
 // ---------------------------------------------------------------------------
-// Glob matching helper (reuses resolution.ts implementation)
+// Glob matching helper
 // ---------------------------------------------------------------------------
+//
+// `globToRegex` is the ENFORCEMENT glob dialect (spec §3.1): case-insensitive, and
+// `*` crosses every separator including `/` and `.`. It lives in resolution.ts for
+// historical reasons but is used only from here — `sourcePatterns` resolution has
+// its own `sourcePatternMatch`, whose `*` must NOT cross `:`. Reaching for that one
+// here would deny `/api/v1/patients/123` under `/api/v1/patients/*`.
 
 function matchesGlob(pattern: string, value: string): boolean {
   return globToRegex(pattern).test(value);
@@ -1053,11 +1060,26 @@ function rowPassesFilter(
       }
       return likeMatches(String(rf.value), String(value));
     case "notLike":
-      // A null field value is not "unlike" the pattern, it is incomparable: SQL
-      // evaluates `NULL NOT LIKE 'x'` to NULL, which does not retain the row.
-      // Returning true here would be exactly the fail-open bug spec §7 records
-      // for notEquals/notIn on a missing field, one level down.
-      if (value === null || rf.value === undefined || rf.value === null) {
+      // notLike is a negative operator and behaves exactly like notEquals and
+      // notIn on a null value: the row is KEPT. Two separate rules meet here and
+      // are deliberately not conflated.
+      //
+      // 1. Present-and-null is KEPT. This is what keeps the pushed-down form and
+      //    this pass equivalent: the rewriter emits
+      //    `(col NOT LIKE 'x' OR col IS NULL)` precisely because bare SQL
+      //    `NOT LIKE` is unknown-therefore-false for a null col, so without the
+      //    arm the database would drop a row this pass keeps (spec §4). A key
+      //    holding `undefined` counts as null here, exactly as it does for
+      //    `isNull` below.
+      // 2. An ABSENT field was already dropped above. That is the unrelated
+      //    fail-closed rule: a value that cannot be established cannot be shown
+      //    to satisfy the filter (spec §7). It applies to every operator.
+      if (value === null || value === undefined) {
+        return true;
+      }
+      // A null pattern states no constraint any value can be shown to satisfy, so
+      // it matches nothing -- as for `like`.
+      if (rf.value === undefined || rf.value === null) {
         return false;
       }
       return !likeMatches(String(rf.value), String(value));
@@ -1118,6 +1140,91 @@ export function applyRowFilters(
 // Tag filtering
 // ---------------------------------------------------------------------------
 
+// A classification level *is* a tag: there is no separate classification
+// construct, so tag filtering is the whole knowledge-base confidentiality control
+// (connector spec §7). Extraction therefore has to be as robust as masking already
+// is. A literal lower-case `tags` lookup enforced the control on exactly one of the
+// five shapes real providers emit -- `tags`, `Tags`, `metadata.tags`, `labels`, and
+// a scalar `classification` -- so four of five records tagged `secret` were
+// disclosed.
+
+/**
+ * The record keys that carry classification tags, matched with
+ * {@link fieldNameMatches} rather than looked up literally.
+ *
+ * The set is deliberately small, fixed, and not configurable. Every entry is a
+ * shape connector spec §7 names; nothing is added on speculation, because widening
+ * the set is not automatically safer in either direction. An unrelated `labels`
+ * field whose value happens to appear in `allowedTags` would *admit* a record the
+ * allow-list would otherwise have dropped as untagged, so an over-broad set can
+ * fail open exactly as a too-narrow one fails to enforce. It is not an
+ * integrator-supplied parameter for the same reason: the policy is signed, and an
+ * unsigned knob deciding which keys count as security metadata would put part of
+ * the decision outside the signature.
+ */
+const TAG_KEYS = ["tags", "labels", "classification"] as const;
+
+/**
+ * Collect the tag strings carried by a matched tag key's value.
+ *
+ * A scalar counts as a single tag: providers emit both `{tags: ["secret"]}` and
+ * `{classification: "secret"}`, and connector spec §7 requires the two to behave
+ * identically. Nested arrays are flattened.
+ *
+ * Only strings are collected. `allowedTags`/`deniedTags` are arrays of strings in
+ * the schema, so a non-string value could only match after a stringification whose
+ * result differs per language (`String(true)` is `"true"` here and `"True"` in
+ * Python) -- and a confidentiality decision must not depend on the host language's
+ * formatting. A non-string value still fails closed under an allow-list, because it
+ * contributes no tag and therefore no proof of allowance.
+ */
+function harvestTagValues(value: unknown, into: string[]): void {
+  if (typeof value === "string") {
+    into.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) harvestTagValues(item, into);
+  }
+}
+
+/**
+ * Collect tags from every recognized tag key anywhere in `node`.
+ *
+ * Recurses into nested records and arrays, matching keys with the same
+ * bidirectional, case-insensitive, glob-aware matcher masking and hidden-field
+ * removal use (canonical spec §4), so `Tags` and `metadata.tags` are found
+ * alongside `tags`.
+ */
+function collectTags(node: unknown, into: string[]): void {
+  if (Array.isArray(node)) {
+    for (const item of node) collectTags(item, into);
+    return;
+  }
+  if (!isRecord(node)) return;
+
+  for (const key of Object.keys(node)) {
+    if (TAG_KEYS.some((tagKey) => fieldNameMatches(tagKey, key))) {
+      harvestTagValues(node[key], into);
+    }
+    // Walked whether or not the key matched: a matched key holding a record may
+    // still nest a tag key of its own.
+    collectTags(node[key], into);
+  }
+}
+
+/**
+ * Every tag on a record, lower-cased, from any tag key at any depth.
+ *
+ * Lower-cased because tag values compare case-insensitively: `deniedTags:
+ * ["Secret"]` must drop a record tagged `secret` (connector spec §7).
+ */
+function extractTags(record: unknown): Set<string> {
+  const collected: string[] = [];
+  collectTags(record, collected);
+  return new Set(collected.map((tag) => tag.toLowerCase()));
+}
+
 /**
  * Filter results by tag rules in the effective policy.
  *
@@ -1129,6 +1236,9 @@ export function applyRowFilters(
  *   denylist does NOT drop untagged records — an untagged record matches no
  *   denied tag, so dropping it enforced a restriction the policy never stated.
  * - Denied takes precedence over allowed.
+ *
+ * Tags are read by {@link extractTags} and compared case-insensitively on both
+ * sides.
  */
 export function filterByTags(
   results: Array<Record<string, unknown>>,
@@ -1137,20 +1247,19 @@ export function filterByTags(
   const tagRules = policy.objectRules?.tagRules;
   if (!tagRules) return results;
 
-  const allowedTags = tagRules.allowedTags;
-  const deniedTags = tagRules.deniedTags;
+  const allowedTags = tagRules.allowedTags?.map((tag) => tag.toLowerCase());
+  const deniedTags = tagRules.deniedTags?.map((tag) => tag.toLowerCase());
 
   return results.filter((result) => {
-    const rawTags = result["tags"];
-    const tags = Array.isArray(rawTags) ? (rawTags as string[]) : [];
+    const tags = extractTags(result);
 
     // Denied tags take precedence: exclude if any tag is denied.
-    if (deniedTags && tags.some((tag) => deniedTags.includes(tag))) {
+    if (deniedTags && deniedTags.some((tag) => tags.has(tag))) {
       return false;
     }
 
     // Allowed tags: include only if at least one tag is allowed.
-    if (allowedTags && !tags.some((tag) => allowedTags.includes(tag))) {
+    if (allowedTags && !allowedTags.some((tag) => tags.has(tag))) {
       return false;
     }
 
@@ -1246,4 +1355,447 @@ export function validateEndpoint(
   }
 
   return { allowed: true };
+}
+
+// ---------------------------------------------------------------------------
+// Write validation (connector spec §4)
+// ---------------------------------------------------------------------------
+//
+// Reads filter what comes back. Writes have to be validated BEFORE they reach the
+// source, because there is nothing to filter afterwards -- the damage is already
+// committed. Everything below runs pre-execution and returns a decision the caller
+// must honour; nothing here talks to a data source.
+
+/**
+ * Sentinel for "the caller supplied no update/delete target row".
+ *
+ * Distinct from `{}`, which is a row that genuinely has no fields, and from
+ * `undefined`, which a caller can reach by accident. The difference decides between
+ * `target row not permitted` (the filters were evaluated and did not match) and
+ * `write target unverifiable` (they could not be evaluated at all) — see
+ * {@link validateWrite}.
+ */
+export const TARGET_ROW_UNKNOWN: unique symbol = Symbol("TARGET_ROW_UNKNOWN");
+
+/** The target row a write will modify, or {@link TARGET_ROW_UNKNOWN}. */
+export type WriteTargetRow =
+  | Record<string, unknown>
+  | typeof TARGET_ROW_UNKNOWN
+  | undefined;
+
+/**
+ * HTTP methods mapped to the permission that governs them (connector spec §6).
+ *
+ * `GET`/`HEAD`/`OPTIONS` are reads governed by `canQuery`, which
+ * {@link validateEndpoint} already enforces, so they are absent on purpose.
+ */
+const METHOD_WRITE_OPERATIONS: Record<string, WriteOperation> = {
+  POST: WriteOperation.Insert,
+  PUT: WriteOperation.Update,
+  PATCH: WriteOperation.Update,
+  DELETE: WriteOperation.Delete,
+};
+
+/**
+ * The permission each operation consults, in the order it is reported.
+ *
+ * `upsert` requires both, which is the safe intersection connector spec §8 mandates
+ * for a call that cannot distinguish a create from an overwrite.
+ */
+const OPERATION_PERMISSIONS: Record<WriteOperation, Array<"insert" | "update" | "delete">> = {
+  [WriteOperation.Insert]: ["insert"],
+  [WriteOperation.Update]: ["update"],
+  [WriteOperation.Delete]: ["delete"],
+  [WriteOperation.Upsert]: ["insert", "update"],
+};
+
+/**
+ * The write operation an HTTP method performs, or `undefined` for a read method.
+ *
+ * `POST` inserts, `PUT`/`PATCH` update, `DELETE` deletes; `GET`/`HEAD`/`OPTIONS`
+ * return `undefined` because they are reads governed by `canQuery` (connector spec
+ * §6). An unrecognized method also returns `undefined` — it is not silently treated
+ * as a read: {@link validateEndpoint} still gates it through `allowedMethods`, whose
+ * omitted default is the read methods, so an unknown verb is denied there rather
+ * than admitted here.
+ */
+export function writeOperationForMethod(method: string): WriteOperation | undefined {
+  return METHOD_WRITE_OPERATIONS[method.toUpperCase()];
+}
+
+/**
+ * Whether a write permission is granted, defaulting absent to `false`.
+ *
+ * The schema default for all three is `false` (connector spec §4.1), so an absent
+ * flag is a denial. This is the opposite of `canQuery`, and the asymmetry is the
+ * point: a policy authored before writes existed must not silently acquire them.
+ */
+function permissionGranted(
+  policy: EffectivePolicy,
+  name: "insert" | "update" | "delete",
+): boolean {
+  const permissions = policy.permissions;
+  const flag =
+    name === "insert"
+      ? permissions.canInsert
+      : name === "update"
+        ? permissions.canUpdate
+        : permissions.canDelete;
+  return flag === true;
+}
+
+/** Check 1: the operation's permission, then the `readOnly` ceiling. */
+function validateWritePermission(
+  operation: WriteOperation,
+  policy: EffectivePolicy,
+): AccessResult {
+  for (const name of OPERATION_PERMISSIONS[operation]) {
+    if (!permissionGranted(policy, name)) {
+      return { allowed: false, reason: `${name} not permitted` };
+    }
+  }
+
+  // readOnly is a ceiling, not a peer: it denies every write regardless of the three
+  // flags. Absent means the schema default of true (canonical spec §8), so a policy
+  // silent on readOnly cannot write.
+  if (policy.permissions.readOnly !== false) {
+    return { allowed: false, reason: "read-only policy" };
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Check 2: the target object against `hiddenObjects`/`allowedObjects`.
+ *
+ * Deliberately not {@link validateAccess}, which leads with `canQuery` and would
+ * report `query not permitted` for a write. The object rules themselves are
+ * identical, and the reasons stay the ones connector spec §3.3 documents.
+ */
+function validateWriteObject(
+  objectName: string,
+  policy: EffectivePolicy,
+): AccessResult {
+  const rules = policy.objectRules;
+  if (!rules) return { allowed: true };
+
+  if (rules.hiddenObjects && matchesAnyGlob(rules.hiddenObjects, objectName)) {
+    return { allowed: false, reason: "object is hidden" };
+  }
+
+  if (rules.allowedObjects) {
+    if (!matchesAnyGlob(rules.allowedObjects, objectName)) {
+      return { allowed: false, reason: "object not in allowed set" };
+    }
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Check 3: every field in the payload must be writable.
+ *
+ * Fails closed on the *whole* write (connector spec §4.4): the first unwritable
+ * field denies the entire operation rather than being stripped so the rest can
+ * proceed. This is the one place where filtering — the correct answer on the read
+ * path — is the wrong answer. A caller that submits `{status, ssn}` and is told the
+ * write succeeded, when only `status` landed, holds a model of the data that is
+ * wrong in a way it cannot detect.
+ *
+ * Field names match with the bidirectional, case-insensitive, glob-aware matcher the
+ * read path uses (§3.2), so a `readOnlyFields` entry of `patients.created_at` blocks
+ * a payload key of `created_at`.
+ *
+ * The field is named in the reason. That discloses nothing: the caller supplied it.
+ * Row denials, by contrast, never name a value.
+ */
+function validateWrittenFields(
+  fields: string[],
+  policy: EffectivePolicy,
+): AccessResult {
+  const fieldRules = policy.objectRules?.fieldRules;
+  if (!fieldRules) return { allowed: true };
+
+  for (const name of fields) {
+    // A field the caller cannot read, it cannot write.
+    if (
+      fieldRules.hiddenFields?.some((pattern) => fieldNameMatches(pattern, name))
+    ) {
+      return { allowed: false, reason: `field is hidden: ${name}` };
+    }
+
+    // readOnlyFields: readable but not writable. This is the whole meaning of the
+    // field (connector spec §4.3) and it has no effect on reads.
+    if (
+      fieldRules.readOnlyFields?.some((pattern) => fieldNameMatches(pattern, name))
+    ) {
+      return { allowed: false, reason: `field is read-only: ${name}` };
+    }
+
+    // undefined is unrestricted; [] denies every field (canonical spec §3), so this
+    // tests for presence rather than truthiness.
+    if (fieldRules.allowedFields !== undefined) {
+      if (!fieldRules.allowedFields.some((pattern) => fieldNameMatches(pattern, name))) {
+        return { allowed: false, reason: `field not in allowed set: ${name}` };
+      }
+    }
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Check 4: row filters must match the row an update or delete targets.
+ *
+ * A caller must not be able to modify a row it could not have selected, so the
+ * policy's row filters are evaluated against the target and a non-match is
+ * `target row not permitted`.
+ *
+ * When filters exist and no target row was supplied, the result is
+ * `write target unverifiable` — **not** an allow. The integrator's options are to
+ * read the row first and pass it here, or to push the filters into the statement's
+ * `WHERE` so the source applies them; an unqualified `DELETE FROM patients` under a
+ * region-scoped policy has to be refused rather than executed and hoped over
+ * (connector spec §4.2 and §5).
+ *
+ * An insert has no pre-existing target, so this check does not apply to it. The row
+ * it *creates* is governed by the field checks above: a policy scoped by `region`
+ * cannot stop an insert writing a foreign region unless `region` is in
+ * `readOnlyFields` or outside `allowedFields`, which is a gap in the policy language
+ * rather than in this implementation.
+ */
+function validateWriteTargetRow(
+  operation: WriteOperation,
+  targetRow: WriteTargetRow,
+  policy: EffectivePolicy,
+): AccessResult {
+  if (operation === WriteOperation.Insert) return { allowed: true };
+
+  const filters = policy.objectRules?.rowFilters;
+  if (!filters || filters.length === 0) return { allowed: true };
+
+  // A target that is absent, or one the filters cannot be evaluated against, is
+  // unverifiable for the same reason -- not a target that happens to pass.
+  if (targetRow === TARGET_ROW_UNKNOWN || !isRecord(targetRow)) {
+    return { allowed: false, reason: "write target unverifiable" };
+  }
+
+  // The row must satisfy every filter, exactly as it would to be returned by a read
+  // (canonical spec §7): a missing field fails closed.
+  if (!filters.every((filter) => rowPassesFilter(targetRow, filter))) {
+    // Deliberately does not name the field or the value; §4.4 permits naming a
+    // payload field the caller supplied, never a row value.
+    return { allowed: false, reason: "target row not permitted" };
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * The field names a payload attempts to write.
+ *
+ * A record contributes its keys; anything else contributes nothing, because only a
+ * record names fields. Nested keys are *not* flattened into dotted paths: the field
+ * matcher already reaches a bare `ssn` from a rule of `patients.ssn` and vice versa
+ * (§3.2), so walking the tree and collecting every key at every depth is what a rule
+ * needs to see.
+ *
+ * `resourceFields` extends the set with fields the body does not mention. It exists
+ * for the full-resource-replace rule (see {@link validateWrite}'s `fullReplace`); it
+ * is deliberately not inferred from anything, because only the integrator knows a
+ * resource's shape.
+ */
+export function payloadWriteFields(
+  payload: unknown,
+  resourceFields?: string[],
+): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+
+  const add = (name: string): void => {
+    if (!seen.has(name)) {
+      seen.add(name);
+      names.push(name);
+    }
+  };
+
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (!isRecord(node)) return;
+    for (const key of Object.keys(node)) {
+      add(key);
+      walk(node[key]);
+    }
+  };
+
+  walk(payload);
+  if (resourceFields !== undefined) {
+    for (const name of resourceFields) add(name);
+  }
+  return names;
+}
+
+/**
+ * Every field the policy forbids writing, as written in the policy.
+ *
+ * Used to give the full-resource-replace rule (connector spec §6) teeth when the
+ * caller cannot enumerate the resource: a replace writes every field of the
+ * resource, and the fields whose overwrite must be denied are exactly the ones the
+ * policy protects, so treating them as present is the fail-closed reading. It is
+ * *not* an approximation of the resource's shape — it is the subset of any
+ * resource's shape that the policy cares about.
+ *
+ * `allowedFields` cannot be handled this way: the risk there is a resource field the
+ * allow-list omits, which is unknowable without the resource's field list. An
+ * integrator combining `allowedFields` with full-resource replaces must pass
+ * `resourceFields`.
+ */
+function protectedFieldNames(policy: EffectivePolicy): string[] {
+  const fieldRules = policy.objectRules?.fieldRules;
+  if (!fieldRules) return [];
+  return [...(fieldRules.hiddenFields ?? []), ...(fieldRules.readOnlyFields ?? [])];
+}
+
+/** Optional arguments to {@link validateWrite}. */
+export interface ValidateWriteOptions {
+  /**
+   * The row an update or delete will modify. Omitting it while the policy carries
+   * row filters yields `write target unverifiable`, never an allow.
+   */
+  targetRow?: WriteTargetRow;
+  /**
+   * Fields of the resource the body does not mention, for a full-resource replace.
+   * Required alongside {@link fullReplace} when the policy sets `allowedFields`.
+   */
+  resourceFields?: string[];
+  /**
+   * Whether this write replaces the whole resource rather than the keys it
+   * mentions. An HTTP `PUT` is the canonical case (connector spec §6).
+   */
+  fullReplace?: boolean;
+}
+
+const WRITE_OPERATIONS: Record<string, WriteOperation> = Object.fromEntries(
+  Object.values(WriteOperation).map((op) => [op, op]),
+);
+
+/** Resolve an operation name, case-insensitively, or `undefined` if unrecognized. */
+function resolveWriteOperation(
+  value: WriteOperation | string,
+): WriteOperation | undefined {
+  return WRITE_OPERATIONS[String(value).toLowerCase()];
+}
+
+/**
+ * Validate a write before it reaches the data source (connector spec §4).
+ *
+ * Runs the four required pre-write checks in order — cheapest first, all of them
+ * mandatory:
+ *
+ *   1. the operation's permission (`canInsert`/`canUpdate`/`canDelete`), then the
+ *      `readOnly` ceiling
+ *   2. the target object against `hiddenObjects`/`allowedObjects`
+ *   3. every field in the payload against `hiddenFields`, `readOnlyFields` and
+ *      `allowedFields`
+ *   4. the policy's row filters against the update/delete target row
+ *
+ * Fails closed and rejects the whole write: one unwritable field denies the
+ * operation rather than being dropped so the rest can proceed (§4.4). The reason
+ * strings are part of the contract — integrators log and branch on them.
+ *
+ * `operation` accepts a {@link WriteOperation} or its string value. An `upsert` — a
+ * call that cannot distinguish a create from an overwrite, such as an unconditional
+ * object-store `PUT` — requires **both** `canInsert` and `canUpdate` (§8).
+ *
+ * `options.fullReplace` marks a write that replaces the whole resource rather than
+ * the keys it mentions. Omitting a `readOnlyFields` field from a full replace is
+ * still an attempt to overwrite it, this time with absent, so every field the policy
+ * protects is validated as though the body had named it.
+ *
+ * A permitted write that returns data — `INSERT ... RETURNING`, a 201 body, updated
+ * metadata — is a *read* of that data, so run {@link applyResultPipeline} over the
+ * response (§4.5). A masked field must come back masked even when the caller just
+ * wrote it.
+ */
+export function validateWrite(
+  operation: WriteOperation | string,
+  objectName: string | undefined,
+  payload: unknown,
+  policy: EffectivePolicy,
+  options: ValidateWriteOptions = {},
+): AccessResult {
+  const resolved = resolveWriteOperation(operation);
+  if (resolved === undefined) {
+    // An operation this SDK cannot classify is denied rather than admitted: there is
+    // no permission to consult, so there is no grant to rely on.
+    return { allowed: false, reason: "unknown write operation" };
+  }
+
+  const permission = validateWritePermission(resolved, policy);
+  if (!permission.allowed) return permission;
+
+  if (objectName !== undefined) {
+    const target = validateWriteObject(objectName, policy);
+    if (!target.allowed) return target;
+  }
+
+  const written = payloadWriteFields(payload, options.resourceFields);
+  if (options.fullReplace === true) {
+    for (const name of protectedFieldNames(policy)) {
+      if (!written.includes(name)) written.push(name);
+    }
+  }
+
+  const fields = validateWrittenFields(written, policy);
+  if (!fields.allowed) return fields;
+
+  return validateWriteTargetRow(
+    resolved,
+    options.targetRow ?? TARGET_ROW_UNKNOWN,
+    policy,
+  );
+}
+
+/**
+ * Validate an HTTP write: endpoint rules, then the §4 write checks.
+ *
+ * Method and permission must agree and *both* are checked (connector spec §6):
+ * {@link validateEndpoint} gates the path and the method through
+ * `allowedEndpoints`/`hiddenEndpoints`/`allowedMethods`, and the write checks then
+ * gate the operation the method performs and the body it carries. Neither
+ * substitutes for the other — `allowedMethods: ["POST"]` says nothing about
+ * `canInsert`, and `canInsert` says nothing about which paths are reachable.
+ *
+ * A read method (`GET`/`HEAD`/`OPTIONS`) is not a write, so this returns the
+ * endpoint decision unchanged rather than inventing a write permission for it.
+ *
+ * A `PUT` is treated as a **full-resource replace** (§6): every field the policy
+ * protects is validated as though the body had named it, because a replace that omits
+ * a `readOnlyFields` field is still attempting to overwrite it with absent. `PATCH`
+ * is a partial update, so only the keys present are validated. Supply
+ * `options.resourceFields` to extend the replace to fields the policy does not itself
+ * name — needed when `allowedFields` is set, since a resource field missing from an
+ * allow-list cannot be inferred from the policy alone.
+ */
+export function validateHttpWrite(
+  method: string,
+  path: string,
+  payload: unknown,
+  policy: EffectivePolicy,
+  options: ValidateWriteOptions & { objectName?: string } = {},
+): AccessResult {
+  const endpoint = validateEndpoint(path, method, policy);
+  if (!endpoint.allowed) return endpoint;
+
+  const operation = writeOperationForMethod(method);
+  if (operation === undefined) return endpoint;
+
+  return validateWrite(operation, options.objectName, payload, policy, {
+    targetRow: options.targetRow,
+    resourceFields: options.resourceFields,
+    fullReplace: method.toUpperCase() === "PUT",
+  });
 }

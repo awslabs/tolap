@@ -29,7 +29,12 @@ from tolap_core.models import (
     PolicyPermissions,
     RowFilter,
 )
-from tolap_core.sql_rewriter import build_condition, prepare_sql_query, rewrite_query
+from tolap_core.sql_rewriter import (
+    SqlDialect,
+    build_condition,
+    prepare_sql_query,
+    rewrite_query,
+)
 
 
 def _policy(
@@ -151,6 +156,76 @@ class TestTheDatabaseDoesTheFiltering:
         assert [r["id"] for r in pushed] == [1, 3]
         assert [r["id"] for r in post_only] == [1, 3]
 
+    def test_a_not_like_filter_keeps_null_valued_rows_in_both_paths(self, db_conn) -> None:
+        """`notLike`'s `IS NULL` arm, proven against a real engine like the other two.
+
+        `NULL NOT LIKE 'x'` is unknown -- therefore not true -- for exactly the same
+        reason `NULL <> 'x'` is, so the bare form drops the null-valued row while the
+        post-fetch pass keeps it. This asserts the two paths select the identical row
+        set over a table containing a NULL in the filtered column.
+
+        Postgres only, deliberately. A pushed-down `LIKE` inherits the column's
+        collation, and MySQL's default (utf8mb4_0900_ai_ci) is case-insensitive, so
+        the same comparison is engine-dependent there; that is a separate matter from
+        the null handling proven here and is being handled on its own.
+        """
+        with db_conn.cursor() as cur:
+            cur.execute("CREATE TEMP TABLE nullable_nl (id INT, name TEXT)")
+            cur.execute(
+                "INSERT INTO nullable_nl VALUES "
+                "(1, 'alice smith'), (2, 'ALICE JONES'), (3, 'bob stone'), (4, NULL)"
+            )
+
+        query = "SELECT id, name FROM nullable_nl ORDER BY id"
+        policy = _policy(
+            row_filters=[RowFilter(field="name", operator=FilterOperator.not_like, value="alice%")]
+        )
+
+        condition = build_condition(
+            policy.object_rules.row_filters[0], dialect=SqlDialect.postgres
+        )
+        assert "IS NULL" in condition
+
+        pushed = _run(db_conn, rewrite_query(query, policy, dialect=SqlDialect.postgres))
+        post_only = apply_result_pipeline(_run(db_conn, query), policy)
+
+        # id 4 is NULL and is kept by BOTH paths; id 2 survives because Postgres LIKE
+        # is case-sensitive, so 'ALICE JONES' does not match 'alice%'.
+        assert [r["id"] for r in pushed] == [2, 3, 4]
+        assert [r["id"] for r in post_only] == [2, 3, 4]
+
+    def test_every_negative_operator_agrees_across_both_paths(self, db_conn) -> None:
+        """The three negatives must select the same rows as each other, and as the DB.
+
+        Regression guard against the asymmetry: `notLike` used to omit the `IS NULL`
+        arm that `notEquals` and `notIn` carried, so the same policy's row set
+        depended on which negative operator the author chose. Each filter below is
+        phrased to exclude exactly 'us-east'.
+        """
+        with db_conn.cursor() as cur:
+            cur.execute("CREATE TEMP TABLE nullable_neg (id INT, region TEXT)")
+            cur.execute(
+                "INSERT INTO nullable_neg VALUES "
+                "(1, 'us-east'), (2, 'eu-west'), (3, NULL)"
+            )
+
+        query = "SELECT id, region FROM nullable_neg ORDER BY id"
+        negatives = [
+            RowFilter(field="region", operator=FilterOperator.not_equals, value="us-east"),
+            RowFilter(field="region", operator=FilterOperator.not_in, values=["us-east"]),
+            RowFilter(field="region", operator=FilterOperator.not_like, value="us-eas_"),
+        ]
+
+        for row_filter in negatives:
+            policy = _policy(row_filters=[row_filter])
+
+            pushed = _run(db_conn, rewrite_query(query, policy, dialect=SqlDialect.postgres))
+            post_only = apply_result_pipeline(_run(db_conn, query), policy)
+
+            # The null row is kept, the matching row is dropped, in BOTH paths.
+            assert [r["id"] for r in pushed] == [2, 3], row_filter.operator.value
+            assert [r["id"] for r in post_only] == [2, 3], row_filter.operator.value
+
     def test_a_limit_reaches_the_database(self, db_conn) -> None:
         query = "SELECT id FROM patients ORDER BY id"
 
@@ -183,8 +258,16 @@ class TestTheDatabaseDoesTheFiltering:
         assert set(rows[0]) == {"id", "full_name"}
 
     def test_every_pushable_operator_produces_valid_executable_sql(self, db_conn) -> None:
-        """Each operator's rendering is run, so a syntax error cannot hide in one."""
-        filters = [
+        """Each operator's rendering is run, so a syntax error cannot hide in one.
+
+        ``like``/``notLike`` carry an explicit ``postgres`` dialect rather than the
+        ``ansi`` default. That is not a workaround: ``ansi`` declines them because it
+        promises no collation, while Postgres's ``LIKE`` *is* case-sensitive and so
+        may be pushed (spec section 4). Naming the dialect is what makes the
+        dependency visible -- and this suite runs against Postgres, so it is also
+        the truthful dialect for it.
+        """
+        dialect_independent = [
             RowFilter(field="region", operator=FilterOperator.equals, value="us-east"),
             RowFilter(field="region", operator=FilterOperator.not_equals, value="eu-west"),
             RowFilter(field="region", operator=FilterOperator.in_, values=["us-east", "us-west"]),
@@ -193,15 +276,26 @@ class TestTheDatabaseDoesTheFiltering:
             RowFilter(field="id", operator=FilterOperator.greater_than_or_equal, value=1),
             RowFilter(field="id", operator=FilterOperator.less_than, value=6),
             RowFilter(field="id", operator=FilterOperator.less_than_or_equal, value=6),
-            RowFilter(field="region", operator=FilterOperator.like, value="us-%"),
-            RowFilter(field="region", operator=FilterOperator.not_like, value="eu-%"),
             RowFilter(field="region", operator=FilterOperator.is_not_null),
             RowFilter(field="id", operator=FilterOperator.between, values=[2, 4]),
         ]
+        needs_a_case_sensitive_dialect = [
+            RowFilter(field="region", operator=FilterOperator.like, value="us-%"),
+            RowFilter(field="region", operator=FilterOperator.not_like, value="eu-%"),
+        ]
 
-        for row_filter in filters:
+        cases = [(rf, None) for rf in dialect_independent]
+        cases += [(rf, SqlDialect.postgres) for rf in needs_a_case_sensitive_dialect]
+
+        for row_filter, dialect in cases:
             policy = _policy(row_filters=[row_filter])
-            sql = rewrite_query("SELECT id, region FROM patients ORDER BY id", policy)
+            sql = rewrite_query(
+                "SELECT id, region FROM patients ORDER BY id", policy, dialect=dialect
+            )
+
+            # The filter really did reach the database, rather than the query being
+            # returned untouched and the comparison below passing trivially.
+            assert sql != "SELECT id, region FROM patients ORDER BY id"
 
             rows = _run(db_conn, sql)
 
@@ -410,11 +504,20 @@ class TestInjectionAgainstLivePostgres:
         assert [r["id"] for r in rows] == [1, 3]
 
     def test_a_like_pattern_wildcard_is_a_wildcard_not_a_literal(self, db_conn) -> None:
+        """``postgres`` explicitly, since that is the dialect that may push ``like``
+        at all -- and the engine this test is talking to."""
         policy = _policy(
             row_filters=[RowFilter(field="region", operator=FilterOperator.like, value="us-%")]
         )
 
-        rows = _run(db_conn, rewrite_query("SELECT id, region FROM patients ORDER BY id", policy))
+        rows = _run(
+            db_conn,
+            rewrite_query(
+                "SELECT id, region FROM patients ORDER BY id",
+                policy,
+                dialect=SqlDialect.postgres,
+            ),
+        )
 
         assert {r["region"] for r in rows} == {"us-east", "us-west", "us-central"}
 

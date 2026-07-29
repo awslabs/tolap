@@ -31,9 +31,14 @@ namespace Tolap.Core;
 /// how the MySQL defect above happened.
 /// </para>
 /// <para>
-/// Only the emitted <i>text</i> is dialect-specific. The set of pushable operators, the
-/// fail-closed rules, and the post-fetch pipeline are identical under every profile, so
-/// choosing a profile never changes which rows a policy admits — only where the work happens.
+/// The emitted <i>text</i> is dialect-specific, and so — for <c>like</c>/<c>notLike</c> alone —
+/// is whether the filter is pushed at all: those two are declined unless the profile guarantees
+/// a case-sensitive <c>LIKE</c>, because a pushed-down <c>LIKE</c> inherits the column's
+/// collation while the post-fetch pass does not (see <see cref="BuildLikeCondition"/>).
+/// Everything else — the pushable operators, the fail-closed rules, the post-fetch pipeline —
+/// is identical under every profile. Either way, choosing a profile never changes which rows a
+/// policy admits, only where the work happens: a declined filter is reported by
+/// <see cref="UnpushableFilters"/> and enforced after the fetch.
 /// </para>
 /// <para>
 /// <b>Never a substitute for <see cref="EnforcementEngine.ApplyRecordPipeline"/></b>, which
@@ -956,8 +961,10 @@ public sealed class SqlQueryRewriter : ISqlQueryRewriter
     /// </para>
     /// <para>
     /// Returns false — leaving the filter to the post-fetch pass — for a field name that is
-    /// not a safe identifier, a value that cannot be rendered as a portable literal, and the
-    /// operators with no portable SQL form. That is the safe direction: an omitted condition
+    /// not a safe identifier, a value that cannot be rendered as a portable literal, the
+    /// operators with no portable SQL form, and <c>like</c>/<c>notLike</c> on a dialect whose
+    /// collation could make the comparison case-insensitive (see
+    /// <see cref="BuildLikeCondition"/>). That is the safe direction: an omitted condition
     /// costs transfer, never disclosure.
     /// </para>
     /// </remarks>
@@ -1015,9 +1022,9 @@ public sealed class SqlQueryRewriter : ISqlQueryRewriter
                 return BuildInCondition(column, filter, negated: true, out condition);
 
             case FilterOperator.Like:
-                return BuildLikeCondition(column, filter.Value, negated: false, out condition);
+                return BuildLikeCondition(column, filter.Value, profile, negated: false, out condition);
             case FilterOperator.NotLike:
-                return BuildLikeCondition(column, filter.Value, negated: true, out condition);
+                return BuildLikeCondition(column, filter.Value, profile, negated: true, out condition);
 
             case FilterOperator.IsNull:
                 condition = $"{column} IS NULL";
@@ -1133,17 +1140,70 @@ public sealed class SqlQueryRewriter : ISqlQueryRewriter
     }
 
     /// <summary>
-    /// Renders a <c>LIKE</c> or <c>NOT LIKE</c> condition.
+    /// Renders a <c>LIKE</c> or <c>NOT LIKE</c> condition, or declines when the profile cannot
+    /// guarantee the comparison means what the post-fetch pass means.
     /// </summary>
     /// <remarks>
-    /// The pattern is a SQL <c>LIKE</c> pattern already, so it passes through as a literal
-    /// with no wildcard translation. A pattern containing a backslash is declined:
+    /// <para>
+    /// <b>The profile must guarantee a case-sensitive <c>LIKE</c>, or nothing is pushed</b>
+    /// (canonical-enforcement-spec.md section 4). The post-fetch pass compares case-sensitively
+    /// and is engine-independent, but a pushed-down <c>LIKE</c> inherits the <i>column's</i>
+    /// collation: <c>'ALICE JONES' LIKE 'alice%'</c> is false on Postgres and <b>true</b> under
+    /// MySQL's default <c>utf8mb4_0900_ai_ci</c>. So on MySQL a <c>name notLike 'alice%'</c>
+    /// filter drops <c>'ALICE JONES'</c> when pushed down and keeps it when applied post-fetch —
+    /// a difference in which <i>real</i> records the caller sees. <c>Postgres</c> and
+    /// <c>Trino</c> may push; <c>MySql</c>, <c>SqlServer</c> and <c>Ansi</c> may not
+    /// (<c>Ansi</c> because the strict intersection promises no collation, <c>SqlServer</c>
+    /// because its default is insensitive too).
+    /// </para>
+    /// <para>
+    /// A <c>COLLATE</c> clause <i>can</i> force the comparison, and is deliberately <b>not</b>
+    /// emitted: the correct collation name depends on the column's character set, which a
+    /// rewriter holding only a policy and a query string does not know, and guessing wrong
+    /// either fails the query or silently changes the comparison again. Declining is the same
+    /// move as refusing a value containing a backslash — where the pushed-down form cannot be
+    /// guaranteed to mean what the post-fetch form means, it is not emitted.
+    /// </para>
+    /// <para>
+    /// The decline is unconditional for those profiles rather than case-by-case, so whether a
+    /// filter is pushed is a plain function of its operator and the dialect. A null pattern
+    /// would render as a collation-independent <c>1 = 0</c>, but exempting it would make the
+    /// rule read "not pushed, except sometimes" for no gain beyond one unreachable
+    /// optimization.
+    /// </para>
+    /// <para>
+    /// Otherwise: the pattern is a SQL <c>LIKE</c> pattern already, so it passes through as a
+    /// literal with no wildcard translation. A pattern containing a backslash is declined:
     /// <see cref="FormatLiteral"/> refuses backslashes in every literal, because MySQL treats
     /// one as an escape inside a string literal by default while Postgres does not, so the
     /// same text would mean different things in the two engines.
+    /// </para>
+    /// <para>
+    /// <c>NOT LIKE</c> gets an <c>IS NULL</c> arm, exactly as <c>&lt;&gt;</c> and
+    /// <c>NOT IN</c> do. <c>NULL NOT LIKE 'x'</c> is unknown — therefore not true — for the
+    /// same reason <c>NULL &lt;&gt; 'x'</c> is, so the bare form drops a null-valued row
+    /// while the post-fetch pass keeps it (spec section 7 drops rows whose field is
+    /// <i>absent</i>, not rows whose value is null). Omitting the arm for this one negative
+    /// operator while emitting it for the other two would make the same policy's row set
+    /// depend on which operator the author happened to choose. Since only the case-sensitive
+    /// profiles push the operator at all, that arm is only ever emitted for <c>Postgres</c>
+    /// and <c>Trino</c>.
+    /// </para>
     /// </remarks>
-    private bool BuildLikeCondition(string column, object? value, bool negated, out string condition)
+    private bool BuildLikeCondition(
+        string column, object? value, DialectProfile profile, bool negated, out string condition)
     {
+        if (!profile.CaseSensitiveLike)
+        {
+            Diagnose(
+                $"row filter not pushed into SQL: the {profile.Dialect} dialect does not "
+                + "guarantee a case-sensitive LIKE, so a pushed-down comparison could select "
+                + "different rows than the case-sensitive post-fetch pass; it is enforced after "
+                + "the fetch instead");
+            condition = string.Empty;
+            return false;
+        }
+
         if (value is null || IsJsonNull(value))
         {
             condition = AlwaysFalse;
@@ -1157,9 +1217,10 @@ public sealed class SqlQueryRewriter : ISqlQueryRewriter
             return false;
         }
 
-        // NOT LIKE and the post-fetch pass agree without an IS NULL arm: both drop a
-        // null-valued row.
-        condition = negated ? $"{column} NOT LIKE {literal}" : $"{column} LIKE {literal}";
+        condition = negated
+            // NOT LIKE drops a null-valued row; the post-fetch pass keeps it.
+            ? $"({column} NOT LIKE {literal} OR {column} IS NULL)"
+            : $"{column} LIKE {literal}";
         return true;
     }
 

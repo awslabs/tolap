@@ -36,6 +36,8 @@ This server closes that gap with no network dependency and no fixture mutation.
 | GET | `/patients/envelope` | `{"items": [...], "total": N}` wrapper shape. |
 | GET | `/admin/audit` | Target for endpoint-rule denial. |
 | GET | `/status/<code>` | Returns that HTTP status. |
+| GET | `/redirect/<code>?to=<target>` | Issues a real 301/302/307/308 to `target` (default `/admin/audit`). |
+| GET | `/redirect-loop` | Redirects to itself, unbounded. |
 | GET | `/slow?ms=N` | Delays N ms (capped at 30s) before responding. |
 | GET | `/echo` | Reflects method, headers, and query string. |
 | POST | `/patients` | Target for read-only / method denial. |
@@ -66,6 +68,15 @@ so a test asserting denial proves the policy did the work rather than the server
 
 **`/status/<code>`** covers error handling without needing an unreachable host:
 4xx and 5xx bodies, and whether enforcement still applies to an error payload.
+
+**`/redirect/<code>`** defaults its target to `/admin/audit` because that is the case
+that matters: a permitted endpoint redirecting to one the policy denies. A wrapper that
+inherits a redirect-following client bypasses its own endpoint rules on that hop. Pass
+`?to=` for a relative target, or an absolute URL to exercise a cross-host redirect, which
+is outside the policy's frame of reference and should be refused rather than re-matched.
+
+**`/redirect-loop`** redirects to itself forever, so a wrapper that follows redirects
+without a hop limit spins instead of failing.
 
 **`/slow`** covers client timeout behavior. Threaded server, so a slow request
 never blocks the rest of a suite.

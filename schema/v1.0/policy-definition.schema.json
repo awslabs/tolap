@@ -219,8 +219,8 @@
       "properties": {
         "maxResults": {
           "type": "integer",
-          "minimum": 1,
-          "description": "Maximum number of rows, results, or items returned per query."
+          "minimum": 0,
+          "description": "Maximum number of rows, results, or items returned per query. Zero is valid and means return nothing -- a coherent deny-all that a minimum of 1 would forbid expressing. Applies per call, not as a budget across paginated calls."
         },
         "maxQueryTimeSeconds": {
           "type": "integer",

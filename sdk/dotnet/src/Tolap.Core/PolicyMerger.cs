@@ -11,7 +11,9 @@ public static class PolicyMerger
     /// <remarks>
     /// Merge rules:
     /// - Empty list returns DenyAll
-    /// - Permissions: AND for canQuery/canExport, OR for readOnly
+    /// - Permissions: AND for canQuery/canInsert/canUpdate/canDelete/canExport, OR for
+    ///   readOnly. Absent booleans take their schema default first (canQuery true, the
+    ///   three write permissions and canExport false, readOnly true).
     /// - AllowedObjects/AllowedFields/AllowedEndpoints/AllowedMethods/AllowedTags: Intersection (null = unrestricted)
     /// - HiddenObjects/HiddenFields/HiddenEndpoints/DeniedTags/ReadOnlyFields: Union
     /// - RowFilters: Concatenate all
@@ -27,11 +29,24 @@ public static class PolicyMerger
 
         var sourceProfiles = policies.Select(p => p.Name).ToArray();
 
-        // Permissions: AND for canQuery/canExport, OR for readOnly
+        // Permissions: AND for the grants, OR for the readOnly ceiling. The three write
+        // permissions default to false when absent and fold with AND, so *every*
+        // applicable policy has to grant a write for the merged policy to; readOnly keeps
+        // its true default and its OR fold, so *any* policy can impose the ceiling. Both
+        // directions therefore compose most-restrictively (connector-spec.md section 4.1).
         var canQuery = policies.All(p => p.Permissions.CanQuery);
+        var canInsert = policies.All(p => p.Permissions.CanInsert == true);
+        var canUpdate = policies.All(p => p.Permissions.CanUpdate == true);
+        var canDelete = policies.All(p => p.Permissions.CanDelete == true);
         var canExport = policies.All(p => p.Permissions.CanExport);
         var readOnly = policies.Any(p => p.Permissions.ReadOnly);
-        var permissions = new PolicyPermissions(canQuery, canExport, readOnly);
+        var permissions = new PolicyPermissions(
+            CanQuery: canQuery,
+            CanInsert: canInsert,
+            CanUpdate: canUpdate,
+            CanDelete: canDelete,
+            CanExport: canExport,
+            ReadOnly: readOnly);
 
         // Object rules
         var objectRules = MergeObjectRules(policies);

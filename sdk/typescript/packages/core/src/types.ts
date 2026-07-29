@@ -63,6 +63,22 @@ export enum FilterOperator {
   Between = "between",
 }
 
+/**
+ * The kinds of write a policy governs (connector spec §4.1).
+ *
+ * `Insert`/`Update`/`Delete` map one-to-one onto `canInsert`, `canUpdate` and
+ * `canDelete`. `Upsert` is for a call that cannot be classified as either a create
+ * or an overwrite — an unconditional object-store `PUT`, for example — and requires
+ * **both** `canInsert` and `canUpdate`, the safe intersection connector spec §8
+ * mandates.
+ */
+export enum WriteOperation {
+  Insert = "insert",
+  Update = "update",
+  Delete = "delete",
+  Upsert = "upsert",
+}
+
 export enum AssigneeType {
   User = "user",
   Group = "group",
@@ -150,8 +166,20 @@ export interface PolicyLimits {
 // Permissions
 // ---------------------------------------------------------------------------
 
+/**
+ * Top-level permission flags.
+ *
+ * The three write permissions are optional, and absent means the schema default of
+ * **false** on both the merge and the write path. That is deliberately the opposite
+ * of `canQuery`'s `true` default: a policy authored before writes existed must not
+ * silently gain them, and an author who omitted a write permission has not asked
+ * for write access (connector spec §4.1).
+ */
 export interface PolicyPermissions {
   canQuery: boolean;
+  canInsert?: boolean;
+  canUpdate?: boolean;
+  canDelete?: boolean;
   canExport?: boolean;
   readOnly?: boolean;
 }

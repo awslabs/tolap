@@ -15,9 +15,13 @@ Fail-closed decisions asserted here, per spec section 7:
 - A row missing the referenced field is dropped for EVERY operator, including
   `isNull`. "The field is absent" and "the field is present and null" are
   different statements; only the second satisfies `isNull`.
-- `notLike` against a null value or a null pattern drops the row. SQL evaluates
-  `NULL NOT LIKE 'x'` to NULL, which retains nothing; returning true would
-  reintroduce the fail-open bug section 7 records for `notEquals`/`notIn`.
+- The three negative operators -- `notEquals`, `notIn`, `notLike` -- all KEEP a row
+  whose field is present with a null value, and all DROP a row whose field is
+  absent. Two distinct rules: keeping present-null is what makes the pushed-down
+  form `(col NOT LIKE 'x' OR col IS NULL)` equivalent to this pass, while dropping
+  an absent field is the fail-closed rule for a value that cannot be established.
+  A null *pattern* still drops the row, for `like` and `notLike` alike, because it
+  states no constraint any value can be shown to satisfy.
 - A malformed `between` range (fewer than two bounds, a null bound, an
   unorderable bound) drops the row. An inverted range matches nothing and is not
   silently reordered, because reordering turns a policy author's typo into a
@@ -159,6 +163,66 @@ class TestMissingFieldFailsClosedForEveryNewOperator:
     )
     def test_row_without_the_field_is_dropped(self, row_filter: RowFilter) -> None:
         assert _filtered([{"id": 1}], row_filter) == []
+
+
+#: The three negative operators, each written against the same field and phrased so
+#: that a present, non-null, NON-matching value passes. Parametrizing the three
+#: together is the point: the asymmetry being pinned was `notLike` alone disagreeing
+#: with its siblings, and a per-operator test cannot see that.
+_NEGATIVE_OPERATORS = [
+    RowFilter(field="region", operator=FilterOperator.not_equals, value="us-east"),
+    RowFilter(field="region", operator=FilterOperator.not_in, values=["us-east"]),
+    RowFilter(field="region", operator=FilterOperator.not_like, value="us-eas_"),
+]
+
+
+class TestNegativeOperatorsAgreeOnNullAndAbsent:
+    """`notEquals`, `notIn` and `notLike` must not diverge from each other.
+
+    Regression guard. `notLike` used to drop a present-null row while the other two
+    kept it, and the rewriter emitted the `IS NULL` arm for the other two while
+    omitting it for `notLike` -- so the same policy's row set depended on which
+    negative operator the author happened to choose, a distinction the policy does
+    not express.
+
+    The two rules are asserted separately because they exist for different reasons:
+    keeping present-null preserves pushdown/post-fetch equivalence, while dropping
+    an absent field is the fail-closed rule for a value that cannot be established.
+    """
+
+    @pytest.mark.parametrize("row_filter", _NEGATIVE_OPERATORS, ids=lambda rf: rf.operator.value)
+    def test_a_present_null_value_is_kept(self, row_filter: RowFilter) -> None:
+        rows = [{"region": None}]
+
+        assert _filtered(rows, row_filter) == rows
+
+    @pytest.mark.parametrize("row_filter", _NEGATIVE_OPERATORS, ids=lambda rf: rf.operator.value)
+    def test_an_absent_field_is_dropped(self, row_filter: RowFilter) -> None:
+        assert _filtered([{"id": 1}], row_filter) == []
+
+    @pytest.mark.parametrize("row_filter", _NEGATIVE_OPERATORS, ids=lambda rf: rf.operator.value)
+    def test_a_present_non_matching_value_is_kept(self, row_filter: RowFilter) -> None:
+        """Guards the guard: the filters must actually discriminate."""
+        rows = [{"region": "eu-west"}]
+
+        assert _filtered(rows, row_filter) == rows
+
+    @pytest.mark.parametrize("row_filter", _NEGATIVE_OPERATORS, ids=lambda rf: rf.operator.value)
+    def test_a_present_matching_value_is_dropped(self, row_filter: RowFilter) -> None:
+        assert _filtered([{"region": "us-east"}], row_filter) == []
+
+    def test_all_three_select_the_same_rows_over_one_record_set(self) -> None:
+        """The asymmetry stated directly: one row set, three operators, one answer."""
+        rows = [
+            {"id": "match", "region": "us-east"},
+            {"id": "other", "region": "eu-west"},
+            {"id": "nullish", "region": None},
+            {"id": "absent"},
+        ]
+
+        kept = [[r["id"] for r in _filtered(rows, rf)] for rf in _NEGATIVE_OPERATORS]
+
+        assert kept == [["other", "nullish"]] * 3
 
 
 class TestInclusiveComparisons:
@@ -317,13 +381,23 @@ class TestLikeOperators:
 
         assert kept == [{"email": "b@other.org"}]
 
-    def test_not_like_against_a_null_value_drops_the_row(self) -> None:
-        """SQL evaluates `NULL NOT LIKE 'x'` to NULL, which retains nothing.
+    def test_not_like_against_a_present_null_value_keeps_the_row(self) -> None:
+        """`notLike` keeps a present-and-null value, like `notEquals`/`notIn`.
 
-        Returning true here is the fail-open bug spec section 7 records for
-        `notEquals`/`notIn` on a missing field.
+        Bare SQL `NULL NOT LIKE 'x'` is unknown and would drop the row, which is
+        exactly why the rewriter emits `(col NOT LIKE 'x' OR col IS NULL)` -- so
+        the pushed-down query and this pass select the same rows (spec section 4).
+        Dropping the row here is the divergence, not the safe reading.
+
+        Distinct from the ABSENT-field rule, which still drops; see
+        `TestMissingFieldFailsClosedForEveryNewOperator` and
+        `TestNegativeOperatorsAgreeOnNullAndAbsent`.
         """
-        assert _filtered([{"email": None}], RowFilter(field="email", operator=FilterOperator.not_like, value="%x%")) == []
+        rows = [{"email": None}]
+
+        kept = _filtered(rows, RowFilter(field="email", operator=FilterOperator.not_like, value="%x%"))
+
+        assert kept == rows
 
     def test_like_against_a_null_value_drops_the_row(self) -> None:
         assert _filtered([{"email": None}], RowFilter(field="email", operator=FilterOperator.like, value="%x%")) == []

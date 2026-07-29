@@ -253,6 +253,57 @@ value is null). A pushed-down negative filter MUST therefore be rendered as
 same policy returns fewer rows when the optimization is enabled — a silent
 behavioral difference between two paths that are supposed to be equivalent.
 
+This applies to **every** negative operator, without exception:
+`notEquals`, `notIn`, and `notLike`. `NULL NOT LIKE 'x'` is unknown for exactly the
+same reason `NULL <> 'x'` is, so `notLike` needs the arm as much as the other two. An
+implementation that adds it to some negatives and not others is inconsistent with
+itself: the same policy's rows then depend on which operator the author happened to
+choose, which is not a distinction the policy expresses. This was a real defect —
+both rewriters emitted the arm for `notEquals` and `notIn` and omitted it for
+`notLike`, and the two post-execution passes disagreed with each other about the same
+case.
+
+Correspondingly in the post-execution pass (§7): all three negative operators **keep**
+a row whose field is present with a null value, and **drop** a row whose field is
+absent. The two rules exist for different reasons — the first keeps pushdown and
+post-fetch equivalent, the second is the fail-closed rule for a value that cannot be
+established — and both apply to all three operators alike.
+
+**`like` and `notLike` MUST NOT be pushed down unless the dialect guarantees a
+case-sensitive comparison.** The post-execution pass compares case-sensitively (§7) and
+is engine-independent, but a pushed-down `LIKE` inherits the *column's collation*:
+
+| Engine | `'ALICE JONES' LIKE 'alice%'` |
+| --- | --- |
+| Postgres | false — `LIKE` is case-sensitive |
+| MySQL, default `utf8mb4_0900_ai_ci` | **true** — the collation is case- and accent-insensitive |
+
+So on MySQL the two paths select different **real** rows, not merely an edge-case null:
+a policy filtering `name notLike 'alice%'` drops `'ALICE JONES'` when pushed down and
+keeps it when applied post-fetch. That is strictly worse than the null asymmetry above,
+because it silently changes which records a user sees.
+
+A `COLLATE` clause can force the comparison (`… LIKE 'alice%' COLLATE utf8mb4_0900_as_cs`
+returns false, as does `BINARY`), so this is technically emittable. It is nonetheless
+**not** the required behavior: the correct collation name depends on the column's
+character set, which a rewriter holding only a policy and a query string does not know,
+and guessing wrong either fails the query or silently changes the comparison again.
+
+Therefore:
+
+- The `postgres` and `trino` profiles MAY push `like`/`notLike` — their `LIKE` is
+  case-sensitive.
+- The `mysql`, `sqlserver`, and `ansi` profiles MUST NOT. `ansi` is included because it
+  is the strict intersection and makes no collation promise; `sqlserver` because its
+  default collation is also case-insensitive.
+- A declined filter is reported as unpushable and enforced by the post-execution pass, so
+  the policy is still applied — only the optimization is skipped.
+
+This is the same principle as refusing a value containing a backslash: where an
+implementation cannot guarantee the pushed-down form means exactly what the
+post-execution form means, it declines to push rather than emitting something that
+usually agrees.
+
 **Escaping is not sufficient; refusal is.** Doubling `'` does not make arbitrary text
 safe: MySQL treats `\` as a string escape by default, so `\'` leaves the literal
 open, and a NUL or newline can truncate a statement or terminate a `--` comment. A

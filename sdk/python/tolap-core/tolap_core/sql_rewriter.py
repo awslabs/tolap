@@ -18,10 +18,15 @@ engine, but the subset most engines accept. An *unrecognized* dialect is not
 guessed at either: nothing is rewritten and every filter is reported unpushable,
 because guessing a profile is how the MySQL defect above happened.
 
-Only the emitted *text* is dialect-specific. The set of pushable operators, the
-fail-closed rules, and the post-fetch pipeline are identical under every profile,
-so choosing a profile never changes which rows a policy admits -- only where the
-work happens.
+The emitted *text* is dialect-specific, and so -- for ``like``/``notLike`` alone
+-- is whether the filter is pushed at all: those two are declined unless the
+profile guarantees a case-sensitive ``LIKE``, because a pushed-down ``LIKE``
+inherits the column's collation while the post-fetch pass does not (see
+:func:`_build_like_condition`). Everything else -- the pushable operators, the
+fail-closed rules, the post-fetch pipeline -- is identical under every profile.
+Either way, choosing a profile never changes which rows a policy admits, only
+where the work happens: a declined filter is reported by
+:func:`unpushable_filters` and enforced after the fetch.
 
 **Never a substitute for :func:`tolap_core.enforcement.apply_result_pipeline`**,
 which stays mandatory and normative (canonical spec section 4). Rewriting is a
@@ -30,8 +35,9 @@ excludes, so the row is never transferred or materialized (threat-model D2). It
 cannot replace the post-fetch pass, because:
 
 - Not every filter has a portable SQL form. ``contains``, ``startsWith`` and
-  ``matches`` are never pushed, and any value carrying a backslash is refused.
-  :func:`unpushable_filters` reports them; the post pass is what enforces them.
+  ``matches`` are never pushed, ``like``/``notLike`` are pushed only where the
+  dialect's ``LIKE`` is case-sensitive, and any value carrying a backslash is
+  refused. :func:`unpushable_filters` reports them; the post pass enforces them.
 - Masking has no SQL form here at all. Masked fields are deliberately **kept** in
   the rewritten SELECT so the post pass still has a value to mask.
 - ``SELECT *`` cannot be expanded without an ``allowedFields`` list, so hidden
@@ -109,19 +115,25 @@ _TOP_PREFIX = "top"
 
 @dataclass(frozen=True)
 class _DialectProfile:
-    """The emitted-text rules for one engine.
+    """The emitted-text rules for one engine, plus the one semantic it must promise.
 
-    Only *text* lives here. Which operators are pushable, which values are
-    refused, and every fail-closed rule are profile-independent by design
-    (connector spec section 5.1): a filter unpushable in one profile is
-    unpushable in all of them, so selecting a profile never changes which rows a
-    policy admits.
+    Almost everything here is *text*: which values are refused and every
+    fail-closed rule are profile-independent by design (connector spec section
+    5.1), so selecting a profile never changes which rows a policy admits.
+
+    :attr:`case_sensitive_like` is the single exception, and it is not a text
+    rule -- it records whether the engine's ``LIKE`` compares the way the
+    post-fetch pass does. A profile that cannot promise that declines to push
+    ``like``/``notLike`` at all, which keeps the invariant above intact by
+    *narrowing* what is pushed rather than by emitting a comparison whose meaning
+    the profile does not know.
     """
 
     dialect: SqlDialect
     quote_open: str
     quote_close: str
     row_limit: str
+    case_sensitive_like: bool
 
     @property
     def quote_chars(self) -> frozenset[str]:
@@ -134,12 +146,40 @@ class _DialectProfile:
         return frozenset({self.quote_open, self.quote_close})
 
 
+#: Whether a profile's ``LIKE`` may be pushed down (spec section 4). The
+#: post-fetch pass compares case-SENSITIVELY and is engine-independent, but a
+#: pushed-down ``LIKE`` inherits the *column's* collation:
+#:
+#:     postgres:  SELECT 'ALICE JONES' LIKE 'alice%'  ->  false
+#:     mysql:     SELECT 'ALICE JONES' LIKE 'alice%'  ->  true
+#:
+#: so on MySQL a ``name notLike 'alice%'`` filter drops ``'ALICE JONES'`` when
+#: pushed down and keeps it when applied post-fetch. That is a difference in which
+#: *real* records a caller sees, not an edge-case null, so the profiles that cannot
+#: promise a case-sensitive comparison decline the operator entirely.
+_CASE_SENSITIVE_LIKE = True
+_COLLATION_DEPENDENT_LIKE = False
+
 _DIALECT_PROFILES: dict[SqlDialect, _DialectProfile] = {
-    SqlDialect.ansi: _DialectProfile(SqlDialect.ansi, '"', '"', _LIMIT_SUFFIX),
-    SqlDialect.postgres: _DialectProfile(SqlDialect.postgres, '"', '"', _LIMIT_SUFFIX),
-    SqlDialect.trino: _DialectProfile(SqlDialect.trino, '"', '"', _LIMIT_SUFFIX),
-    SqlDialect.mysql: _DialectProfile(SqlDialect.mysql, "`", "`", _LIMIT_SUFFIX),
-    SqlDialect.sqlserver: _DialectProfile(SqlDialect.sqlserver, "[", "]", _TOP_PREFIX),
+    # ansi is the strict intersection and makes no collation promise at all, so it
+    # takes the same answer as the engines that are known to be insensitive.
+    SqlDialect.ansi: _DialectProfile(
+        SqlDialect.ansi, '"', '"', _LIMIT_SUFFIX, _COLLATION_DEPENDENT_LIKE
+    ),
+    SqlDialect.postgres: _DialectProfile(
+        SqlDialect.postgres, '"', '"', _LIMIT_SUFFIX, _CASE_SENSITIVE_LIKE
+    ),
+    SqlDialect.trino: _DialectProfile(
+        SqlDialect.trino, '"', '"', _LIMIT_SUFFIX, _CASE_SENSITIVE_LIKE
+    ),
+    # MySQL's default collation, utf8mb4_0900_ai_ci, is case- and
+    # accent-insensitive; SQL Server's default is case-insensitive too.
+    SqlDialect.mysql: _DialectProfile(
+        SqlDialect.mysql, "`", "`", _LIMIT_SUFFIX, _COLLATION_DEPENDENT_LIKE
+    ),
+    SqlDialect.sqlserver: _DialectProfile(
+        SqlDialect.sqlserver, "[", "]", _TOP_PREFIX, _COLLATION_DEPENDENT_LIKE
+    ),
 }
 
 #: What an omitted dialect selects.
@@ -623,25 +663,72 @@ def _build_in_condition(column: str, rf: RowFilter, *, negated: bool) -> str | N
     return f"{column} IN ({rendered})"
 
 
-def _build_like_condition(column: str, value: Any, *, negated: bool) -> str | None:
-    """Render a ``LIKE``/``NOT LIKE`` condition.
+def _build_like_condition(
+    column: str, value: Any, profile: _DialectProfile, *, negated: bool
+) -> str | None:
+    """Render a ``LIKE``/``NOT LIKE`` condition, or None when the profile declines it.
 
-    The pattern is already a SQL ``LIKE`` pattern, so it passes through as a
-    literal with no wildcard translation. A pattern containing a backslash is
+    **The profile must guarantee a case-sensitive comparison, or nothing is
+    pushed** (spec section 4). The post-fetch pass compares case-sensitively and is
+    engine-independent, but a pushed-down ``LIKE`` inherits the *column's*
+    collation: ``'ALICE JONES' LIKE 'alice%'`` is false on Postgres and **true**
+    under MySQL's default ``utf8mb4_0900_ai_ci``. So on MySQL a
+    ``name notLike 'alice%'`` filter drops ``'ALICE JONES'`` when pushed down and
+    keeps it when applied post-fetch -- a difference in which *real* records the
+    caller sees. ``postgres`` and ``trino`` may push; ``mysql``, ``sqlserver`` and
+    ``ansi`` may not (``ansi`` because the strict intersection promises no
+    collation, ``sqlserver`` because its default is insensitive too).
+
+    A ``COLLATE`` clause *can* force the comparison, and is deliberately **not**
+    emitted: the correct collation name depends on the column's character set,
+    which a rewriter holding only a policy and a query string does not know, and
+    guessing wrong either fails the query or silently changes the comparison again.
+    Declining is the same move as refusing a value containing a backslash -- where
+    the pushed-down form cannot be guaranteed to mean what the post-fetch form
+    means, it is not emitted.
+
+    The decline is unconditional for those profiles rather than case-by-case, so
+    whether a filter is pushed is a plain function of its operator and the dialect.
+    A null pattern would render as a collation-independent ``1 = 0``, but exempting
+    it would make the rule read "not pushed, except sometimes" for no gain beyond
+    one unreachable optimization.
+
+    Otherwise: the pattern is already a SQL ``LIKE`` pattern, so it passes through
+    as a literal with no wildcard translation. A pattern containing a backslash is
     declined by :func:`_format_string_literal`, because MySQL treats one as an
     escape inside a string literal by default while Postgres does not, so the same
     text would mean different things in the two engines.
 
-    ``NOT LIKE`` needs no ``IS NULL`` arm: it and the post-fetch pass agree that a
-    null-valued row is dropped.
+    ``NOT LIKE`` gets an ``IS NULL`` arm, exactly as ``<>`` and ``NOT IN`` do.
+    ``NULL NOT LIKE 'x'`` is unknown -- therefore not true -- for the same reason
+    ``NULL <> 'x'`` is, so the bare form drops a null-valued row while the
+    post-fetch pass keeps it (spec section 7 drops rows whose field is *absent*,
+    not rows whose value is null). Omitting the arm for this one negative operator
+    while emitting it for the other two would make the same policy's row set depend
+    on which operator the author happened to choose. Since only the case-sensitive
+    profiles push the operator at all, that arm is only ever emitted for
+    ``postgres`` and ``trino``.
     """
+    if not profile.case_sensitive_like:
+        _LOG.debug(
+            "row filter not pushed into SQL: the %s dialect does not guarantee a "
+            "case-sensitive LIKE, so a pushed-down comparison could select different "
+            "rows than the case-sensitive post-fetch pass; it is enforced after the "
+            "fetch instead",
+            profile.dialect.value,
+        )
+        return None
+
     if value is None:
         return _ALWAYS_FALSE
 
     literal = _format_literal(value)
     if literal is None:
         return None
-    return f"{column} NOT LIKE {literal}" if negated else f"{column} LIKE {literal}"
+    if negated:
+        # NOT LIKE drops a null-valued row; the post-fetch pass keeps it.
+        return f"({column} NOT LIKE {literal} OR {column} IS NULL)"
+    return f"{column} LIKE {literal}"
 
 
 def _build_between_condition(column: str, rf: RowFilter) -> str | None:
@@ -682,9 +769,12 @@ def build_condition(
 
     ``dialect`` names the engine the text is destined for; an omitted one selects
     :data:`DEFAULT_DIALECT` and an unrecognized one returns None, declining to
-    push the filter at all (connector spec section 5.1). It affects only how the
-    column is quoted -- which operators and values are pushable is identical under
-    every profile.
+    push the filter at all (connector spec section 5.1). It governs how the column
+    is quoted, and -- for ``like``/``notLike`` alone -- whether the operator is
+    pushed at all: only a profile whose ``LIKE`` is case-sensitive may push it, and
+    the choice is a plain function of the operator and the dialect rather than of
+    the value (see :func:`_build_like_condition`). Every other operator is pushable
+    under every profile.
 
     Every condition is built to mean exactly what
     :func:`tolap_core.enforcement.apply_row_filters` means, including where SQL's
@@ -696,9 +786,10 @@ def build_condition(
     sees.
 
     Returns None -- leaving the filter to the post-fetch pass -- for a field name
-    that is not a safe identifier, a value with no portable literal form, and the
-    operators with no portable SQL form. That is the safe direction: an omitted
-    condition costs transfer, never disclosure.
+    that is not a safe identifier, a value with no portable literal form, the
+    operators with no portable SQL form, and ``like``/``notLike`` on a dialect
+    whose collation could make the comparison case-insensitive. That is the safe
+    direction: an omitted condition costs transfer, never disclosure.
     """
     profile = _resolve_profile(dialect)
     if profile is None:
@@ -746,9 +837,9 @@ def build_condition(
         return _build_in_condition(column, rf, negated=True)
 
     if op is FilterOperator.like:
-        return _build_like_condition(column, rf.value, negated=False)
+        return _build_like_condition(column, rf.value, profile, negated=False)
     if op is FilterOperator.not_like:
-        return _build_like_condition(column, rf.value, negated=True)
+        return _build_like_condition(column, rf.value, profile, negated=True)
 
     if op is FilterOperator.is_null:
         return f"{column} IS NULL"

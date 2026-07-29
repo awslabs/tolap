@@ -119,6 +119,79 @@ public sealed class SecureContextToolWrapper
     }
 
     /// <summary>
+    /// Validates a write before it is issued (connector-spec.md section 4).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The write counterpart to <see cref="PreExecute"/>. Validates the context, then runs the
+    /// four required pre-write checks: the operation's permission and the <c>readOnly</c>
+    /// ceiling, the target object, every field in the payload, and the policy's row filters
+    /// against <see cref="WriteValidationOptions.TargetRow"/>.
+    /// </para>
+    /// <para>
+    /// Fails closed on the whole write: one unwritable field denies the operation rather than
+    /// being stripped so the rest can proceed (section 4.4).
+    /// </para>
+    /// <para>
+    /// Omitting the target row on an update or delete while the policy carries row filters
+    /// yields <c>write target unverifiable</c>, never an allow — read the row first and pass
+    /// it here, or push the filters into the statement's <c>WHERE</c>.
+    /// </para>
+    /// <para>
+    /// A permitted write that returns data is a <i>read</i> of that data: pass the response
+    /// through <see cref="PostExecuteResult"/> (section 4.5).
+    /// </para>
+    /// </remarks>
+    public AccessResult PreWrite(
+        SecurityContext context,
+        WriteOperation operation,
+        string? objectName = null,
+        IReadOnlyDictionary<string, object?>? payload = null,
+        WriteValidationOptions? options = null)
+    {
+        var ctxResult = ValidateSecurityContext(context);
+        if (!ctxResult.Allowed) return ctxResult;
+
+        var policy = context.Policies.FirstOrDefault();
+        if (policy is null)
+        {
+            return new AccessResult(false, "no policy in context");
+        }
+
+        return EnforcementEngine.ValidateWrite(operation, objectName, payload, policy, options);
+    }
+
+    /// <summary>
+    /// Validates a write, issues it, and enforces the policy on anything it returns.
+    /// </summary>
+    /// <remarks>
+    /// The delegate is not invoked when the write is denied, so a refused write never reaches
+    /// the source. Whatever the write returns is treated as a read of that data and goes
+    /// through the full post-execution pipeline (connector-spec.md section 4.5) — a masked
+    /// field comes back masked even though the caller just wrote it, and a hidden field does
+    /// not appear at all. A write that returns nothing (<c>null</c>) is passed through as-is
+    /// rather than denied as an unenforceable shape: there is no data to enforce a policy over.
+    /// </remarks>
+    /// <exception cref="UnauthorizedAccessException">Thrown when the write is denied.</exception>
+    public async Task<object?> ExecuteWriteWithEnforcementAsync(
+        SecurityContext context,
+        WriteOperation operation,
+        Func<Task<object?>> writeFn,
+        string? objectName = null,
+        IReadOnlyDictionary<string, object?>? payload = null,
+        WriteValidationOptions? options = null)
+    {
+        var pre = PreWrite(context, operation, objectName, payload, options);
+        if (!pre.Allowed)
+        {
+            throw new UnauthorizedAccessException($"Access denied: {pre.Reason}");
+        }
+
+        var result = await writeFn().ConfigureAwait(false);
+        return result is null ? null : PostExecuteResult(context, result);
+    }
+
+    /// <summary>
     /// Runs the pre-execution checks and rewrites a SQL query so the policy's restrictions
     /// reach the database.
     /// </summary>

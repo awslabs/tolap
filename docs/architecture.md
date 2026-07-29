@@ -53,6 +53,15 @@ A signed, serializable container that carries the user's complete policy set fro
 }
 ```
 
+> **One context governs one data source.** The `policies` array above is the wire
+> shape, and the canonical signing projection always normalizes to a one-element
+> array. In practice a SecurityContext carries a **single** effective policy: the
+> Python and TypeScript SDKs refuse a multi-policy context outright rather than
+> silently keeping the first, and the .NET enforcement path reads only the first
+> element even though its model holds an array. A deployment spanning several
+> sources issues **one context per source**. See
+> [`canonical-enforcement-spec.md`](canonical-enforcement-spec.md) §2 rule 3.
+
 ### 2. Security Profiles
 
 Reusable, declarative policy definitions that specify what a user can access at the object level.
@@ -805,7 +814,9 @@ The administrator assigns this policy to Dr. Chen, scoped to her tenant:
 
 When Dr. Chen's agent makes a request, the Policy Resolution Engine builds an effective policy for each source. Since she has one policy that matches both sources, the effective policies mirror the definition. If she had additional overlapping policies, the merge rules would produce the most-restrictive intersection.
 
-The Security Context packages both effective policies:
+Each source gets its **own** context. Both are shown together below so the two
+resolved policies can be compared side by side, but they are issued and signed
+separately — a context carries one policy, and the agent holds one per source:
 
 ```json
 {

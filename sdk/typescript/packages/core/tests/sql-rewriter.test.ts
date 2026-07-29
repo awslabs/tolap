@@ -77,6 +77,13 @@ function createPolicy(opts: {
 
 const rewriter = new SqlQueryRewriter();
 
+/**
+ * A rewriter on a dialect whose `LIKE` is case-sensitive, so `like`/`notLike` are
+ * pushable. The default dialect makes no collation promise and therefore declines
+ * them; that is asserted separately in the dialect tests, not here.
+ */
+const likeRewriter = new SqlQueryRewriter({ dialect: SqlDialect.Postgres });
+
 /** The rewritten query text, for the common case. */
 function rewrite(query: string, policy: EffectivePolicy): string {
   return rewriter.rewriteQuery(query, policy).query;
@@ -808,7 +815,7 @@ describe("Prism defect: WHERE insert point was chosen by pattern order", () => {
   });
 });
 
-describe("Prism defect: negative operators dropped null-valued rows", () => {
+describe("regression: negative operators dropped null-valued rows", () => {
   // Spec §7 drops rows whose field is ABSENT, not rows whose value is null. SQL
   // `col <> 'x'` is unknown-therefore-false for a null col, so without an IS NULL
   // arm the database drops a row the post pass KEEPS -- the same policy returns
@@ -844,23 +851,61 @@ describe("Prism defect: negative operators dropped null-valued rows", () => {
     );
   });
 
-  it("notLike needs NO IS NULL arm -- both paths drop a null-valued row", () => {
-    // SQL `NULL NOT LIKE 'x'` is unknown, which drops the row; the post pass also
-    // drops it (a null is not "unlike" a pattern, it is incomparable). Adding an arm
-    // here would make the pushed-down path KEEP a row the post pass discards, which
-    // is the wrong direction.
+  it("notLike gets an IS NULL arm too, on the same footing as the other two", () => {
+    // `NULL NOT LIKE 'x'` is unknown -- therefore not true -- for exactly the same
+    // reason `NULL <> 'x'` is, so the bare form drops a null-valued row the post
+    // pass KEEPS. Emitting the arm for two of the three negatives and not the third
+    // would make the same policy's row set depend on which operator the author
+    // happened to choose, which is not a distinction the policy expresses.
     expect(
-      rewriter.buildWhereClause([
+      likeRewriter.buildWhereClause([
         { field: "name", operator: FilterOperator.NotLike, value: "internal-%" },
       ]),
-    ).toBe(`"name" NOT LIKE 'internal-%'`);
+    ).toBe(`("name" NOT LIKE 'internal-%' OR "name" IS NULL)`);
 
     const policy = createPolicy({
       rowFilters: [
         { field: "name", operator: FilterOperator.NotLike, value: "internal-%" },
       ],
     });
-    expect(applyRowFilters([{ id: 1, name: null }], policy)).toEqual([]);
+    // Present-and-null is KEPT, matching the SQL above.
+    expect(applyRowFilters([{ id: 1, name: null }], policy)).toHaveLength(1);
+    // An ABSENT field is still dropped -- the separate fail-closed rule, unchanged.
+    expect(applyRowFilters([{ id: 1 }], policy)).toEqual([]);
+  });
+
+  it("all three negative operators agree on present-null and on absent-field", () => {
+    // The asymmetry regression guard: one record set, three operators, one answer.
+    // `notLike` diverged from its siblings here, in both the rewriter and the post
+    // pass, and a per-operator assertion cannot see that.
+    const negatives: RowFilter[] = [
+      { field: "region", operator: FilterOperator.NotEquals, value: "us-east" },
+      { field: "region", operator: FilterOperator.NotIn, values: ["us-east"] },
+      { field: "region", operator: FilterOperator.NotLike, value: "us-eas_" },
+    ];
+    const records = [
+      { id: "match", region: "us-east" },
+      { id: "other", region: "eu-west" },
+      { id: "nullish", region: null },
+      { id: "absent" },
+    ];
+
+    for (const filter of negatives) {
+      const policy = createPolicy({ rowFilters: [filter] });
+
+      expect(
+        applyRowFilters(records, policy).map((r) => r.id),
+        `${filter.operator} post-execution`,
+      ).toEqual(["other", "nullish"]);
+
+      // And every one of them carries the IS NULL arm when pushed down, which is
+      // what makes the row set above reachable from the database too. A dialect with
+      // a case-sensitive LIKE is used so notLike is pushable at all.
+      expect(
+        likeRewriter.buildWhereClause([filter]),
+        `${filter.operator} pushed down`,
+      ).toContain("IS NULL");
+    }
   });
 
   it("equals against null renders IS NULL, not `= NULL`", () => {
@@ -1159,9 +1204,11 @@ describe("SQL injection: values", () => {
   });
 
   it("a plain LIKE pattern passes through with its wildcards intact", () => {
-    // The pattern is already SQL LIKE syntax, so `%` and `_` must NOT be escaped.
+    // The pattern is already SQL LIKE syntax, so `%` and `_` must NOT be escaped. On a
+    // case-sensitive dialect, so the operator is pushed at all rather than declined for
+    // collation reasons.
     expect(
-      rewriter.buildWhereClause([
+      likeRewriter.buildWhereClause([
         { field: "region", operator: FilterOperator.Like, value: "us-%" },
       ]),
     ).toBe(`"region" LIKE 'us-%'`);
@@ -1426,17 +1473,27 @@ describe("generated SQL for every operator", () => {
   });
 
   it("like / notLike", () => {
-    expect(c({ field: "a", operator: FilterOperator.Like, value: "us-%" })).toBe(
+    // On a dialect whose LIKE is case-sensitive, so the operators are pushable; the
+    // default dialect declines them, which the dialect tests cover.
+    const cs = (filter: RowFilter) => likeRewriter.buildWhereClause([filter]);
+
+    expect(cs({ field: "a", operator: FilterOperator.Like, value: "us-%" })).toBe(
       `"a" LIKE 'us-%'`,
     );
-    expect(c({ field: "a", operator: FilterOperator.NotLike, value: "us-%" })).toBe(
-      `"a" NOT LIKE 'us-%'`,
+    // The IS NULL arm, on the same footing as notEquals and notIn: NULL NOT LIKE 'x'
+    // is unknown, so the bare form would drop a null-valued row the post pass keeps.
+    expect(cs({ field: "a", operator: FilterOperator.NotLike, value: "us-%" })).toBe(
+      `("a" NOT LIKE 'us-%' OR "a" IS NULL)`,
     );
   });
 
   it("a null like/notLike pattern renders 1 = 0", () => {
-    expect(c({ field: "a", operator: FilterOperator.Like, value: null })).toBe("1 = 0");
-    expect(c({ field: "a", operator: FilterOperator.NotLike })).toBe("1 = 0");
+    // A case-sensitive dialect, so the operator is pushable at all and the null-pattern
+    // path is the one under test rather than the collation refusal.
+    const cs = (filter: RowFilter) => likeRewriter.buildWhereClause([filter]);
+
+    expect(cs({ field: "a", operator: FilterOperator.Like, value: null })).toBe("1 = 0");
+    expect(cs({ field: "a", operator: FilterOperator.NotLike })).toBe("1 = 0");
   });
 
   it("isNull / isNotNull", () => {
@@ -2309,6 +2366,148 @@ describe("an identifier carrying the profile's own quote is declined", () => {
       "SELECT a FROM t WHERE `region` = 'x'",
     );
   });
+});
+
+describe("like/notLike pushdown requires a case-sensitive dialect", () => {
+  /**
+   * A **measured** divergence, not a theorised one. The post-fetch pass compares
+   * case-SENSITIVELY and is engine-independent, but a pushed-down `LIKE` inherits the
+   * *column's* collation:
+   *
+   * ```
+   * postgres:  SELECT 'ALICE JONES' LIKE 'alice%'   ->  f
+   * mysql:     SELECT 'ALICE JONES' LIKE 'alice%'   ->  1
+   * ```
+   *
+   * so a `name notLike 'alice%'` policy drops `'ALICE JONES'` on MySQL when the filter
+   * is pushed and keeps it when it is not. That is a difference in which **real
+   * records** a user sees, which is worse than a null-row asymmetry.
+   *
+   * Driven from the dialect lists rather than written out per profile, so adding a
+   * profile without deciding its answer cannot pass by omission.
+   */
+  const CASE_SENSITIVE = [SqlDialect.Postgres, SqlDialect.Trino];
+  const COLLATION_DEPENDENT = [
+    SqlDialect.MySql,
+    SqlDialect.SqlServer,
+    SqlDialect.Ansi,
+  ];
+  const LIKE_OPERATORS = [FilterOperator.Like, FilterOperator.NotLike];
+
+  const likePolicy = (operator: FilterOperator) =>
+    createPolicy({ rowFilters: [{ field: "name", operator, value: "alice%" }] });
+
+  const cases = <T>(dialects: T[]) =>
+    dialects.flatMap((dialect) =>
+      LIKE_OPERATORS.map((operator) => [dialect, operator] as const),
+    );
+
+  it.each(cases(CASE_SENSITIVE))(
+    "%s emits the operator for %s",
+    (dialect, operator) => {
+      const policy = likePolicy(operator);
+
+      const result = rewriter.rewriteQuery(
+        "SELECT id, name FROM patients",
+        policy,
+        dialect,
+      );
+
+      expect(result.query).toContain("LIKE 'alice%'");
+      expect(result.unpushableFilters).toHaveLength(0);
+    },
+  );
+
+  it.each(cases(COLLATION_DEPENDENT))(
+    "%s declines the operator for %s and reports it",
+    (dialect, operator) => {
+      // No LIKE in the text, and the filter reported through the existing unpushable
+      // mechanism so the post pass is known to be carrying it.
+      const policy = likePolicy(operator);
+
+      const result = rewriter.rewriteQuery(
+        "SELECT id, name FROM patients",
+        policy,
+        dialect,
+      );
+
+      expect(result.query.toUpperCase()).not.toContain("LIKE");
+      expect(result.query).toBe("SELECT id, name FROM patients");
+      expect(result.rewritten).toBe(false);
+      expect(result.unpushableFilters).toHaveLength(1);
+      expect(result.unpushableFilters[0]?.operator).toBe(operator);
+    },
+  );
+
+  it("classifies every profile, so a new one cannot skip the decision", () => {
+    const classified = new Set<string>([...CASE_SENSITIVE, ...COLLATION_DEPENDENT]);
+    const every = Object.values(SqlDialect);
+
+    expect(classified.size).toBe(every.length);
+    for (const dialect of every) expect(classified.has(dialect)).toBe(true);
+    // Disjoint: a profile is one or the other, never both.
+    for (const dialect of CASE_SENSITIVE) {
+      expect(COLLATION_DEPENDENT).not.toContain(dialect);
+    }
+  });
+
+  it("declines under the default profile", () => {
+    // `ansi` is what an integrator gets without thinking about it, and it promises no
+    // collation, so the conservative answer is the default answer.
+    expect(COLLATION_DEPENDENT).toContain(DEFAULT_DIALECT);
+    expect(
+      rewriter.buildWhereClause([
+        { field: "name", operator: FilterOperator.NotLike, value: "alice%" },
+      ]),
+    ).toBe("");
+  });
+
+  it("never emits a COLLATE clause or BINARY, under any profile", () => {
+    // `... LIKE 'alice%' COLLATE utf8mb4_0900_as_cs` and `BINARY ...` both force
+    // case-sensitivity on MySQL, so this IS technically emittable. It is deliberately
+    // not emitted: the right collation name depends on the column's character set,
+    // which a rewriter holding only a policy and a query string does not know, and
+    // guessing wrong either fails the query or silently changes the comparison again.
+    for (const dialect of Object.values(SqlDialect)) {
+      for (const operator of LIKE_OPERATORS) {
+        const { query } = rewriter.rewriteQuery(
+          "SELECT id, name FROM patients",
+          likePolicy(operator),
+          dialect,
+        );
+
+        expect(query.toUpperCase()).not.toContain("COLLATE");
+        expect(query.toUpperCase()).not.toContain("BINARY");
+      }
+    }
+  });
+
+  it.each(COLLATION_DEPENDENT)(
+    "%s still pushes every other operator",
+    (dialect) => {
+      // The gate is on like/notLike alone. Every other operator stays pushable under
+      // every profile, which is what keeps the connector-spec claim that a profile
+      // choice is otherwise a text choice.
+      const like: RowFilter = {
+        field: "name",
+        operator: FilterOperator.Like,
+        value: "alice%",
+      };
+      const policy = createPolicy({
+        rowFilters: [
+          { field: "region", operator: FilterOperator.Equals, value: "us-east" },
+          like,
+        ],
+      });
+
+      const result = rewriter.rewriteQuery("SELECT id FROM patients", policy, dialect);
+
+      expect(result.query).toContain("WHERE");
+      expect(result.query).toContain("us-east");
+      expect(result.query.toUpperCase()).not.toContain("LIKE");
+      expect(result.unpushableFilters).toEqual([like]);
+    },
+  );
 });
 
 describe("a backslash value is refused under every profile", () => {

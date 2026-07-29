@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { resolve, globMatch } from "../src/resolution.js";
+import { resolve, globMatch, sourcePatternMatch } from "../src/resolution.js";
 import type {
   PolicyDefinition,
   PolicyAssignment,
@@ -26,12 +26,15 @@ describe("globMatch", () => {
     expect(globMatch("patients", "encounters")).toBe(false);
   });
 
-  it("should match * wildcard (not crossing /)", () => {
+  // CORRECTED (spec §3.1): enforcement `*` crosses `/`. The old title and second
+  // assertion ("not crossing /") encoded the divergence — Python allowed
+  // `/api/v1/patients/123` under `/api/v1/patients/*` while TypeScript denied it.
+  it("should match * wildcard (crossing /)", () => {
     expect(globMatch("/api/v1/*", "/api/v1/patients")).toBe(true);
-    expect(globMatch("/api/v1/*", "/api/v1/patients/123")).toBe(false);
+    expect(globMatch("/api/v1/*", "/api/v1/patients/123")).toBe(true);
   });
 
-  it("should match ** wildcard (crossing /)", () => {
+  it("should match ** wildcard (an alias for *, also crossing /)", () => {
     expect(globMatch("/api/**", "/api/v1/patients")).toBe(true);
     expect(globMatch("/api/**", "/api/v1/patients/123")).toBe(true);
   });
@@ -41,11 +44,26 @@ describe("globMatch", () => {
     expect(globMatch("patient?", "patient")).toBe(false);
   });
 
-  it("should match source patterns", () => {
+  it("should match case-insensitively (§3.1)", () => {
+    expect(globMatch("patients", "PATIENTS")).toBe(true);
+    expect(globMatch("PATIENTS", "patients")).toBe(true);
+    expect(globMatch("/API/v1/*", "/api/v1/records")).toBe(true);
+  });
+
+  // `globMatch` is the enforcement dialect, so its `*` crosses `:` too. A
+  // `sourcePatterns` glob must NOT — that is `sourcePatternMatch`, pinned in
+  // resolution-source-patterns.test.ts. Kept here to document that these literal
+  // source-shaped patterns behave the same under either dialect, and to name the
+  // one case (`db:*`) where they do not.
+  it("should match source-shaped literals, but with enforcement `*` semantics", () => {
     expect(globMatch("db:production:patient_*", "db:production:patient_records")).toBe(true);
     expect(globMatch("db:production:patient_*", "db:staging:patient_records")).toBe(false);
     expect(globMatch("api:internal:*", "api:internal:anything")).toBe(true);
     expect(globMatch("kb:*:*", "kb:research:clinical")).toBe(true);
+    // The divergence between the two dialects, made explicit: enforcement `*`
+    // crosses the `:` that source-pattern `*` stops at.
+    expect(globMatch("db:*", "db:production:patients")).toBe(true);
+    expect(sourcePatternMatch("db:*", "db:production:patients")).toBe(false);
   });
 });
 

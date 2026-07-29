@@ -73,6 +73,60 @@ public class RowFilterOperatorTests
         PassesWithFieldAbsent(filter).Should().BeFalse();
     }
 
+    // =======================================================================
+    // The three negative operators must not diverge from each other
+    // =======================================================================
+
+    /// <summary>
+    /// The three negative operators, each phrased so a present, non-null, non-matching
+    /// value passes. Written against one field so the three are directly comparable.
+    /// </summary>
+    /// <remarks>
+    /// Regression guard. <c>notLike</c> used to drop a present-null row while
+    /// <c>notEquals</c> and <c>notIn</c> kept it, and the rewriter emitted the
+    /// <c>IS NULL</c> arm for those two while omitting it for <c>notLike</c> — so the same
+    /// policy's row set depended on which negative operator the author happened to choose,
+    /// which is not a distinction the policy expresses. A per-operator assertion cannot
+    /// see that; only comparing the three can.
+    /// </remarks>
+    public static IEnumerable<object[]> NegativeOperators()
+    {
+        yield return new object[] { new RowFilter("region", FilterOperator.NotEquals, "us-east") };
+        yield return new object[]
+        {
+            new RowFilter("region", FilterOperator.NotIn, Values: new object[] { "us-east" })
+        };
+        yield return new object[] { new RowFilter("region", FilterOperator.NotLike, "us-eas_") };
+    }
+
+    [Theory]
+    [MemberData(nameof(NegativeOperators))]
+    public void EveryNegativeOperator_KeepsAPresentNullValue(RowFilter filter)
+    {
+        // Keeping present-null is what preserves pushdown/post-fetch equivalence.
+        Passes("region", null, filter).Should().BeTrue(filter.Operator.ToString());
+        Passes("region", Json("null"), filter).Should().BeTrue(filter.Operator.ToString());
+    }
+
+    [Theory]
+    [MemberData(nameof(NegativeOperators))]
+    public void EveryNegativeOperator_DropsAnAbsentField(RowFilter filter)
+    {
+        // The separate, unchanged fail-closed rule: a value that cannot be established
+        // cannot be shown to satisfy the filter.
+        PassesWithFieldAbsent(filter).Should().BeFalse(filter.Operator.ToString());
+    }
+
+    [Theory]
+    [MemberData(nameof(NegativeOperators))]
+    public void EveryNegativeOperator_Discriminates(RowFilter filter)
+    {
+        // Guards the guard: the filters above must actually distinguish rows, or the two
+        // assertions would hold vacuously.
+        Passes("region", "eu-west", filter).Should().BeTrue(filter.Operator.ToString());
+        Passes("region", "us-east", filter).Should().BeFalse(filter.Operator.ToString());
+    }
+
     [Fact]
     public void IsNull_DropsARowMissingTheField_NotOnlyANonNullOne()
     {
@@ -253,15 +307,46 @@ public class RowFilterOperatorTests
             .Should().Be(expected);
     }
 
-    [Theory]
-    [InlineData(FilterOperator.Like)]
-    [InlineData(FilterOperator.NotLike)]
-    public void LikeOperators_AgainstANullFieldValue_AreNonMatches(FilterOperator op)
+    [Fact]
+    public void Like_AgainstANullFieldValue_IsANonMatch()
     {
-        // SQL evaluates "NULL NOT LIKE 'x'" to NULL, which does not retain the row. Reading a
-        // null value as "not like the pattern" would be the fail-open direction and would also
-        // make the pushed-down and post-fetch paths disagree.
-        Passes("region", null, new RowFilter("region", op, "us-%")).Should().BeFalse();
+        // A null value cannot be shown to match a pattern, so `like` drops the row.
+        Passes("region", null, new RowFilter("region", FilterOperator.Like, "us-%"))
+            .Should().BeFalse();
+    }
+
+    [Fact]
+    public void NotLike_AgainstAPresentNullFieldValue_KeepsTheRow()
+    {
+        // NotLike is a negative operator and keeps a present-and-null value, exactly as
+        // NotEquals and NotIn do. Bare SQL "NULL NOT LIKE 'x'" is unknown and would drop
+        // the row, which is why the rewriter emits (col NOT LIKE 'x' OR col IS NULL) --
+        // so the pushed-down query and the post-fetch pass select the same rows.
+        //
+        // Distinct from the ABSENT-field rule, which still drops the row; see
+        // MissingField_DropsTheRow_ForEveryAddedOperator.
+        Passes("region", null, new RowFilter("region", FilterOperator.NotLike, "us-%"))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void NotLike_AgainstAJsonNullFieldValue_KeepsTheRow()
+    {
+        // A JSON null arrives as a JsonElement of kind Null, which is NOT a CLR null and
+        // whose ToString() is the empty string. Testing only for a CLR null would compare
+        // "" against the pattern instead of taking the null path, so this pins the shape a
+        // policy and a result set actually arrive in over the wire.
+        Passes("region", Json("null"), new RowFilter("region", FilterOperator.NotLike, "us-%"))
+            .Should().BeTrue();
+    }
+
+    [Fact]
+    public void Like_AgainstAJsonNullFieldValue_IsANonMatch()
+    {
+        // The same JsonElement-vs-CLR-null distinction, in the positive direction: a
+        // null-valued row must not match `like '%'` by way of an empty string.
+        Passes("region", Json("null"), new RowFilter("region", FilterOperator.Like, "%"))
+            .Should().BeFalse();
     }
 
     [Theory]

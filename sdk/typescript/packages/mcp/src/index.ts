@@ -27,7 +27,9 @@ export {
   type SqlQueryPreparation,
 } from "./context-wrapper.js";
 export {
+  MAX_REDIRECTS,
   SecureHttpToolWrapper,
+  UpstreamHttpError,
   type SecureHttpWrapperOptions,
   type RequestArgs,
   type FetchLike,

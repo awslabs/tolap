@@ -59,19 +59,46 @@ async function resolveWith(
 // ---------------------------------------------------------------------------
 
 describe("globToRegex: every character class", () => {
-  it("`*` matches within a path segment but not across `/`", () => {
+  // CORRECTED (spec §3.1). These three cases previously asserted that enforcement
+  // `*` stopped at `/` and that `?` stopped there too. §3.1 tabulates the opposite:
+  // for objects, fields, endpoints and prefixes, `*` "crosses **all** separators,
+  // including `/` and `.`". Only `sourcePatterns` keeps `*` inside a segment, and
+  // that dialect is `sourcePatternMatch`, covered in
+  // resolution-source-patterns.test.ts. The old assertions made the same signed
+  // policy grant less access in TypeScript than in Python or .NET.
+  it("`*` crosses `/`, so a prefix rule reaches nested names (§3.1)", () => {
     expect(globMatch("/api/*", "/api/patients")).toBe(true);
-    expect(globMatch("/api/*", "/api/v1/patients")).toBe(false);
+    expect(globMatch("/api/*", "/api/v1/patients")).toBe(true);
   });
 
-  it("`**` crosses `/`", () => {
+  it("`*` crosses `.` as well as `/` (§3.1)", () => {
+    // The dotted case matters for field rules: "patients.*" must reach a nested
+    // "patients.address.zip", not just a leaf.
+    expect(globMatch("patients.*", "patients.ssn")).toBe(true);
+    expect(globMatch("patients.*", "patients.address.zip")).toBe(true);
+  });
+
+  it("`**` is accepted as a plain alias for `*` (§3.1)", () => {
+    // Once `*` crosses everything there is nothing left for a second star to
+    // widen, so `**` is a no-op alias kept for policies in the wild.
     expect(globMatch("/api/**", "/api/v1/patients")).toBe(true);
     expect(globMatch("/api/**", "/api/")).toBe(true);
+    expect(globMatch("/api/*", "/api/v1/patients")).toBe(true);
+    // A star run of any length collapses to the same matcher.
+    for (const stars of ["*", "**", "***"]) {
+      expect(globMatch(`/api/${stars}`, "/api/v1/patients")).toBe(true);
+      expect(globMatch(`/api/${stars}`, "/other/v1")).toBe(false);
+    }
   });
 
-  it("`**/` consumes the separator, so `**` also matches an empty prefix", () => {
-    // The trailing-slash consumption is what lets "**/x" match a bare "x".
-    expect(globMatch("**/patients", "patients")).toBe(true);
+  it("`**` does not consume a following separator", () => {
+    // CORRECTED (spec §3.1). The old compiler swallowed the `/` after `**`, which
+    // let "**/patients" match a bare "patients". Python's fnmatch does not:
+    // measured `_pattern_matches("**/patients", "patients")` is False, because the
+    // literal `/` still has to appear. Swallowing it granted a name the pattern
+    // never spelled.
+    expect(globMatch("**/patients", "patients")).toBe(false);
+    expect(globMatch("**/patients", "/patients")).toBe(true);
     expect(globMatch("**/patients", "db/prod/patients")).toBe(true);
   });
 
@@ -79,11 +106,15 @@ describe("globToRegex: every character class", () => {
     expect(globMatch("/api/v1**", "/api/v1/patients/123")).toBe(true);
   });
 
-  it("`?` matches exactly one non-separator character", () => {
+  it("`?` matches exactly one character, separators included (§3.1)", () => {
+    // CORRECTED: `a?c` vs `a/c` asserted `false`, but enforcement wildcards cross
+    // every separator and Python's `?` compiles to `.` under `(?s:…)`. Measured
+    // `_pattern_matches("a?c", "a/c")` is True.
     expect(globMatch("patient?", "patients")).toBe(true);
     expect(globMatch("patient?", "patient")).toBe(false);
     expect(globMatch("patient?", "patientss")).toBe(false);
-    expect(globMatch("a?c", "a/c")).toBe(false);
+    expect(globMatch("a?c", "a/c")).toBe(true);
+    expect(globMatch("a?c", "abc")).toBe(true);
   });
 
   it("regex metacharacters are escaped, so they match literally", () => {

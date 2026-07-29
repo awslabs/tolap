@@ -12,6 +12,7 @@ export {
   FilterOperator,
   AssigneeType,
   SigningAlgorithm,
+  WriteOperation,
   type MaskingParameters,
   type MaskingRule,
   type RowFilter,
@@ -83,6 +84,22 @@ export {
   type ResultShape,
   validateEndpoint,
   fieldNameMatches,
+} from "./enforcement.js";
+
+// Write validation (connector spec §4).
+//
+// Runs PRE-execution and is the whole enforcement point for a write: reads filter
+// what comes back, writes have nothing to filter afterwards. Fails closed on the
+// whole write -- one unwritable field denies the operation rather than being stripped
+// so the rest can proceed (§4.4).
+export {
+  validateWrite,
+  validateHttpWrite,
+  payloadWriteFields,
+  writeOperationForMethod,
+  TARGET_ROW_UNKNOWN,
+  type WriteTargetRow,
+  type ValidateWriteOptions,
 } from "./enforcement.js";
 
 // SQL query rewriting (canonical spec §4).

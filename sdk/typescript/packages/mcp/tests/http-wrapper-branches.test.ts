@@ -271,13 +271,15 @@ describe("request: url assembly and query-string handling", () => {
   });
 
   it("method and headers are passed through to the transport", async () => {
-    // readOnly must be false as well as POST being in allowedMethods: canonical
-    // spec §9 makes readOnly a ceiling over the method, so a policy still
-    // declaring itself read-only cannot POST however its allowedMethods reads.
+    // Three gates have to open for a POST, and none implies another:
+    // allowedMethods makes the verb reachable, readOnly: false lifts the ceiling
+    // (canonical spec §9), and canInsert grants the operation POST performs
+    // (connector spec §4.1 and §6). canInsert defaults to false when absent, so it
+    // must be stated explicitly.
     const p = policy(
       { endpointRules: { allowedEndpoints: ["/x"], allowedMethods: ["GET", "POST"] } },
       undefined,
-      { canQuery: true, canExport: false, readOnly: false },
+      { canQuery: true, canInsert: true, canExport: false, readOnly: false },
     );
     const { instance, calls } = wrapper({});
 
@@ -336,12 +338,17 @@ describe("record-dropping steps: collectionPath resolution", () => {
   });
 
   it("with no collectionPath, a body that is a single RECORD is filtered", async () => {
-    // A single record runs the identical filters and becomes an empty collection
-    // when dropped (spec §4, "Single records").
-    expect(await request({ id: 1, region: "eu-west" }, filterUsEast)).toEqual([]);
-    expect(await request({ id: 1, region: "us-east" }, filterUsEast)).toEqual([
-      { id: 1, region: "us-east" },
-    ]);
+    // A single record runs the identical filters and becomes `null` when dropped
+    // (spec §4, "Single records"): "the result is the language's null value ... **not**
+    // an empty record", because an empty collection implies the caller asked for a list.
+    // This previously asserted `[]`, which was a third answer to the same body: Python
+    // returned `None` and .NET returned the record unfiltered. All three now agree on
+    // the spelling the spec names.
+    expect(await request({ id: 1, region: "eu-west" }, filterUsEast)).toBeNull();
+    expect(await request({ id: 1, region: "us-east" }, filterUsEast)).toEqual({
+      id: 1,
+      region: "us-east",
+    });
   });
 
   it("with no collectionPath, a scalar body passes through unchanged", async () => {

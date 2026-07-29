@@ -29,7 +29,16 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     private const string SigningKey = "integration-test-signing-key";
 
     private readonly PostgresFixture _db;
-    private readonly SqlQueryRewriter _rewriter = new();
+
+    /// <summary>
+    /// Names Postgres explicitly, because every statement here runs against Postgres.
+    /// </summary>
+    /// <remarks>
+    /// Load-bearing for <c>like</c>/<c>notLike</c>: a pushed-down <c>LIKE</c> inherits the
+    /// column's collation, so only a dialect that promises a case-sensitive comparison may
+    /// push it, and the default dialect makes no such promise.
+    /// </remarks>
+    private readonly SqlQueryRewriter _rewriter = new(dialect: SqlDialect.Postgres);
 
     public PostgresQueryRewriteTests(PostgresFixture db) { _db = db; }
 
@@ -424,6 +433,112 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
         await cleanup.ExecuteNonQueryAsync();
     }
 
+    /// <summary>
+    /// <c>notLike</c>'s <c>IS NULL</c> arm, proven against a real engine like the other two.
+    /// </summary>
+    /// <remarks>
+    /// <c>NULL NOT LIKE 'x'</c> is unknown — therefore not true — for exactly the same reason
+    /// <c>NULL &lt;&gt; 'x'</c> is, so the bare form drops the null-valued row while the
+    /// post-fetch pass keeps it. Postgres only, deliberately: a pushed-down <c>LIKE</c>
+    /// inherits the column's collation and MySQL's default is case-insensitive, so the same
+    /// comparison is engine-dependent there. That is separate from the null handling proven
+    /// here.
+    /// </remarks>
+    [Fact]
+    public async Task NotLike_KeepsANullValuedRow_MatchingThePostFetchPass()
+    {
+        if (!_db.Ready) return;
+
+        await using (var setup = new NpgsqlCommand(
+            "DROP TABLE IF EXISTS rewrite_notlike_probe; "
+            + "CREATE TABLE rewrite_notlike_probe (id INT, name TEXT); "
+            + "INSERT INTO rewrite_notlike_probe VALUES "
+            + "(1, 'alice smith'), (2, 'ALICE JONES'), (3, 'bob stone'), (4, NULL);",
+            _db.Connection))
+        {
+            await setup.ExecuteNonQueryAsync();
+        }
+
+        var policy = Policy(rowFilters: new[]
+        {
+            new RowFilter("name", FilterOperator.NotLike, "alice%")
+        });
+        const string original = "SELECT id, name FROM rewrite_notlike_probe ORDER BY id";
+        var rewritten = _rewriter.RewriteQuery(original, policy);
+
+        rewritten.Should().Contain("IS NULL");
+
+        var fromDatabase = await RunRawAsync(rewritten);
+        var postFetch = EnforcementEngine.ApplyRowFilters(await RunRawAsync(original), policy);
+
+        // id 4 is NULL and is kept by BOTH paths; id 2 survives because Postgres LIKE is
+        // case-sensitive, so 'ALICE JONES' does not match 'alice%'.
+        fromDatabase.Select(r => Convert.ToInt32(r["id"])).Should().BeEquivalentTo(new[] { 2, 3, 4 });
+        postFetch.Select(r => Convert.ToInt32(r["id"]))
+            .Should().BeEquivalentTo(fromDatabase.Select(r => Convert.ToInt32(r["id"])));
+
+        await using var cleanup = new NpgsqlCommand(
+            "DROP TABLE rewrite_notlike_probe;", _db.Connection);
+        await cleanup.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// The three negative operators must select the same rows as each other, and each must
+    /// agree across the pushed-down and post-fetch paths.
+    /// </summary>
+    /// <remarks>
+    /// Regression guard for the asymmetry: <c>notLike</c> omitted the <c>IS NULL</c> arm that
+    /// <c>notEquals</c> and <c>notIn</c> carried, so the same policy's row set depended on
+    /// which negative operator the author happened to choose. Each filter below excludes
+    /// exactly <c>'us-east'</c>.
+    /// </remarks>
+    [Fact]
+    public async Task EveryNegativeOperator_SelectsTheSameRows_InBothPaths()
+    {
+        if (!_db.Ready) return;
+
+        await using (var setup = new NpgsqlCommand(
+            "DROP TABLE IF EXISTS rewrite_negatives_probe; "
+            + "CREATE TABLE rewrite_negatives_probe (id INT, region TEXT); "
+            + "INSERT INTO rewrite_negatives_probe VALUES "
+            + "(1, 'us-east'), (2, 'eu-west'), (3, NULL);",
+            _db.Connection))
+        {
+            await setup.ExecuteNonQueryAsync();
+        }
+
+        const string original = "SELECT id, region FROM rewrite_negatives_probe ORDER BY id";
+        var negatives = new[]
+        {
+            new RowFilter("region", FilterOperator.NotEquals, "us-east"),
+            new RowFilter("region", FilterOperator.NotIn, Values: new object[] { "us-east" }),
+            new RowFilter("region", FilterOperator.NotLike, "us-eas_")
+        };
+
+        foreach (var filter in negatives)
+        {
+            var policy = Policy(rowFilters: new[] { filter });
+            var rewritten = _rewriter.RewriteQuery(original, policy);
+
+            // Every negative carries the arm, so the database keeps the null row too.
+            rewritten.Should().Contain("IS NULL", filter.Operator.ToString());
+
+            var fromDatabase = await RunRawAsync(rewritten);
+            var postFetch = EnforcementEngine.ApplyRowFilters(await RunRawAsync(original), policy);
+
+            // The null row is kept and the matching row dropped, identically in both paths
+            // and identically for all three operators.
+            fromDatabase.Select(r => Convert.ToInt32(r["id"])).OrderBy(i => i)
+                .Should().BeEquivalentTo(new[] { 2, 3 }, filter.Operator.ToString());
+            postFetch.Select(r => Convert.ToInt32(r["id"])).OrderBy(i => i)
+                .Should().BeEquivalentTo(new[] { 2, 3 }, filter.Operator.ToString());
+        }
+
+        await using var cleanup = new NpgsqlCommand(
+            "DROP TABLE rewrite_negatives_probe;", _db.Connection);
+        await cleanup.ExecuteNonQueryAsync();
+    }
+
     // =======================================================================
     // Rewrite and post-fetch must agree, over the whole fixture
     // =======================================================================
@@ -495,7 +610,10 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
             Sign(policy),
             new PreExecuteArgs("pg-query"),
             "SELECT id, full_name, email, region FROM patients ORDER BY id",
-            async sql =>
+            // Postgres LIKE is case-sensitive, so `like` is pushable here. The default
+            // `ansi` profile declines it because it promises no collation (spec section 4).
+            dialect: SqlDialect.Postgres,
+            execute: async sql =>
             {
                 executed.Add(sql);
                 return await RunRawAsync(sql);
@@ -562,7 +680,8 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
 
         var prep = Wrapper().PrepareSqlQuery(
             Sign(policy), new PreExecuteArgs("pg-query"),
-            "SELECT id, region, full_name FROM patients ORDER BY id");
+            "SELECT id, region, full_name FROM patients ORDER BY id",
+            dialect: SqlDialect.Postgres);
 
         prep.Allowed.Should().BeTrue();
         prep.Rewritten.Should().BeTrue();
@@ -584,7 +703,8 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
         var prep = Wrapper().PrepareSqlQuery(
             Sign(Policy(rowFilters: new[] { new RowFilter("region", FilterOperator.Like, "us-%") })),
             new PreExecuteArgs("pg-query"),
-            "SELECT id, region FROM patients");
+            "SELECT id, region FROM patients",
+            dialect: SqlDialect.Postgres);
 
         prep.Allowed.Should().BeTrue();
         prep.FullyPushedDown.Should().BeTrue();

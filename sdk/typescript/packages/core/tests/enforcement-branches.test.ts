@@ -1052,7 +1052,10 @@ describe("filterByTags: every combination of allow/deny", () => {
     { id: "both", tags: ["public", "confidential"] },
     { id: "untagged" },
     { id: "empty-tags", tags: [] },
-    { id: "non-array-tags", tags: "public" },
+    // A scalar in the tags slot is ONE tag, not a malformed list: providers emit
+    // both `{tags: "secret"}` and `{tags: ["secret"]}` and connector spec §7
+    // requires the two to behave identically.
+    { id: "scalar-tags", tags: "public" },
   ];
 
   const ids = (tagRules: Record<string, string[]> | undefined) =>
@@ -1073,7 +1076,7 @@ describe("filterByTags: every combination of allow/deny", () => {
       "public",
       "untagged",
       "empty-tags",
-      "non-array-tags",
+      "scalar-tags",
     ]);
   });
 
@@ -1082,9 +1085,14 @@ describe("filterByTags: every combination of allow/deny", () => {
   });
 
   it("an allow-list drops untagged and empty-tagged records", () => {
-    // No tag means no proof of allowance (spec §4). "non-array-tags" carries the
-    // string "public" rather than a tag list and is therefore untagged too.
-    expect(ids({ allowedTags: ["public"] })).toEqual(["public", "both"]);
+    // No tag means no proof of allowance (spec §4). "scalar-tags" DOES carry a tag
+    // -- the scalar "public" is a one-element tag list per connector spec §7 -- so
+    // it satisfies the allow-list.
+    expect(ids({ allowedTags: ["public"] })).toEqual([
+      "public",
+      "both",
+      "scalar-tags",
+    ]);
   });
 
   it("an EMPTY allow-list denies every record (spec §3)", () => {
@@ -1094,19 +1102,32 @@ describe("filterByTags: every combination of allow/deny", () => {
   it("denied beats allowed when a record carries both", () => {
     expect(ids({ allowedTags: ["public"], deniedTags: ["confidential"] })).toEqual([
       "public",
+      "scalar-tags",
     ]);
   });
 
-  it("a non-array tags value is treated as untagged, not coerced", () => {
-    // `tags: "public"` is not a tag list; treating the string as one would let a
-    // malformed record satisfy an allow-list it never matched.
+  it("a scalar tags value is ONE tag, not an untagged record", () => {
+    // Connector spec §7: "A scalar value counts as a single tag." Treating
+    // `tags: "secret"` as untagged is the fail-open half of the KB control -- a
+    // denylist stopped dropping the record, because classification IS tags and this
+    // is one of the shapes providers emit. Previously this test asserted the
+    // opposite and was corrected against §7.
     const only = [{ id: 1, tags: "public" }];
     expect(filterByTags(only, policy({ tagRules: { allowedTags: ["public"] } }))).toEqual(
-      [],
-    );
-    expect(filterByTags(only, policy({ tagRules: { deniedTags: ["public"] } }))).toEqual(
       only,
     );
+    expect(filterByTags(only, policy({ tagRules: { deniedTags: ["public"] } }))).toEqual(
+      [],
+    );
+  });
+
+  it("a non-string tags value contributes no tag and fails closed", () => {
+    // `allowedTags`/`deniedTags` hold strings, so a number could only match after a
+    // stringification whose result differs per language. It therefore contributes no
+    // tag: an allow-list drops the record, a denylist has nothing to match.
+    const only = [{ id: 1, tags: 42 }];
+    expect(filterByTags(only, policy({ tagRules: { allowedTags: ["42"] } }))).toEqual([]);
+    expect(filterByTags(only, policy({ tagRules: { deniedTags: ["42"] } }))).toEqual(only);
   });
 
   it("an empty result list stays empty", () => {
