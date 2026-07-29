@@ -11,7 +11,7 @@
     "@tolap/core": "2.0.0"
   },
   "devDependencies": {
-    "@types/node": "^25.5.2",
+    "@types/node": "^26.1.2",
     "@vitest/coverage-v8": "^4.1.10",
     "typescript": "^5.4.0",
     "vitest": "^4.1.9"
