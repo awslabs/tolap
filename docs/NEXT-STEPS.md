@@ -121,16 +121,25 @@ already running", because that reads as success.
 
 ---
 
-## Task 3 — Fill in `.github/CODEOWNERS`
+## ~~Task 3 — Fill in `.github/CODEOWNERS`~~ — DONE
 
-It currently reads `* @phspies`, which I set as a placeholder with an
-ACTION REQUIRED comment. An unresolvable or wrong owner produces **no** review
-request, which is worse than having no file at all.
+Owner is **Phillip Spies (`pspies@amazon.com`, handle `@phspies`)**, set on
+2026-07-29. The catch-all plus explicit per-path entries for the
+security-critical surfaces are in place: the two normative specs, `schema/v1.0/`,
+the signing and enforcement fixtures, the signers and canonical serializers,
+`context.*`, `extractors.*`, `merger.*`, `enforcement.*`, `resolution.*`, the SQL
+rewriters, and `.github/`.
 
-The file carries a suggested shape for per-path owners on the security-critical
-surfaces (the specs, `fixtures/signing/`, the signers, extractors, mergers,
-enforcement). Use it or delete it, but do not leave a placeholder on a public
-repo.
+The handle is the matching rule, not the email — GitHub only resolves an email if
+it is verified on the account *and* that account has write access, and an
+unresolvable owner silently produces no review request at all.
+
+**Remaining follow-up, not blocking:** when a maintainer team exists, replace
+`@phspies` with the team handle rather than adding a second individual. A team
+survives someone changing roles; an individual does not. Note also that a
+single-owner CODEOWNERS cannot satisfy a "second reviewer on security-critical
+paths" rule — the per-path entries exist so that reviewer can be added to those
+lines alone, without widening it to the whole repository.
 
 ---
 

@@ -1,21 +1,74 @@
 # Code owners are requested for review automatically on every pull request.
 #
-# ACTION REQUIRED: replace the placeholder below with the real GitHub team or
-# user handles before relying on this file. An unresolvable owner silently
-# results in no review request at all, which is worse than having no CODEOWNERS.
+# Owner: Phillip Spies <pspies@amazon.com>
 #
-# Suggested shape once the owning team is known:
+# The GitHub handle is what GitHub resolves. An email address only works when it
+# is verified on the account AND that account has write access to the repository,
+# and an owner GitHub cannot resolve silently produces no review request at all --
+# worse than having no CODEOWNERS file. The email above is contact information,
+# not the matching rule.
 #
-#   *                            @awslabs/tolap-maintainers
+# When a maintainer team exists, replace @phspies with the team handle
+# (e.g. @awslabs/tolap-maintainers) rather than adding a second individual: a team
+# survives someone changing roles, an individual does not.
 #
-#   # Security-critical surfaces warrant a second, security-focused reviewer.
-#   /docs/canonical-enforcement-spec.md   @awslabs/tolap-maintainers
-#   /fixtures/signing/                    @awslabs/tolap-maintainers
-#   /sdk/*/src/**/SecurityContextSigner*  @awslabs/tolap-maintainers
-#   /sdk/*/**/context.*                   @awslabs/tolap-maintainers
-#   /sdk/*/**/extractors.*                @awslabs/tolap-maintainers
-#   /sdk/*/**/merger.*                    @awslabs/tolap-maintainers
-#   /sdk/*/**/enforcement.*               @awslabs/tolap-maintainers
-#   /.github/workflows/                   @awslabs/tolap-maintainers
+# PATTERN NOTE: these use gitignore-style matching, and a pattern that matches
+# nothing fails silently -- it does not error, it just never requests a review. The
+# three SDKs do not share a directory shape (Python is
+# sdk/python/tolap-core/tolap_core/, TypeScript is
+# sdk/typescript/packages/core/src/, .NET is sdk/dotnet/src/Tolap.Core/), so the
+# entries below use leading `**/` to match on filename at any depth rather than
+# assuming a common layout. Verify with `git check-ignore -v` style reasoning, or
+# by confirming `git ls-files` lists the files a pattern is meant to cover.
 
 * @phspies
+
+# --- Security-critical surfaces -------------------------------------------------
+#
+# Listed explicitly so they keep an owner if the catch-all above is ever narrowed,
+# and so a second security reviewer can be added to these lines alone rather than
+# to the whole repository. These are the files where a mistake is a data-disclosure
+# bug rather than a defect: the normative specs, the cross-SDK signing anchors, and
+# the code deciding what a policy permits.
+
+/docs/canonical-enforcement-spec.md   @phspies
+/docs/connector-spec.md               @phspies
+/schema/                              @phspies
+/fixtures/signing/                    @phspies
+/fixtures/enforcement/                @phspies
+/fixtures/merge-scenarios/            @phspies
+
+# Signing and canonicalization: the bytes that make a policy tamper-evident, and
+# the one place all three SDKs must agree exactly.
+**/SecurityContextSigner.cs           @phspies
+**/CanonicalJson.cs                   @phspies
+**/context.py                         @phspies
+**/context.ts                         @phspies
+
+# Policy resolution, merging, and enforcement: what a policy actually permits.
+**/merger.py                          @phspies
+**/merger.ts                          @phspies
+**/PolicyMerger.cs                    @phspies
+**/resolution.py                      @phspies
+**/resolution.ts                      @phspies
+**/PolicyResolutionEngine.cs           @phspies
+**/enforcement.py                     @phspies
+**/enforcement.ts                     @phspies
+**/EnforcementEngine.cs               @phspies
+
+# Identity extraction: turns a credential into the principal a policy resolves for.
+**/extractors.py                      @phspies
+**/extractors.ts                      @phspies
+**/JwtIdentityExtractor.cs            @phspies
+
+# SQL pushdown: builds SQL text, so an escaping or dialect mistake is an injection
+# or a wrong-rows bug.
+**/sql_rewriter.py                    @phspies
+**/sql-rewriter.ts                    @phspies
+**/SqlQueryRewriter.cs                @phspies
+**/ISqlQueryRewriter.cs               @phspies
+**/SqlDialect.cs                      @phspies
+
+# CI is what keeps the cross-SDK guarantees from decaying, and CODEOWNERS itself
+# must not be silently reassignable.
+/.github/                             @phspies
