@@ -451,4 +451,162 @@ public class SqlDialectTests
 
         result.Should().Be("SELECT a FROM t WHERE [region] = 'US' LIMIT 50");
     }
+
+    // =======================================================================
+    // like/notLike pushdown is gated on the dialect's collation
+    // =======================================================================
+
+    /// <summary>
+    /// The profiles whose <c>LIKE</c> is case-sensitive, and which may therefore push
+    /// <c>like</c>/<c>notLike</c> (canonical-enforcement-spec.md section 4). Both quote with
+    /// double quotes, so one expected string covers them.
+    /// </summary>
+    private static readonly SqlDialect[] CaseSensitiveLikeProfiles =
+    [
+        SqlDialect.Postgres,
+        SqlDialect.Trino
+    ];
+
+    /// <summary>
+    /// The profiles that must decline. <c>MySql</c> and <c>SqlServer</c> have
+    /// case-insensitive default collations; <c>Ansi</c> is the strict intersection and
+    /// promises no collation at all.
+    /// </summary>
+    private static readonly SqlDialect[] CollationDependentLikeProfiles =
+    [
+        SqlDialect.MySql,
+        SqlDialect.SqlServer,
+        SqlDialect.Ansi
+    ];
+
+    /// <summary>Both operators, since the rule applies to the pair and not to one of them.</summary>
+    private static readonly FilterOperator[] LikeOperators =
+    [
+        FilterOperator.Like,
+        FilterOperator.NotLike
+    ];
+
+    /// <summary>The dialect x operator grid, so neither dimension is sampled.</summary>
+    private static TheoryData<SqlDialect, FilterOperator> Grid(SqlDialect[] dialects)
+    {
+        var data = new TheoryData<SqlDialect, FilterOperator>();
+        foreach (var dialect in dialects)
+        {
+            foreach (var op in LikeOperators)
+                data.Add(dialect, op);
+        }
+        return data;
+    }
+
+    public static TheoryData<SqlDialect, FilterOperator> CaseSensitiveLikeGrid()
+        => Grid(CaseSensitiveLikeProfiles);
+
+    public static TheoryData<SqlDialect, FilterOperator> CollationDependentLikeGrid()
+        => Grid(CollationDependentLikeProfiles);
+
+    private static EffectivePolicy LikePolicy(FilterOperator op)
+        => Policy(rowFilters: [new("name", op, Value: "alice%")]);
+
+    /// <remarks>
+    /// A <b>measured</b> divergence, not a theorised one. The post-execution pass compares
+    /// case-SENSITIVELY and is engine-independent, but a pushed-down <c>LIKE</c> inherits the
+    /// <i>column's</i> collation: <c>'ALICE JONES' LIKE 'alice%'</c> is false on Postgres and
+    /// true on MySQL under the default <c>utf8mb4_0900_ai_ci</c>. So a
+    /// <c>name notLike 'alice%'</c> policy drops <c>'ALICE JONES'</c> on MySQL when the filter
+    /// is pushed and keeps it when it is not — a difference in which <b>real records</b> a user
+    /// sees, which is worse than a null-row asymmetry.
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(CaseSensitiveLikeGrid))]
+    public void ACaseSensitiveProfile_EmitsTheLikeOperator(SqlDialect dialect, FilterOperator op)
+    {
+        var policy = LikePolicy(op);
+
+        var result = _rewriter.RewriteQuery("SELECT id, name FROM patients", policy, dialect);
+
+        result.Should().Contain("LIKE 'alice%'");
+        _rewriter.UnpushableFilters(policy, dialect).Should().BeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(CollationDependentLikeGrid))]
+    public void ACollationDependentProfile_DeclinesTheLikeOperator(
+        SqlDialect dialect, FilterOperator op)
+    {
+        // No LIKE in the text, and the filter reported through the existing unpushable
+        // mechanism so the post-execution pass is known to be carrying it.
+        var policy = LikePolicy(op);
+        const string query = "SELECT id, name FROM patients";
+
+        var result = _rewriter.RewriteQuery(query, policy, dialect);
+
+        result.Should().NotContainEquivalentOf("LIKE");
+        result.Should().Be(query);
+        _rewriter.UnpushableFilters(policy, dialect).Should().HaveCount(1);
+        _rewriter.UnpushableFilters(policy, dialect)[0].Operator.Should().Be(op);
+    }
+
+    [Fact]
+    public void EveryProfile_IsClassifiedForTheLikeGate()
+    {
+        // A guard on the two lists, so a new profile cannot skip the decision. Without this,
+        // adding a sixth dialect would be covered by neither and go unasserted.
+        var classified = CaseSensitiveLikeProfiles
+            .Concat(CollationDependentLikeProfiles)
+            .ToHashSet();
+
+        classified.Should().BeEquivalentTo(EveryProfile);
+        // Disjoint: a profile is one or the other, never both.
+        CaseSensitiveLikeProfiles.Should().NotIntersectWith(CollationDependentLikeProfiles);
+    }
+
+    [Fact]
+    public void TheDefaultProfile_DeclinesTheLikeOperator()
+    {
+        // An omitted dialect selects Ansi, which promises no collation. Worth pinning
+        // separately: the default is what an integrator gets without thinking about it, and it
+        // is the conservative answer here.
+        CollationDependentLikeProfiles.Should().Contain(SqlDialect.Ansi);
+
+        new SqlQueryRewriter()
+            .BuildWhereClause(new[] { new RowFilter("name", FilterOperator.NotLike, "alice%") })
+            .Should().BeEmpty();
+    }
+
+    [Theory]
+    [MemberData(nameof(CollationDependentLikeGrid))]
+    public void NoCollateClauseOrBinary_IsEverEmitted(SqlDialect dialect, FilterOperator op)
+    {
+        // "... LIKE 'alice%' COLLATE utf8mb4_0900_as_cs" and "BINARY ..." both force
+        // case-sensitivity on MySQL, so this IS technically emittable. It is deliberately not
+        // emitted: the right collation name depends on the column's character set, which a
+        // rewriter holding only a policy and a query string does not know, and guessing wrong
+        // either fails the query or silently changes the comparison again.
+        var result = _rewriter.RewriteQuery(
+            "SELECT id, name FROM patients", LikePolicy(op), dialect);
+
+        result.Should().NotContainEquivalentOf("COLLATE");
+        result.Should().NotContainEquivalentOf("BINARY");
+    }
+
+    [Theory]
+    [InlineData(SqlDialect.MySql, "`region`")]
+    [InlineData(SqlDialect.SqlServer, "[region]")]
+    [InlineData(SqlDialect.Ansi, "\"region\"")]
+    public void DecliningLike_DoesNotDeclineTheOtherOperators(
+        SqlDialect dialect, string quotedColumn)
+    {
+        // The gate is on like/notLike alone. Every other operator stays pushable under every
+        // profile, which is what keeps the connector-spec claim that a profile choice is
+        // otherwise a text choice.
+        var like = new RowFilter("name", FilterOperator.Like, Value: "alice%");
+        var policy = Policy(rowFilters:
+            [new("region", FilterOperator.Equals, Value: "us-east"), like]);
+
+        var result = _rewriter.RewriteQuery("SELECT id FROM patients", policy, dialect);
+
+        result.Should().Be($"SELECT id FROM patients WHERE {quotedColumn} = 'us-east'");
+        result.Should().NotContainEquivalentOf("LIKE");
+        _rewriter.UnpushableFilters(policy, dialect).Should().BeEquivalentTo(new[] { like });
+    }
 }

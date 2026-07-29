@@ -56,44 +56,89 @@ const GLOB_METACHARACTERS = /[.+^$(){}|[\]\\]/;
  *   collection `/api/v1/patients`).
  *
  * `**` is accepted but is now a plain alias for `*`: once `*` crosses everything
- * there is nothing left for a second star to widen. Runs of consecutive stars are
- * collapsed to one `.*` rather than emitted as several, which keeps the compiled
- * source free of the adjacent-quantifier shapes that backtrack badly. Patterns in
- * the wild that spell `**` therefore keep working and mean exactly what they did.
+ * there is nothing left for a second star to widen. Runs of consecutive stars
+ * collapse to one wildcard, so patterns in the wild that spell `**` keep working and
+ * mean exactly what they did.
  *
  * Mirrors Python's `_pattern_matches` (`fnmatchcase` over pre-lowered strings) and
  * .NET's `EnforcementEngine.GlobMatch` (`Regex.Escape` + `\* -> .*`,
  * `RegexOptions.IgnoreCase`). Python's choice of `fnmatchcase` over `fnmatch` is
  * itself deliberate: `fnmatch` applies `os.path.normcase`, which made the same
  * signed policy decide differently on Windows than on Linux.
+ *
+ * Compiled in the ReDoS-resistant shape described on {@link atomicWildcard} rather
+ * than as a naive run of `.*`, so a pattern with many wildcards cannot stall the
+ * result pass (spec §7).
  */
 export function globToRegex(pattern: string): RegExp {
-  let regex = "";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "*") {
-      // Collapse `*`, `**`, `***`… to a single `.*`. `**` is a historical alias:
-      // `*` already crosses every separator, so a second star adds nothing.
-      while (pattern[i] === "*") i++;
-      regex += ".*";
-      continue;
-    }
+  // Split on runs of `*`, so `a**b` and `a*b` yield the same segments. Each segment
+  // is glob-literal text (`?` and escapable metacharacters only); every wildcard
+  // lives in the joins between them.
+  const segments = pattern
+    .split(/\*+/)
+    .map((segment) => literalToRegex(segment));
+
+  let regex = segments[0];
+  for (let i = 1; i < segments.length; i++) {
+    // Only the final wildcard may be greedy-and-backtrackable: by then the anchor
+    // `$` bounds it. See {@link atomicWildcard}.
+    regex +=
+      i < segments.length - 1
+        ? atomicWildcard(i, segments[i])
+        : `[\\s\\S]*${segments[i]}`;
+  }
+
+  // `i`: case-insensitive (§3.1). The wildcard is spelled `[\s\S]` rather than `.`
+  // so it spans a newline without needing the `s` flag, which is what Python's
+  // `(?s:…)` wrapper achieves.
+  return new RegExp("^" + regex + "$", "i");
+}
+
+/** Compile one glob-literal segment: `?` becomes any single character. */
+function literalToRegex(segment: string): string {
+  let out = "";
+  for (const ch of segment) {
     if (ch === "?") {
       // One character, separators included, matching Python's `?` -> `.` under
       // `(?s:…)`. `[^/]` would have made `?` the only enforcement wildcard that
       // still respected a path boundary.
-      regex += ".";
+      out += "[\\s\\S]";
     } else if (GLOB_METACHARACTERS.test(ch)) {
-      regex += "\\" + ch;
+      out += "\\" + ch;
     } else {
-      regex += ch;
+      out += ch;
     }
-    i++;
   }
-  // `i`: case-insensitive (§3.1). `s`: `.` spans a newline, so `*` crosses one too,
-  // which is what Python's `(?s:…)` wrapper does.
-  return new RegExp("^" + regex + "$", "is");
+  return out;
+}
+
+/**
+ * A non-final `*` followed by its trailing literal, as an atomic group.
+ *
+ * A naive translation emits one `[\s\S]*` per wildcard, and adjacent unbounded
+ * quantifiers backtrack catastrophically: measured, `*a*a*a*a*a*a*a*a*a*a*b` against
+ * 200 `a`s took **90 seconds** to return false, and JavaScript's RegExp has no
+ * evaluation timeout to cut it short. A policy is signed but its patterns are still
+ * author-supplied, and one such pattern would stall a whole tool call (spec §7).
+ *
+ * Glob matching never needs to reconsider a wildcard once its following literal has
+ * been found — there is no alternation or backreference for a later choice to depend
+ * on — so each wildcard can commit. That is exactly what CPython's
+ * `fnmatch.translate` emits (`(?>.*?a)` per wildcard, atomic groups), and it is why
+ * Python returns the same false answer in under a millisecond. JavaScript has no
+ * `(?>…)`, so the standard lookahead-plus-backreference emulation is used:
+ * `(?=(?<g>…))\k<g>` matches the group inside a lookahead, which cannot be
+ * re-entered, then consumes exactly what it captured.
+ *
+ * The trailing literal is pulled inside the group because that is what gives the
+ * lazy wildcard something to stop at; a bare atomic `[\s\S]*?` would commit to
+ * matching nothing.
+ *
+ * @param index - Distinguishes this group's name from the other wildcards' in the
+ *   same pattern. Group names must be unique within one RegExp.
+ */
+function atomicWildcard(index: number, trailingLiteral: string): string {
+  return `(?=(?<w${index}>[\\s\\S]*?${trailingLiteral}))\\k<w${index}>`;
 }
 
 /**

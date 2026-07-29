@@ -634,9 +634,20 @@ class TestInjectionResistance:
             RowFilter(field="r", operator=FilterOperator.not_in, values=["a", None])
         ) is None
 
-    def test_a_like_pattern_carrying_a_backslash_is_refused(self) -> None:
+    @pytest.mark.parametrize("dialect", CASE_SENSITIVE_LIKE_DIALECTS)
+    def test_a_like_pattern_carrying_a_backslash_is_refused(
+        self, dialect: SqlDialect
+    ) -> None:
+        """Two independent refusals stack, and this pins the literal one.
+
+        A case-sensitive dialect is named so the *collation* gate does not decline
+        first: under ``ansi`` the operator is refused before the pattern is looked
+        at, which would make this assertion pass without exercising the backslash
+        refusal at all.
+        """
         assert build_condition(
-            RowFilter(field="r", operator=FilterOperator.like, value=r"a\%b")
+            RowFilter(field="r", operator=FilterOperator.like, value=r"a\%b"),
+            dialect=dialect,
         ) is None
 
     def test_an_injected_value_does_not_alter_the_statement_structure(self) -> None:

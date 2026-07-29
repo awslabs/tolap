@@ -41,6 +41,14 @@ namespace Tolap.Core.Tests;
 /// Neither was a dialect bug. Both were found only because parity was asserted across SDKs on a
 /// shared corpus.
 /// </para>
+/// <para>
+/// There are two corpora here, and both must agree across SDKs: <see cref="ParityCorpus"/>
+/// fixes the emitted SQL text, and <see cref="UnpushableParityCorpus"/> fixes how many filters
+/// each SDK reports as unpushable. The second exists because <c>like</c>/<c>notLike</c> are
+/// <i>declined</i> on the profiles whose collation could make <c>LIKE</c> case-insensitive, and
+/// a decline is only correct if it is also reported — text parity alone cannot tell "not pushed,
+/// and the post pass is carrying it" apart from "silently dropped".
+/// </para>
 /// </remarks>
 public class SqlDialectParityTests
 {

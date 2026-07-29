@@ -312,3 +312,45 @@ describe("spec §3.1: `sourcePatterns` matching still does NOT cross `:`", () =>
     expect(sourcePatternMatch("db:production:*", "db:staging:patients")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// ReDoS
+// ---------------------------------------------------------------------------
+
+describe("spec §7: a multi-wildcard pattern cannot stall the result pass", () => {
+  // Widening `*` to cross every separator turns each wildcard into an unbounded
+  // quantifier, and a run of adjacent unbounded quantifiers backtracks
+  // catastrophically. Measured on the naive translation, this exact pattern took 90
+  // SECONDS to return false -- and JavaScript's RegExp has no evaluation timeout to
+  // cut it short, so it would have stalled the whole tool call. Python returns the
+  // same answer in under a millisecond because `fnmatch.translate` emits atomic
+  // groups; `globToRegex` now emulates them. A wall-clock budget is the only way to
+  // assert this: a correctness-only test passes either way, after a 90s wait.
+  const HOSTILE = "*a*a*a*a*a*a*a*a*a*a*b";
+
+  it("declines a hostile pattern promptly rather than backtracking", () => {
+    const subject = "a".repeat(3000);
+    const started = Date.now();
+    expect(globMatch(HOSTILE, subject)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("still matches correctly, so the guard is not just declining everything", () => {
+    // Same pattern, a subject that genuinely satisfies it.
+    expect(globMatch(HOSTILE, "aaaaaaaaaab")).toBe(true);
+    expect(globMatch(HOSTILE, "xaxaxaxaxaxaxaxaxaxaxab")).toBe(true);
+    // A long subject that does end in `b` matches, and just as promptly.
+    const started = Date.now();
+    expect(globMatch(HOSTILE, "a".repeat(3000) + "b")).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("the atomic-group emulation does not change ordinary matching", () => {
+    // Multiple wildcards in a realistic pattern still behave as globs.
+    expect(globMatch("/api/*/patients/*", "/api/v1/patients/123")).toBe(true);
+    expect(globMatch("/api/*/patients/*", "/api/v1/v2/patients/123/labs")).toBe(true);
+    expect(globMatch("/api/*/patients/*", "/api/v1/encounters/123")).toBe(false);
+    expect(globMatch("*/public/*", "exports/public/deep/a.csv")).toBe(true);
+    expect(globMatch("*/public/*", "exports/private/a.csv")).toBe(false);
+  });
+});
