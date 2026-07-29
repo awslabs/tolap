@@ -418,6 +418,7 @@ full list of what TOLAP does not guarantee.
 - [Canonical Enforcement Spec](docs/canonical-enforcement-spec.md) -- Normative cross-language behavior: canonical signing, enforcement pipeline order, fail-closed rules
 - [Connector Spec](docs/connector-spec.md) -- Normative per-category behavior: which policy fields apply to `db` / `api` / `kb` / `storage`, what an object and a record mean for each, and which fields are advisory rather than enforced
 - [Local Testing](docs/local-testing.md) -- Running the suites against live Postgres/MySQL and the test API server
+- [Next Steps](docs/NEXT-STEPS.md) -- Current task plan: open items, decisions awaiting an owner, and the verified test baseline
 - Implementation Guides:
   - [.NET / C#](docs/implementation-guide-dotnet.md)
   - [Python](docs/implementation-guide-python.md)
