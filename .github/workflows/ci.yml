@@ -61,10 +61,11 @@ jobs:
     steps:
       # Action majors are kept on the Node 24 runtime. GitHub deprecated Node 20 for
       # actions (2025-09-19) and now force-runs Node-20 actions on 24, which is a
-      # warning today and a breakage whenever the shim is withdrawn. Dependabot's
-      # github-actions ecosystem is configured, so these stay current on their own;
-      # the point of naming it here is that a future bump is routine rather than a
-      # thing to be puzzled over.
+      # warning today and a breakage whenever the shim is withdrawn.
+      #
+      # These are bumped BY HAND. There is no Dependabot config in this repository, so
+      # nothing watches them: when a run starts warning about a deprecated runtime, or
+      # an action's major goes stale, someone has to raise the pins here.
       - uses: actions/checkout@v5
 
       # Pinned to the versions the SDKs target: net9.0, requires-python >=3.10 (run
