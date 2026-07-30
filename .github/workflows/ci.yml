@@ -59,19 +59,31 @@ jobs:
       TOLAP_TEST_MYSQL_PASSWORD: mysql
       TOLAP_TEST_MYSQL_DB: tolap_integration_test
     steps:
-      - uses: actions/checkout@v4
+      # Action majors are kept on the Node 24 runtime. GitHub deprecated Node 20 for
+      # actions (2025-09-19) and now force-runs Node-20 actions on 24, which is a
+      # warning today and a breakage whenever the shim is withdrawn.
+      #
+      # These are bumped BY HAND. There is no Dependabot config in this repository, so
+      # nothing watches them: when a run starts warning about a deprecated runtime, or
+      # an action's major goes stale, someone has to raise the pins here.
+      - uses: actions/checkout@v5
 
       # Pinned to the versions the SDKs target: net9.0, requires-python >=3.10 (run
       # on current), Node 18+ (run on current LTS). The dropped 3.10/3.13 and
       # 20/22 matrices tested the language runtimes, not this code; a single current
       # version per language catches the regressions this suite exists to catch.
-      - uses: actions/setup-dotnet@v4
+      #
+      # Note the two different things called a Node version here: `node-version: 22`
+      # is the runtime the TypeScript SUITE runs under, chosen because the SDK targets
+      # Node 18+. The action's own runtime is a separate concern, decided by the action
+      # major above.
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '9.0.x'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
@@ -102,19 +114,30 @@ jobs:
       - name: TypeScript install
         working-directory: sdk/typescript
         run: npm ci
+      # MUST precede the typecheck, not follow it. `store` and `mcp` resolve
+      # @tolap/core through packages/core/dist, so on a fresh clone — where dist/ does
+      # not exist yet — typechecking them first fails with TS6305 ("has not been built
+      # from source file") plus a cascade of TS7006 implicit-any errors, because the
+      # callback parameter types come from core's .d.ts. This ran green locally only
+      # because a developer's dist/ is already built from earlier work; CI starts from
+      # nothing, which is exactly the case the ordering has to satisfy.
+      - name: TypeScript build core (store and mcp resolve @tolap/core from dist)
+        working-directory: sdk/typescript/packages/core
+        run: npx tsc -p tsconfig.json
+
       - name: TypeScript typecheck
         working-directory: sdk/typescript
         run: |
+          fail=0
           for pkg in core store mcp; do
             echo "::group::tsc @tolap/$pkg"
-            # mcp resolves @tolap/core through packages/core/dist, so core must be
-            # built before the mcp typecheck and tests run against a fresh build.
-            (cd "packages/$pkg" && npx tsc --noEmit)
+            # Not `set -e`-dependent: a subshell failure inside a loop would otherwise
+            # abort at the first package and hide the rest, and knowing whether one or
+            # all three are broken is the difference between a typo and a bad build.
+            (cd "packages/$pkg" && npx tsc --noEmit) || fail=1
             echo "::endgroup::"
           done
-      - name: TypeScript build core (mcp resolves @tolap/core from dist)
-        working-directory: sdk/typescript/packages/core
-        run: npx tsc -p tsconfig.json
+          exit $fail
       - name: TypeScript test
         working-directory: sdk/typescript
         run: |

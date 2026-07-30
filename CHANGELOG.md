@@ -218,8 +218,8 @@ untagged records.
   containers, so the database integration tests actually execute rather than
   skipping — plus a dedicated cross-SDK conformance job that verifies all three
   SDKs produce identical canonical signing bytes, and a guard that fails if a
-  known-answer fixture ever loses its expected values. Also adds Dependabot and a
-  pull-request template with a cross-SDK parity checklist.
+  known-answer fixture ever loses its expected values. Also adds a pull-request
+  template with a cross-SDK parity checklist.
 - **`fixtures/signing/hmac-sha256-subsecond.json`** — known-answer fixture with
   microsecond input timestamps, pinning the millisecond-truncation rule.
 - **`tolap_core.enforcement.apply_row_filters`** — runtime application of
