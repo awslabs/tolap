@@ -71,7 +71,12 @@ is not an error, and it is not protection.
 | `limits.minSimilarityScore` | ➖ | ➖ | ✅ | ➖ |
 | `limits.maxObjectSizeBytes` | ➖ | ➖ | ➖ | ✅ |
 
-✅ enforced · ➖ not applicable
+✅ enforced · ⚠️ enforced only under a condition named in the category's section · ➖ not
+applicable
+
+No cell means "parsed but ignored" — see §9. A ⚠️ is a *conditional*, not an advisory: the
+field is enforced when the condition holds, and the condition is stated in the category's own
+section (`api` object rules, §6; `storage` tag rules, §8).
 
 ## 3. Shared semantics
 
@@ -572,6 +577,21 @@ and records the request in the provider's audit log as though it were authorized
   closed: an entry whose size cannot be established is dropped.
 - **There are no file-type rules.** TOLAP has no `fileTypes` field. Restrict extensions with
   globs: `hiddenObjects: ["*.bak", "*.sql"]`.
+- **`tagRules` enforcement depends on the listing carrying tags** — this is the condition
+  behind its ⚠️ in the §2 matrix. Tag filtering reads the tags present on each entry handed
+  to the pipeline, and most object stores do not return them from a list call: S3's
+  `ListObjectsV2` omits tags entirely, and they require a separate `GetObjectTagging` per
+  key. The consequence is asymmetric, and both halves are the fail-closed reading:
+
+  | Policy | Untagged listing entry |
+  | --- | --- |
+  | `deniedTags` only | **kept** — it matches no denied tag, so dropping it would enforce a restriction the policy never stated |
+  | `allowedTags` set | **dropped** — classification that cannot be established cannot be shown permitted (§7) |
+
+  So an `allowedTags` policy over a bare listing hides **everything**, which is safe but
+  useless. An implementation that means to enforce tags on `storage` MUST enrich entries with
+  their tags before the pipeline runs; one that cannot MUST NOT present `allowedTags` as a
+  working control for this category.
 - **Prefix globs descend arbitrarily** (§3.1). `exports/public/*` reaches
   `exports/public/sub/deep.csv`.
 
