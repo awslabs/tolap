@@ -15,7 +15,59 @@ from __future__ import annotations
 import re
 import sys
 from collections import defaultdict
-import xml.etree.ElementTree as ET
+
+# Entity declarations are refused when parsing, and it is worth being precise about
+# what that does and does not buy, because a security scanner flags this file for XXE
+# (CWE-611) and that is not the real exposure.
+#
+# Measured, not assumed: CPython's ElementTree already refuses *external* entities --
+# a `<!ENTITY xxe SYSTEM "file:///...">` payload raises "undefined entity" and leaks
+# nothing. So the file-disclosure reading of the finding does not hold.
+#
+# What ElementTree does NOT stop is entity *expansion*. A four-line billion-laughs
+# document expanded to 30,000 characters here, and grows without bound as nesting
+# deepens. Refusing entity declarations outright closes that, and covers the external
+# case too.
+#
+# Why bother at all, given the input is a cobertura report this repository's own
+# coverage.sh generated seconds earlier and this script ships in no package: the trust
+# argument is a property of today's caller, not of the code. Point it at a report
+# downloaded from a CI artifact or a fork's build and the parser is what decides
+# whether that is safe. defusedxml would be the conventional answer; it is avoided so
+# this keeps working with a bare Python 3 and no pip install, which is the point of a
+# developer helper.
+#
+# The suppressions below are for a rule that matches the *import*, so it fires however
+# the parser is configured -- it cannot see that entity handling is disabled in
+# _safe_parse. Suppressed with the reason recorded rather than left to recur, since a
+# scan whose output is routinely ignored stops being read at all. ElementTree is still
+# used for its TreeBuilder and the element API; only parsing is replaced.
+import xml.etree.ElementTree as ET  # nosemgrep: use-defused-xml, use-defused-xml-parse
+from xml.parsers import expat  # nosemgrep: use-defused-xml, use-defused-xml-parse
+
+
+def _safe_parse(path: str) -> "ET.ElementTree":
+    """Parse an XML file with entity handling disabled."""
+
+    class _NoEntityParser:
+        def __init__(self) -> None:
+            self._parser = expat.ParserCreate()
+            self._parser.EntityDeclHandler = self._reject_entity
+            self._target = ET.TreeBuilder()
+            self._parser.StartElementHandler = self._target.start
+            self._parser.EndElementHandler = lambda tag: self._target.end(tag)
+            self._parser.CharacterDataHandler = self._target.data
+
+        @staticmethod
+        def _reject_entity(*_args: object) -> None:
+            raise ValueError("entity declarations are refused when parsing coverage XML")
+
+        def parse(self, source: str) -> "ET.ElementTree":
+            with open(source, "rb") as handle:
+                self._parser.ParseFile(handle)
+            return ET.ElementTree(self._target.close())
+
+    return _NoEntityParser().parse(path)
 
 SHIPPED = ("Tolap.Core", "Tolap.Store", "Tolap.Mcp")
 
@@ -33,7 +85,7 @@ def normalize(filename: str) -> str:
 
 
 def main(path: str) -> int:
-    root = ET.parse(path).getroot()
+    root = _safe_parse(path).getroot()
 
     # Reports rooted at src/<Project>/ carry bare filenames, so recover the
     # project from the <source> element when the filename does not carry it.
