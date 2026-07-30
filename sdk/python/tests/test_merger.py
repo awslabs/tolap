@@ -26,7 +26,6 @@ class TestMerger:
         result = merge([])
         assert result.source_profiles == []
         assert result.permissions.can_query is False
-        assert result.permissions.can_export is False
         assert result.permissions.read_only is True
 
     def test_single_policy_passthrough(self) -> None:
@@ -40,7 +39,6 @@ class TestMerger:
 
         assert result.source_profiles == expected["sourceProfiles"]
         assert result.permissions.can_query == expected["permissions"]["canQuery"]
-        assert result.permissions.can_export == expected["permissions"]["canExport"]
         assert result.permissions.read_only == expected["permissions"]["readOnly"]
 
         exp_obj = expected["objectRules"]
@@ -59,7 +57,6 @@ class TestMerger:
 
         assert result.limits is not None
         assert result.limits.max_results == expected["limits"]["maxResults"]
-        assert result.limits.max_query_time_seconds == expected["limits"]["maxQueryTimeSeconds"]
         assert result.limits.min_similarity_score == expected["limits"]["minSimilarityScore"]
         assert result.limits.max_object_size_bytes == expected["limits"]["maxObjectSizeBytes"]
 
@@ -73,7 +70,6 @@ class TestMerger:
         expected = data["expected"]
 
         assert result.permissions.can_query == expected["permissions"]["canQuery"]
-        assert result.permissions.can_export == expected["permissions"]["canExport"]
         assert result.permissions.read_only == expected["permissions"]["readOnly"]
 
     def test_intersection_allowed_fields(self) -> None:
@@ -86,7 +82,6 @@ class TestMerger:
         expected = data["expected"]
 
         assert result.permissions.can_query == expected["permissions"]["canQuery"]
-        assert result.permissions.can_export == expected["permissions"]["canExport"]
         assert result.permissions.read_only == expected["permissions"]["readOnly"]
 
         exp_obj = expected["objectRules"]
@@ -169,6 +164,5 @@ class TestMerger:
         exp_limits = expected["limits"]
         assert result.limits is not None
         assert result.limits.max_results == exp_limits["maxResults"]
-        assert result.limits.max_query_time_seconds == exp_limits["maxQueryTimeSeconds"]
         assert result.limits.min_similarity_score == exp_limits["minSimilarityScore"]
         assert result.limits.max_object_size_bytes == exp_limits["maxObjectSizeBytes"]

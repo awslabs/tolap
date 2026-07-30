@@ -60,7 +60,6 @@ FULL_WRITE = _policy(
         can_insert=True,
         can_update=True,
         can_delete=True,
-        can_export=False,
         read_only=False,
     ),
     ObjectRules(
@@ -87,7 +86,6 @@ READ_ONLY_CEILING = _policy(
         can_insert=True,
         can_update=True,
         can_delete=True,
-        can_export=False,
         read_only=True,
     )
 )
@@ -96,7 +94,7 @@ READ_ONLY_CEILING = _policy(
 #: filters, so the row check has nothing to verify and must not deny.
 ALLOW_LIST = _policy(
     PolicyPermissions(
-        can_query=True, can_insert=True, can_update=True, can_export=False, read_only=False
+        can_query=True, can_insert=True, can_update=True, read_only=False
     ),
     ObjectRules(field_rules=FieldRules(allowed_fields=["full_name", "status"])),
 )
@@ -104,14 +102,14 @@ ALLOW_LIST = _policy(
 #: An EMPTY allowedFields, which denies every field (canonical spec section 3) rather
 #: than lifting the restriction. The most restrictive possible field rule.
 EMPTY_ALLOW_LIST = _policy(
-    PolicyPermissions(can_query=True, can_insert=True, can_export=False, read_only=False),
+    PolicyPermissions(can_query=True, can_insert=True, read_only=False),
     ObjectRules(field_rules=FieldRules(allowed_fields=[])),
 )
 
 #: canInsert without canUpdate, so an upsert -- which needs both -- is denied on the
 #: half it lacks (connector spec section 8's safe intersection).
 INSERT_ONLY = _policy(
-    PolicyPermissions(can_query=True, can_insert=True, can_export=False, read_only=False)
+    PolicyPermissions(can_query=True, can_insert=True, read_only=False)
 )
 
 POLICIES: dict[str, EffectivePolicy] = {

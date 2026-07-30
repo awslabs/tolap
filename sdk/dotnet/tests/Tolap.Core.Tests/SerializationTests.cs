@@ -34,7 +34,6 @@ public class SerializationTests
         policy.Name.Should().Be("healthcare-analyst-db");
         policy.Priority.Should().Be(10);
         policy.Permissions.CanQuery.Should().BeTrue();
-        policy.Permissions.CanExport.Should().BeFalse();
         policy.Permissions.ReadOnly.Should().BeTrue();
         policy.SourcePatterns.Should().Contain("db:production:patient_*");
         policy.ObjectRules.Should().NotBeNull();
@@ -48,7 +47,6 @@ public class SerializationTests
         policy.ObjectRules.RowFilters.Should().HaveCount(2);
         policy.Limits.Should().NotBeNull();
         policy.Limits!.MaxResults.Should().Be(5000);
-        policy.Limits.MaxQueryTimeSeconds.Should().Be(30);
     }
 
     [Fact]
@@ -81,7 +79,6 @@ public class SerializationTests
         var policy = FixtureHelper.ReadFixtureAs<PolicyDefinition>("policies/storage-analyst.json");
 
         policy.Name.Should().Be("data-lake-analyst");
-        policy.Permissions.CanExport.Should().BeTrue();
         policy.Limits!.MaxObjectSizeBytes.Should().Be(104857600);
     }
 

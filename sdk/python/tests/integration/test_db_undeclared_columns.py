@@ -51,7 +51,7 @@ def _policy(
         user_id="scenario-user",
         tenant_id="scenario-tenant",
         source_profiles=["undeclared-columns"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=ObjectRules(field_rules=field_rules, row_filters=row_filters),
         limits=limits,
     )

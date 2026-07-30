@@ -22,7 +22,7 @@ def _make_policy(name: str, can_query: bool = True) -> PolicyDefinition:
     return PolicyDefinition(
         version="1.0",
         name=name,
-        permissions=PolicyPermissions(can_query=can_query, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=can_query, read_only=True),
     )
 
 
@@ -129,7 +129,7 @@ class TestInMemoryPolicyStore:
         policy = PolicyDefinition(
             version="1.0",
             name="analyst-policy",
-            permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+            permissions=PolicyPermissions(can_query=True, read_only=True),
             priority=10,
             object_rules=ObjectRules(allowed_objects=["patients", "encounters"]),
             limits=PolicyLimits(max_results=1000),

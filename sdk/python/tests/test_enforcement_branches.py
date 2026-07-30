@@ -83,7 +83,7 @@ def _policy(
         user_id="u",
         tenant_id="t",
         source_profiles=["branches"],
-        permissions=PolicyPermissions(can_query=can_query, can_export=False, read_only=read_only),
+        permissions=PolicyPermissions(can_query=can_query, read_only=read_only),
         object_rules=object_rules,
         limits=limits,
     )
@@ -1424,14 +1424,6 @@ class TestMergerBranches:
         )
 
         assert merge([silent, explicit]).permissions.read_only is True
-
-    def test_absent_can_export_defaults_to_false(self) -> None:
-        silent = self._definition("silent", permissions=PolicyPermissions(can_query=True))
-        permissive = self._definition(
-            "permissive", permissions=PolicyPermissions(can_query=True, can_export=True)
-        )
-
-        assert merge([silent, permissive]).permissions.can_export is False
 
     def test_can_query_folds_with_and(self) -> None:
         allow = self._definition("allow", permissions=PolicyPermissions(can_query=True))

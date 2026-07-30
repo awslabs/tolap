@@ -123,7 +123,7 @@ def _policy(spec: str) -> EffectivePolicy:
         user_id="u",
         tenant_id="t",
         source_profiles=["parity"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=ObjectRules(field_rules=field_rules, row_filters=row_filters)
         if has_object_rules
         else None,

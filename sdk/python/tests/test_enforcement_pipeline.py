@@ -69,7 +69,7 @@ def _policy(
         user_id="user-001",
         tenant_id="tenant-001",
         source_profiles=["pipeline-test"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=object_rules,
         limits=PolicyLimits(max_results=max_results) if max_results is not None else None,
     )

@@ -5,7 +5,7 @@
       "version": "1.0",
       "name": "policy-a",
       "priority": 10,
-      "permissions": { "canQuery": true, "canExport": true, "readOnly": false },
+      "permissions": { "canQuery": true, "readOnly": false },
       "objectRules": {
         "allowedObjects": ["patients", "encounters", "medications"],
         "fieldRules": {
@@ -18,7 +18,7 @@
       "version": "1.0",
       "name": "policy-b",
       "priority": 20,
-      "permissions": { "canQuery": true, "canExport": false, "readOnly": true },
+      "permissions": { "canQuery": true, "readOnly": true },
       "objectRules": {
         "allowedObjects": ["patients", "diagnoses", "medications"],
         "fieldRules": {
@@ -30,7 +30,7 @@
   ],
   "expected": {
     "sourceProfiles": ["policy-a", "policy-b"],
-    "permissions": { "canQuery": true, "canExport": false, "readOnly": true },
+    "permissions": { "canQuery": true, "readOnly": true },
     "objectRules": {
       "allowedObjects": ["patients", "medications"],
       "fieldRules": {

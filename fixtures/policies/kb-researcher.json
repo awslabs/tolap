@@ -7,7 +7,6 @@
   "sourcePatterns": ["kb:research:*", "kb:clinical:*"],
   "permissions": {
     "canQuery": true,
-    "canExport": false,
     "readOnly": true
   },
   "objectRules": {

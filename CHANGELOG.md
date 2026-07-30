@@ -134,9 +134,80 @@ untagged records.
 - **Mask restrictiveness ordering changed** (see above). Policies that relied on
   `partial`/`hash` winning a merge against `null`/`redact` will now resolve to
   the stricter mask.
+- **Enforcement globs define `?` and treat bracket expressions as literal.** `*` and
+  `?` are the only metacharacters (`?` matches exactly one character); `[abc]` and
+  every other character are literal (connector-spec §3.1). This closes a cross-SDK
+  divergence: `?` was a wildcard in Python and TypeScript but a literal in .NET, and
+  `[abc]` was a character class in Python (via `fnmatch`) but literal in the other
+  two — so a single signed `allowedObjects` entry granted different access per
+  language. Literal brackets are the fail-closed reading, matching strictly fewer
+  names than a character class would. Pinned by a shared cross-SDK fixture.
+
+### Changed
+
+- **Endpoint denial-reason precedence is now specified** (connector-spec §3.3).
+  The reason string is contract, so which one wins when a request fails several
+  checks has to be fixed rather than incidental: reasons are evaluated in a stated
+  order and the first to deny is returned. In particular, because endpoint matching
+  is case-insensitive, a path differing from an `allowedEndpoints` entry only by
+  case matches the allow-list and is then judged on its method — so a denied method
+  reports `method not allowed`, not `endpoint not in allowed set`. All three SDKs
+  already behaved this way; the order is now documented and pinned by the cross-SDK
+  endpoint parity corpus.
 
 ### Added
 
+- **Secure Tool Factory** (`SecureToolFactory`) in all three SDKs — the composition root
+  `architecture.md` §5 documented but no SDK implemented. An agent receives its tools from
+  the factory and never constructs one, which is what makes §4's "the wrapper is the only
+  path to the source" structural rather than a convention every call site must remember.
+  It validates the signed context and then **refuses to produce a tool at all** when the
+  context is forged, expired, policy-less, names an unparseable source, or has `canQuery`
+  false — failing at composition time rather than handing back a wrapper that denies every
+  call, which a caller can misread as a transient error and retry.
+
+  Dispatch reads the **signed** category (the first segment of `sourceConnectionId`, §1):
+  `db`/`kb`/`storage` get the record-shaped wrapper, `api` gets the HTTP wrapper. Taking
+  the category from unsigned configuration instead would let a flipped `db` → `api` select
+  the wrapper that enforces the *other* category's rules, and `endpointRules` do not
+  constrain a SQL query.
+
+  Two things it deliberately does **not** do, both departures from the reference
+  implementation and from earlier drafts of the guides: it brokers **no credentials** (the
+  SDK never holds a connection — the record wrapper returns rewritten SQL and the HTTP
+  wrapper is handed its client, so nothing on the enforcement path takes a secret), and it
+  stores **no context** (wrappers stay stateless and take the context per call; a context
+  held on a shared wrapper can outlive its request and be reused for the next caller, who
+  may be a different user). There is consequently no `setSecurityContext()`.
+- **Provider-side `kb` metadata filters** in all three SDKs — the pushdown connector-spec §7
+  says an SDK SHOULD emit, so `tagRules` is enforced *at the source* rather than only
+  post-retrieval. A provider-neutral builder (`buildKbFilter` / `build_kb_filter` /
+  `KbFilter.Build`) plus a renderer for each of six providers: Bedrock, OpenSearch,
+  Elasticsearch, Azure AI Search, Vertex AI Search, and pgvector. Only the Bedrock shape has
+  been exercised against the live service; the other five are written from published filter
+  grammar and report themselves as `fromGrammar`, because "looks right" is not the evidence
+  "observed to filter" is.
+
+  The pushdown is **structurally weaker** than the post-retrieval pass and is designed around
+  that: post-retrieval extraction reads tags from five key shapes at any depth, which no
+  provider filter can express. A filter that matches nothing therefore costs efficiency and
+  nothing else — the post pass is unconditional. The failure mode that *would* matter is the
+  reverse, so a rule that cannot be expressed exactly is reported in `unpushedRules` rather
+  than approximated, and the suites assert the property directly: everything the post pass
+  permits also survives the simulated provider filter.
+
+  Two cases are refused rather than approximated. `allowedTags: []` means deny-all, and no
+  portable metadata predicate expresses match-nothing — rendering it as a no-op would fail
+  open, so the result flags deny-all and the caller skips retrieval. A multi-key allow-list is
+  a disjunction across keys; ANDing a positive clause per key would drop permitted chunks, so
+  it is left to the post pass. Pinned by a shared cross-SDK fixture whose seven cases all
+  three SDKs render byte-identically.
+- **Source-identity parsing** (`parseSourceIdentity` / `parse_source_identity` /
+  `SourceIdentityParser`) — `category:namespace:name` per connector-spec §1, with the
+  category as a typed enum. Rejects a wrong segment count, an unknown category, and empty
+  segments; an empty namespace or name would otherwise let `db::` match a `db:*:*` pattern
+  while naming no real source. Returns null rather than throwing, and every caller in the
+  SDK treats null as a refusal.
 - **`docs/canonical-enforcement-spec.md`** — the normative cross-language
   specification for canonical signing, the enforcement pipeline and its order,
   null-vs-empty semantics, mask ranking, identity-failure semantics, timestamp

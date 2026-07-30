@@ -133,19 +133,10 @@ class TestPermissionMergeDefaults:
 
         assert merged.permissions.read_only is True, "writes were allowed by a policy that never granted them"
 
-    def test_absent_can_export_defaults_to_false_before_folding(self) -> None:
-        merged = merge([
-            _policy("a", permissions=PolicyPermissions(can_query=True)),
-            _policy("b", permissions=PolicyPermissions(can_query=True, can_export=True)),
-        ])
-
-        assert merged.permissions.can_export is False
-
     def test_all_policies_silent_yields_schema_defaults(self) -> None:
         merged = merge([_policy("a"), _policy("b")])
 
         assert merged.permissions.can_query is True
-        assert merged.permissions.can_export is False
         assert merged.permissions.read_only is True
 
     def test_read_only_false_everywhere_stays_false(self) -> None:
@@ -155,14 +146,6 @@ class TestPermissionMergeDefaults:
         ])
 
         assert merged.permissions.read_only is False
-
-    def test_can_export_true_everywhere_stays_true(self) -> None:
-        merged = merge([
-            _policy("a", permissions=PolicyPermissions(can_query=True, can_export=True)),
-            _policy("b", permissions=PolicyPermissions(can_query=True, can_export=True)),
-        ])
-
-        assert merged.permissions.can_export is True
 
     def test_can_query_false_still_wins(self) -> None:
         merged = merge([

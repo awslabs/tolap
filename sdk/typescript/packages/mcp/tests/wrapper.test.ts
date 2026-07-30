@@ -21,7 +21,6 @@ function createTestPolicy(overrides?: Partial<EffectivePolicy>): EffectivePolicy
     sourceProfiles: ["test-policy"],
     permissions: {
       canQuery: true,
-      canExport: false,
       readOnly: true,
     },
     integrity: { algorithm: "none", signature: "" },

@@ -9,13 +9,19 @@
  * behavior the canonical spec mandates; the socket is what makes the assertion
  * about the shipped code path rather than about the fixture.
  *
- * The server is started as a child process on a port distinct from the Python
- * suite's (8888). If it cannot bind or does not answer /healthz, every test here
- * skips rather than failing -- a missing local server is an environment gap, not
- * a policy regression.
+ * The server is started as a child process on a port the OS assigns (see
+ * `freePort`), not a hard-coded one. A fixed port is a machine-wide resource: this
+ * suite used to claim 8889, so a second copy of it or an orphan from a killed run
+ * could not bind, and the whole file then skipped while still reporting green.
+ *
+ * Only an absent dependency skips -- no python3, or no server.py. A server that
+ * should have started and did not throws, because a skip that reads as success is
+ * how a suite silently stops testing anything.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
+import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -33,19 +39,41 @@ import {
 } from "../../src/http-wrapper.js";
 
 const SIGNING_KEY = "live-http-api-key";
-const PORT = Number(process.env.TOLAP_TS_TEST_API_PORT ?? 8889);
-const BASE_URL = `http://127.0.0.1:${PORT}`;
 const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..", "..", "..");
 const SERVER = resolve(REPO_ROOT, "tools", "test-api", "server.py");
 
 let child: ChildProcess | undefined;
 let available = false;
-/** True when this process started the server and must therefore stop it. */
-let ownsServer = false;
+/** Set once the OS has assigned a port; the wrapper's base URL derives from it. */
+let baseUrl = "";
+
+/**
+ * Ask the OS for an unused loopback port by listening on port 0, then release it.
+ *
+ * Mirrors `_free_port()` in the Python suite's `test_live_http_api.py`. The port is
+ * released before the child claims it, so another process could in principle take it
+ * in between; the kernel does not reissue an ephemeral port that quickly, and a lost
+ * race now fails loudly instead of skipping.
+ */
+function freePort(): Promise<number> {
+  return new Promise((resolvePort, rejectPort) => {
+    const server = createServer();
+    server.once("error", rejectPort);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        server.close(() => rejectPort(new Error("could not read the assigned port")));
+        return;
+      }
+      const { port } = address;
+      server.close(() => resolvePort(port));
+    });
+  });
+}
 
 async function probe(): Promise<boolean> {
   try {
-    const response = await fetch(`${BASE_URL}/healthz`, {
+    const response = await fetch(`${baseUrl}/healthz`, {
       signal: AbortSignal.timeout(1000),
     });
     if (!response.ok) return false;
@@ -57,34 +85,48 @@ async function probe(): Promise<boolean> {
 }
 
 beforeAll(async () => {
-  // Reuse an already-running instance (a developer's, or a sibling suite's)
-  // rather than fighting it for the port.
-  if (await probe()) {
-    available = true;
-    return;
-  }
+  // A missing checkout of the server script is an absent dependency, like a missing
+  // python3: skip. Everything after this point is a real failure.
+  if (!existsSync(SERVER)) return;
 
-  child = spawn("python3", [SERVER, "--port", String(PORT)], {
+  const port = await freePort();
+  baseUrl = `http://127.0.0.1:${port}`;
+
+  // No probe for an already-running server: the port came from the OS moments ago,
+  // so anything answering on it is not ours.
+  child = spawn("python3", [SERVER, "--port", String(port)], {
     cwd: REPO_ROOT,
     stdio: "ignore",
   });
-  child.on("error", () => {
-    available = false;
+
+  // An absent python3 surfaces here as an `error` event rather than an exit code, and
+  // it is the one failure that legitimately skips.
+  let spawnError: Error | undefined;
+  child.on("error", (error) => {
+    spawnError = error;
   });
-  ownsServer = true;
 
   for (let attempt = 0; attempt < 40; attempt++) {
-    if (child.exitCode !== null) break; // died on startup (port in use, no python3)
+    if (spawnError !== undefined) return; // leaves `available` false -> tests skip
+    if (child.exitCode !== null) {
+      throw new Error(
+        `test API server exited with ${child.exitCode} on port ${port} before answering /healthz`,
+      );
+    }
     if (await probe()) {
       available = true;
       return;
     }
     await new Promise((r) => setTimeout(r, 100));
   }
+
+  throw new Error(
+    `test API server did not answer /healthz on port ${port} within 40 probes`,
+  );
 }, 20_000);
 
 afterAll(() => {
-  if (ownsServer && child && child.exitCode === null) child.kill("SIGTERM");
+  if (child && child.exitCode === null) child.kill("SIGTERM");
 });
 
 /**
@@ -128,7 +170,6 @@ function policy(
   limits?: EffectivePolicy["limits"],
   permissions: EffectivePolicy["permissions"] = {
     canQuery: true,
-    canExport: false,
     readOnly: true,
   },
 ): EffectivePolicy {
@@ -153,7 +194,7 @@ function signed(p: EffectivePolicy): SecurityContext {
 }
 
 function wrapper(): SecureHttpToolWrapper {
-  return new SecureHttpToolWrapper({ signingKey: SIGNING_KEY, baseUrl: BASE_URL }, liveFetch);
+  return new SecureHttpToolWrapper({ signingKey: SIGNING_KEY, baseUrl }, liveFetch);
 }
 
 /** Every test in this file needs the server; skip cleanly when it is absent. */
@@ -334,10 +375,10 @@ describe("spec §4: the HTTP body runs row filters and tag filters", () => {
     expect(body.results).toEqual([]);
   });
 
-  it("both limits leave the body alone when the policy sets neither", async (ctx) => {
+  it("a maxResults above the result count leaves the body alone", async (ctx) => {
     requireServer(ctx);
     const body = (await wrapper().request(
-      signed(policy(ALLOW_ALL_PATIENTS, { maxQueryTimeSeconds: 30 })),
+      signed(policy(ALLOW_ALL_PATIENTS, { maxResults: 100 })),
       { method: "GET", path: "/patients", collectionPath: "results" },
     )) as { results: unknown[] };
 
@@ -629,7 +670,7 @@ describe("request shaping over a real socket", () => {
         },
       },
       undefined,
-      { canQuery: true, canInsert: true, canExport: false, readOnly: false },
+      { canQuery: true, canInsert: true, readOnly: false },
     );
 
     const body = (await wrapper().request(signed(p), {
@@ -658,7 +699,7 @@ describe("request shaping over a real socket", () => {
         },
       },
       undefined,
-      { canQuery: true, canExport: false, readOnly: false },
+      { canQuery: true, readOnly: false },
     );
 
     await expect(
@@ -677,7 +718,7 @@ describe("request shaping over a real socket", () => {
     const p = policy(
       { endpointRules: { allowedEndpoints: ["/patients"], allowedMethods: ["GET"] } },
       undefined,
-      { canQuery: true, canExport: false, readOnly: false },
+      { canQuery: true, readOnly: false },
     );
 
     await expect(
@@ -919,7 +960,7 @@ describe("spec §6: redirects are re-validated, never followed blind", () => {
       };
     };
     const following = new SecureHttpToolWrapper(
-      { signingKey: SIGNING_KEY, baseUrl: BASE_URL },
+      { signingKey: SIGNING_KEY, baseUrl },
       followingFetch,
     );
 
@@ -931,7 +972,7 @@ describe("spec §6: redirects are re-validated, never followed blind", () => {
     ).rejects.toThrow(/transport followed a redirect that was not re-validated/);
 
     // The transport really does follow: used directly it lands on the audit log.
-    const direct = await fetch(`${BASE_URL}/redirect/302`);
+    const direct = await fetch(`${baseUrl}/redirect/302`);
     expect(new URL(direct.url).pathname).toBe("/admin/audit");
   });
 });

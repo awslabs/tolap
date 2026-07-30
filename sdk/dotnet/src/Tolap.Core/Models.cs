@@ -55,7 +55,6 @@ public sealed record EndpointRules(
 /// </summary>
 public sealed record PolicyLimits(
     int? MaxResults = null,
-    int? MaxQueryTimeSeconds = null,
     double? MinSimilarityScore = null,
     long? MaxObjectSizeBytes = null);
 
@@ -96,7 +95,6 @@ public sealed record PolicyPermissions(
     bool? CanInsert = null,
     bool? CanUpdate = null,
     bool? CanDelete = null,
-    bool CanExport = false,
     bool ReadOnly = true);
 
 /// <summary>
@@ -181,7 +179,7 @@ public sealed record EffectivePolicy(
         ResolvedAt: null,
         ExpiresAt: null,
         SourceProfiles: Array.Empty<string>(),
-        Permissions: new PolicyPermissions(CanQuery: false, CanExport: false, ReadOnly: true));
+        Permissions: new PolicyPermissions(CanQuery: false, ReadOnly: true));
 }
 
 /// <summary>

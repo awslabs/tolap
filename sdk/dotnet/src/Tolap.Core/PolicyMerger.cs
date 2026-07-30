@@ -11,16 +11,16 @@ public static class PolicyMerger
     /// <remarks>
     /// Merge rules:
     /// - Empty list returns DenyAll
-    /// - Permissions: AND for canQuery/canInsert/canUpdate/canDelete/canExport, OR for
+    /// - Permissions: AND for canQuery/canInsert/canUpdate/canDelete, OR for
     ///   readOnly. Absent booleans take their schema default first (canQuery true, the
-    ///   three write permissions and canExport false, readOnly true).
+    ///   three write permissions false, readOnly true).
     /// - AllowedObjects/AllowedFields/AllowedEndpoints/AllowedMethods/AllowedTags: Intersection (null = unrestricted)
     /// - HiddenObjects/HiddenFields/HiddenEndpoints/DeniedTags/ReadOnlyFields: Union
     /// - RowFilters: Concatenate all
     /// - MaskedFields: Group by field name, pick the most restrictive by disclosure
     ///   ranking (null &gt; redact &gt; full &gt; hash &gt; partial); an unknown mask type
     ///   ranks most restrictive
-    /// - Limits: Min for maxResults/maxQueryTimeSeconds/maxObjectSizeBytes, Max for minSimilarityScore
+    /// - Limits: Min for maxResults/maxObjectSizeBytes, Max for minSimilarityScore
     /// </remarks>
     public static EffectivePolicy Merge(IReadOnlyList<PolicyDefinition> policies)
     {
@@ -38,14 +38,12 @@ public static class PolicyMerger
         var canInsert = policies.All(p => p.Permissions.CanInsert == true);
         var canUpdate = policies.All(p => p.Permissions.CanUpdate == true);
         var canDelete = policies.All(p => p.Permissions.CanDelete == true);
-        var canExport = policies.All(p => p.Permissions.CanExport);
         var readOnly = policies.Any(p => p.Permissions.ReadOnly);
         var permissions = new PolicyPermissions(
             CanQuery: canQuery,
             CanInsert: canInsert,
             CanUpdate: canUpdate,
             CanDelete: canDelete,
-            CanExport: canExport,
             ReadOnly: readOnly);
 
         // Object rules
@@ -208,15 +206,14 @@ public static class PolicyMerger
             return null;
 
         int? maxResults = MinNullable(policies.Select(p => p.Limits?.MaxResults));
-        int? maxQueryTimeSeconds = MinNullable(policies.Select(p => p.Limits?.MaxQueryTimeSeconds));
         double? minSimilarityScore = MaxNullableDouble(policies.Select(p => p.Limits?.MinSimilarityScore));
         long? maxObjectSizeBytes = MinNullableLong(policies.Select(p => p.Limits?.MaxObjectSizeBytes));
 
-        if (maxResults is null && maxQueryTimeSeconds is null
+        if (maxResults is null
             && minSimilarityScore is null && maxObjectSizeBytes is null)
             return null;
 
-        return new PolicyLimits(maxResults, maxQueryTimeSeconds, minSimilarityScore, maxObjectSizeBytes);
+        return new PolicyLimits(maxResults, minSimilarityScore, maxObjectSizeBytes);
     }
 
     /// <summary>

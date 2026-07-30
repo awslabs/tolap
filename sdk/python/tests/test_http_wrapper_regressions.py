@@ -51,7 +51,7 @@ def _context(field_rules: FieldRules | None) -> SecurityContext:
         user_id="u",
         tenant_id="t",
         source_profiles=["http-test"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=ObjectRules(
             endpoint_rules=EndpointRules(allowed_endpoints=["/v1/*"], allowed_methods=["GET"]),
             field_rules=field_rules,

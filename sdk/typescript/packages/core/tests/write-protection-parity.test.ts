@@ -38,7 +38,7 @@ const PARITY_POLICY: EffectivePolicy = {
   resolvedAt: new Date().toISOString(),
   expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
   sourceProfiles: ["write-protection-parity"],
-  permissions: { canQuery: true, canExport: false, readOnly: true },
+  permissions: { canQuery: true, readOnly: true },
   objectRules: {
     endpointRules: {
       allowedEndpoints: ["/api/*"],

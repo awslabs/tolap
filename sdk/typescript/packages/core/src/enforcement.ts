@@ -17,6 +17,12 @@ import {
 } from "./types.js";
 import { globToRegex } from "./resolution.js";
 
+// Re-exported so the pushdown sits next to the post-retrieval pass it complements.
+// `filterByTags` below is the normative control; `buildKbFilter` only asks the provider
+// to do some of the same work earlier (connector-spec §7). Keeping them on one surface is
+// meant to make that relationship hard to miss.
+export { buildKbFilter } from "./kb-filter.js";
+
 // ---------------------------------------------------------------------------
 // Glob matching helper
 // ---------------------------------------------------------------------------

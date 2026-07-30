@@ -21,8 +21,8 @@ def merge(policies: list[PolicyDefinition]) -> EffectivePolicy:
     Merge rules:
     - Empty list -> deny_all()
     - Permissions: absent booleans take their schema default first (can_query
-      True, can_insert/can_update/can_delete/can_export False, read_only True),
-      then AND for can_query/can_insert/can_update/can_delete/can_export and OR
+      True, can_insert/can_update/can_delete False, read_only True),
+      then AND for can_query/can_insert/can_update/can_delete and OR
       for read_only
     - Allowed sets: Intersection (None means unrestricted from that policy; an
       empty result means deny-all and is retained, never discarded)
@@ -68,7 +68,6 @@ def _merge_permissions(policies: list[PolicyDefinition]) -> PolicyPermissions:
     can_insert_values = [p.permissions.can_insert if p.permissions.can_insert is not None else False for p in policies]
     can_update_values = [p.permissions.can_update if p.permissions.can_update is not None else False for p in policies]
     can_delete_values = [p.permissions.can_delete if p.permissions.can_delete is not None else False for p in policies]
-    can_export_values = [p.permissions.can_export if p.permissions.can_export is not None else False for p in policies]
     read_only_values = [p.permissions.read_only if p.permissions.read_only is not None else True for p in policies]
 
     return PolicyPermissions(
@@ -76,7 +75,6 @@ def _merge_permissions(policies: list[PolicyDefinition]) -> PolicyPermissions:
         can_insert=all(can_insert_values),
         can_update=all(can_update_values),
         can_delete=all(can_delete_values),
-        can_export=all(can_export_values),
         read_only=any(read_only_values),
     )
 
@@ -187,13 +185,11 @@ def _merge_endpoint_rules(policies: list[PolicyDefinition]) -> EndpointRules | N
 
 def _merge_limits(policies: list[PolicyDefinition]) -> PolicyLimits | None:
     max_results = _min_of_maxima([p.limits.max_results if p.limits else None for p in policies])
-    max_query_time = _min_of_maxima([p.limits.max_query_time_seconds if p.limits else None for p in policies])
     min_similarity = _max_of_minima([p.limits.min_similarity_score if p.limits else None for p in policies])
     max_object_size = _min_of_maxima([p.limits.max_object_size_bytes if p.limits else None for p in policies])
 
     return PolicyLimits(
         max_results=max_results,
-        max_query_time_seconds=max_query_time,
         min_similarity_score=min_similarity,
         max_object_size_bytes=max_object_size,
     )
@@ -294,7 +290,6 @@ def _has_limits(limits: PolicyLimits | None) -> bool:
         return False
     return any([
         limits.max_results is not None,
-        limits.max_query_time_seconds is not None,
         limits.min_similarity_score is not None,
         limits.max_object_size_bytes is not None,
     ])

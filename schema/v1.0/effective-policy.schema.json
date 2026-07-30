@@ -74,9 +74,6 @@
         "canDelete": {
           "type": "boolean"
         },
-        "canExport": {
-          "type": "boolean"
-        },
         "readOnly": {
           "type": "boolean"
         }
@@ -279,10 +276,6 @@
         "maxResults": {
           "type": "integer",
           "minimum": 0
-        },
-        "maxQueryTimeSeconds": {
-          "type": "integer",
-          "minimum": 1
         },
         "minSimilarityScore": {
           "type": "number",

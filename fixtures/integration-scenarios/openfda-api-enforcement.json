@@ -2,7 +2,7 @@
   "description": "TOLAP enforcement for an openFDA-style analyst policy against pre-recorded responses in fixtures/api/openfda/. Each SDK serves these recordings via its own mock transport and runs the request through its SecureHttpToolWrapper equivalent.",
   "basePolicy": {
     "version": "1.0",
-    "permissions": { "canQuery": true, "canExport": false, "readOnly": true },
+    "permissions": { "canQuery": true, "readOnly": true },
     "objectRules": {
       "endpointRules": {
         "allowedEndpoints": ["/drug/*"],

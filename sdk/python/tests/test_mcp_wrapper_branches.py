@@ -35,7 +35,7 @@ def _policy(*, can_query: bool = True) -> EffectivePolicy:
         user_id="u",
         tenant_id="t",
         source_profiles=["mcp-branch"],
-        permissions=PolicyPermissions(can_query=can_query, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=can_query, read_only=True),
     )
 
 

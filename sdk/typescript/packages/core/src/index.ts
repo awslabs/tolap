@@ -51,6 +51,32 @@ export {
   type GetRolesFn,
 } from "./resolution.js";
 
+// Source identity (connector-spec §1)
+export {
+  SourceCategory,
+  parseSourceIdentity,
+  sourceCategory,
+  type SourceIdentity,
+} from "./source-identity.js";
+
+// kb provider-side metadata filters (connector-spec §7)
+export {
+  DEFAULT_KB_METADATA_KEYS,
+  KbFilterOp,
+  buildKbFilter,
+  type KbFilterClause,
+  type KbFilterOptions,
+  type KbFilterResult,
+  type UnpushedRule,
+} from "./kb-filter.js";
+export {
+  KbFilterConfidence,
+  KbProvider,
+  renderKbFilter,
+  type RenderKbFilterOptions,
+  type RenderedKbFilter,
+} from "./kb-providers.js";
+
 // Context
 export {
   buildSecurityContext,

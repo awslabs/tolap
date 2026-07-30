@@ -59,7 +59,7 @@ public class WritePathParityTests
     private static readonly EffectivePolicy FullWrite = Policy(
         new PolicyPermissions(
             CanQuery: true, CanInsert: true, CanUpdate: true, CanDelete: true,
-            CanExport: false, ReadOnly: false),
+            ReadOnly: false),
         new ObjectRules(
             AllowedObjects: new[] { "patients", "encounters" },
             HiddenObjects: new[] { "audit_log" },
@@ -86,7 +86,7 @@ public class WritePathParityTests
     private static readonly EffectivePolicy ReadOnlyCeiling = Policy(
         new PolicyPermissions(
             CanQuery: true, CanInsert: true, CanUpdate: true, CanDelete: true,
-            CanExport: false, ReadOnly: true));
+            ReadOnly: true));
 
     /// <summary>
     /// Insert and update granted, delete omitted; an allowedFields allow-list and no row
@@ -94,7 +94,7 @@ public class WritePathParityTests
     /// </summary>
     private static readonly EffectivePolicy AllowList = Policy(
         new PolicyPermissions(
-            CanQuery: true, CanInsert: true, CanUpdate: true, CanExport: false, ReadOnly: false),
+            CanQuery: true, CanInsert: true, CanUpdate: true, ReadOnly: false),
         new ObjectRules(FieldRules: new FieldRules(
             AllowedFields: new[] { "full_name", "status" })));
 
@@ -104,7 +104,7 @@ public class WritePathParityTests
     /// </summary>
     private static readonly EffectivePolicy EmptyAllowList = Policy(
         new PolicyPermissions(
-            CanQuery: true, CanInsert: true, CanExport: false, ReadOnly: false),
+            CanQuery: true, CanInsert: true, ReadOnly: false),
         new ObjectRules(FieldRules: new FieldRules(AllowedFields: Array.Empty<string>())));
 
     /// <summary>
@@ -113,7 +113,7 @@ public class WritePathParityTests
     /// </summary>
     private static readonly EffectivePolicy InsertOnly = Policy(
         new PolicyPermissions(
-            CanQuery: true, CanInsert: true, CanExport: false, ReadOnly: false));
+            CanQuery: true, CanInsert: true, ReadOnly: false));
 
     private static readonly Dictionary<string, EffectivePolicy> Policies = new()
     {

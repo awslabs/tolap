@@ -132,7 +132,7 @@ function parityPolicy(tagRules: TagRules): EffectivePolicy {
     resolvedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     sourceProfiles: ["tag-extraction-parity"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     objectRules: { tagRules },
     integrity: { algorithm: "none", signature: "" },
   };

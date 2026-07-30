@@ -98,7 +98,7 @@ function policyOf(opts: {
     resolvedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     sourceProfiles: ["rewrite"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     ...(Object.keys(objectRules).length > 0 ? { objectRules } : {}),
     ...(Object.keys(limits).length > 0 ? { limits } : {}),
     integrity: { algorithm: "none", signature: "" },

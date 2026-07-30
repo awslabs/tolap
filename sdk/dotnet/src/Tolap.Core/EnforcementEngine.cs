@@ -1854,12 +1854,22 @@ public static class EnforcementEngine
 
     /// <summary>
     /// Performs glob pattern matching for object, field and endpoint names, where '*'
-    /// matches any sequence of characters including path separators.
+    /// matches any sequence of characters including path separators and '?' matches
+    /// exactly one character.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Evaluated under the same bounded timeout as row-filter regexes; a timeout is a
     /// non-match rather than an unhandled exception (spec section 7).
+    /// </para>
+    /// <para>
+    /// <c>*</c> and <c>?</c> are the only metacharacters (spec section 3.1). Everything
+    /// else is <see cref="Regex.Escape(string)"/>d and therefore literal — including
+    /// <c>[abc]</c>, which is the four-character text <c>[abc]</c> and not a character
+    /// class. Python's <c>fnmatch</c> reads brackets as classes and had to be corrected
+    /// to match; this engine has always escaped them, so no change was needed here. The
+    /// <c>?</c> wildcard, on the other hand, was previously escaped to a literal — the
+    /// divergence this method's <c>\?</c> → <c>.</c> replacement now closes.
     /// </para>
     /// <para>
     /// <b>Deliberately different from <see cref="PolicyResolutionEngine.GlobMatch"/>,
@@ -1875,9 +1885,12 @@ public static class EnforcementEngine
     /// </remarks>
     internal static bool GlobMatch(string pattern, string value)
     {
-        // Convert glob pattern to regex
+        // Convert glob pattern to regex. Regex.Escape turns '*' into '\*' and '?' into
+        // '\?', so the wildcards are recovered from their escaped forms; every other
+        // character stays escaped and therefore literal.
         var regexPattern = "^" + Regex.Escape(pattern)
             .Replace("\\*", ".*")
+            .Replace("\\?", ".")
             + "$";
 
         try

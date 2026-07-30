@@ -7,7 +7,7 @@ import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from fnmatch import fnmatch, fnmatchcase
+from fnmatch import fnmatchcase
 from typing import Any
 
 from tolap_core.enums import FilterOperator, MaskType, WriteOperation, mask_restrictiveness
@@ -34,6 +34,25 @@ class UnenforceableResultError(PermissionError):
     """
 
 
+def _literal_brackets(pattern: str) -> str:
+    """Neutralise ``[`` so a bracket expression is literal text (spec section 3.1).
+
+    ``fnmatch`` reads ``[abc]`` as a character class, but the spec makes ``*`` and
+    ``?`` the only metacharacters: a literal ``[abc]`` matches strictly fewer names
+    than a class would, so an ``allowedObjects`` entry cannot silently reach objects
+    the administrator never spelled out. .NET and TypeScript already treated brackets
+    literally, so Python was the outlier and the three disagreed on the same signed
+    policy.
+
+    ``[`` becomes the single-character class ``[[]`` rather than being backslash-escaped
+    because ``fnmatch`` has no escape character -- a backslash is itself a literal.
+    This also fixes unclosed brackets, which ``fnmatch`` already treated as literal,
+    and needs no matching transform for ``]``: outside a class, ``]`` is literal to
+    ``fnmatch`` too.
+    """
+    return pattern.replace("[", "[[]")
+
+
 def _pattern_matches(pattern: str, name: str) -> bool:
     """Case-insensitive glob match, identically on every platform.
 
@@ -44,8 +63,11 @@ def _pattern_matches(pattern: str, name: str) -> bool:
     ``fnmatchcase`` over pre-lowered strings instead of relying on the platform's
     case rules. This mirrors :func:`_field_name_matches`, which already did so for
     the post-execution path.
+
+    Bracket expressions are literal per spec section 3.1; see
+    :func:`_literal_brackets`.
     """
-    return fnmatchcase(name.lower(), pattern.lower())
+    return fnmatchcase(name.lower(), _literal_brackets(pattern).lower())
 
 
 def validate_access(object_name: str, policy: EffectivePolicy) -> AccessResult:
@@ -138,9 +160,11 @@ def _match_forms(name: str) -> set[str]:
 def _field_name_matches(rule_field: str, key: str) -> bool:
     """Whether a policy field reference refers to a record key."""
     # fnmatchcase on pre-lowered strings: fnmatch's own case folding is
-    # platform-dependent, which would make matching differ across OSes.
+    # platform-dependent, which would make matching differ across OSes. Brackets in
+    # the rule are literal per spec section 3.1 (see _literal_brackets); the key is a
+    # record key rather than a pattern, so it is never transformed.
     return any(
-        fnmatchcase(key_form, rule_form)
+        fnmatchcase(key_form, _literal_brackets(rule_form))
         for rule_form in _match_forms(rule_field)
         for key_form in _match_forms(key)
     )

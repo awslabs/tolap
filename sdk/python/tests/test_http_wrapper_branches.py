@@ -68,7 +68,7 @@ def _policy(
         user_id="u",
         tenant_id="t",
         source_profiles=["http-branch"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=ObjectRules(
             endpoint_rules=EndpointRules(allowed_endpoints=["/*"], allowed_methods=["GET"]),
             field_rules=field_rules,
@@ -391,7 +391,7 @@ class TestLimitCollection:
 
     def test_none_max_results_returns_body_unchanged(self) -> None:
         body = {"results": list(ROWS)}
-        policy = _policy(limits=PolicyLimits(max_query_time_seconds=5))
+        policy = _policy(limits=PolicyLimits(min_similarity_score=0.5))
 
         assert _limit_collection(body, "results", policy) == body
 

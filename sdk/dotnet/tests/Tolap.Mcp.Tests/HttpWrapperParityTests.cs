@@ -56,7 +56,7 @@ public class HttpWrapperParityTests
             ResolvedAt: now,
             ExpiresAt: now.AddHours(1),
             SourceProfiles: new[] { "http-wrapper-parity" },
-            Permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true),
+            Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true),
             ObjectRules: objectRules);
     }
 

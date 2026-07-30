@@ -38,7 +38,7 @@ function policy(overrides: Partial<EffectivePolicy> = {}): EffectivePolicy {
     resolvedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 3_600_000).toISOString(),
     sourceProfiles: ["wrapper-branches"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     integrity: { algorithm: "none", signature: "" },
     ...overrides,
   };
@@ -292,7 +292,7 @@ describe("policy signature verification: both sides of the signingKey guard", ()
 
   it("EXPLOIT: a tampered signed policy is denied", async () => {
     const tampered = signPolicy(allowObject(), KEY);
-    tampered.permissions.canExport = true;
+    tampered.permissions.canInsert = true;
     const wrapper = strictWrapper(tampered, { signingKey: KEY });
 
     await expect(wrapper.executeTool(request())).rejects.toThrow(
@@ -549,7 +549,7 @@ describe("pre-execution checks: each tool field, both ways", () => {
     // readOnly must also be false for the explicit POST to be permitted:
     // canonical spec §9 makes readOnly a ceiling over allowedMethods.
     const postOnly = policy({
-      permissions: { canQuery: true, canExport: false, readOnly: false },
+      permissions: { canQuery: true, readOnly: false },
       objectRules: {
         allowedObjects: ["test-object"],
         endpointRules: { allowedEndpoints: ["/x"], allowedMethods: ["POST"] },
@@ -949,7 +949,7 @@ describe("SecureContextToolWrapper: preExecute gates", () => {
     // readOnly false so the explicit POST is reachable: canonical spec §9 makes
     // readOnly a ceiling that allowedMethods cannot lift.
     const postOnly = policy({
-      permissions: { canQuery: true, canExport: false, readOnly: false },
+      permissions: { canQuery: true, readOnly: false },
       objectRules: {
         endpointRules: { allowedEndpoints: ["/x"], allowedMethods: ["POST"] },
       },

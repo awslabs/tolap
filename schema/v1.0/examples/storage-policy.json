@@ -8,7 +8,6 @@
   "sourcePatterns": ["storage:datalake:*"],
   "permissions": {
     "canQuery": true,
-    "canExport": true,
     "readOnly": true
   },
   "objectRules": {

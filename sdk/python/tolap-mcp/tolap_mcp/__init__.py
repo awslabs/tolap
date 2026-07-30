@@ -13,6 +13,11 @@ from tolap_mcp.http_wrapper import (
     SecureHttpToolWrapper,
     UpstreamHttpError,
 )
+from tolap_mcp.factory import (
+    SecureTool,
+    SecureToolFactory,
+    ToolCreationError,
+)
 
 __all__ = [
     "RequestIdentityExtractor",
@@ -24,4 +29,7 @@ __all__ = [
     "MAX_REDIRECTS",
     "SecureHttpToolWrapper",
     "UpstreamHttpError",
+    "SecureTool",
+    "SecureToolFactory",
+    "ToolCreationError",
 ]

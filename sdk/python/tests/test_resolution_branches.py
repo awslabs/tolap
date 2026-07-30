@@ -33,7 +33,7 @@ def _policy(name: str, *, priority: int | None = 100, allowed_objects: list[str]
     return PolicyDefinition(
         version="1.0",
         name=name,
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         priority=priority,
         object_rules=ObjectRules(allowed_objects=allowed_objects) if allowed_objects else None,
     )

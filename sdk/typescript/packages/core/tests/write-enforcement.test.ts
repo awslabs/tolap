@@ -54,7 +54,6 @@ function policy(
     sourceProfiles: ["write-enforcement"],
     permissions: {
       canQuery: true,
-      canExport: false,
       readOnly: false,
       ...permissions,
     },

@@ -208,7 +208,6 @@ def _deser_limits(data: dict | None) -> PolicyLimits | None:
     d = _convert_keys_to_snake(data)
     return PolicyLimits(
         max_results=d.get("max_results"),
-        max_query_time_seconds=d.get("max_query_time_seconds"),
         min_similarity_score=d.get("min_similarity_score"),
         max_object_size_bytes=d.get("max_object_size_bytes"),
     )
@@ -229,7 +228,6 @@ def _deser_permissions(data: dict) -> PolicyPermissions:
         can_insert=d.get("can_insert"),
         can_update=d.get("can_update"),
         can_delete=d.get("can_delete"),
-        can_export=d.get("can_export"),
         read_only=d.get("read_only"),
     )
 

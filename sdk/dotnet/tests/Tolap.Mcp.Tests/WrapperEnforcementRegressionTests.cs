@@ -24,7 +24,7 @@ public class WrapperEnforcementRegressionTests
         await store.CreatePolicyAsync(new PolicyDefinition(
             Version: "1.0",
             Name: "regression-policy",
-            Permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true),
+            Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true),
             Priority: 10,
             AppliesToAll: true,
             ObjectRules: objectRules ?? new ObjectRules(AllowedObjects: new[] { "patients" }),

@@ -35,7 +35,6 @@ function createTestPolicy(): EffectivePolicy {
     sourceProfiles: ["healthcare-analyst-db"],
     permissions: {
       canQuery: true,
-      canExport: false,
       readOnly: true,
     },
     integrity: {

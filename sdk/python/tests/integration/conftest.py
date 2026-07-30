@@ -176,7 +176,7 @@ def healthcare_analyst_context(signing_key: str) -> SecurityContext:
         user_id="analyst-001",
         tenant_id="hospital-001",
         source_profiles=["healthcare-analyst"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=ObjectRules(
             allowed_objects=["patients", "encounters", "diagnoses"],
             hidden_objects=["billing_internal", "audit_log"],
@@ -200,7 +200,7 @@ def healthcare_analyst_context(signing_key: str) -> SecurityContext:
                 RowFilter(field="status", operator=FilterOperator.not_equals, value="deleted"),
             ],
         ),
-        limits=PolicyLimits(max_results=5000, max_query_time_seconds=30),
+        limits=PolicyLimits(max_results=5000),
     )
 
     context = build_security_context(
@@ -307,7 +307,7 @@ def openfda_analyst_context(openfda_signing_key: str) -> SecurityContext:
         user_id="fda-analyst-001",
         tenant_id="fda-program-001",
         source_profiles=["openfda-analyst"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=ObjectRules(
             endpoint_rules=EndpointRules(
                 allowed_endpoints=["/drug/*"],
@@ -341,7 +341,7 @@ def openfda_deny_query_context(openfda_signing_key: str) -> SecurityContext:
         user_id="fda-analyst-001",
         tenant_id="fda-program-001",
         source_profiles=["openfda-deny"],
-        permissions=PolicyPermissions(can_query=False, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=False, read_only=True),
     )
     return _build_signed(policy, openfda_signing_key)
 
@@ -353,7 +353,7 @@ def openfda_post_only_context(openfda_signing_key: str) -> SecurityContext:
         user_id="fda-analyst-001",
         tenant_id="fda-program-001",
         source_profiles=["openfda-post-only"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=ObjectRules(
             endpoint_rules=EndpointRules(
                 allowed_endpoints=["/drug/*"],
@@ -371,7 +371,7 @@ def openfda_expired_context(openfda_signing_key: str) -> SecurityContext:
         user_id="fda-analyst-001",
         tenant_id="fda-program-001",
         source_profiles=["openfda-expired"],
-        permissions=PolicyPermissions(can_query=True, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=True, read_only=True),
         object_rules=ObjectRules(
             endpoint_rules=EndpointRules(allowed_endpoints=["/drug/*"], allowed_methods=["GET"]),
         ),

@@ -35,7 +35,7 @@ public class WriteProtectionParityTests
         ResolvedAt: null,
         ExpiresAt: null,
         SourceProfiles: new[] { "write-protection-parity" },
-        Permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true),
+        Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true),
         ObjectRules: new ObjectRules(EndpointRules: new EndpointRules(
             AllowedEndpoints: new[] { "/api/*" },
             HiddenEndpoints: new[] { "/api/admin/*" },

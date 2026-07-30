@@ -8,7 +8,6 @@
   "sourcePatterns": ["db:production:patient_*", "db:production:encounter_*"],
   "permissions": {
     "canQuery": true,
-    "canExport": false,
     "readOnly": true
   },
   "objectRules": {
@@ -66,7 +65,6 @@
     ]
   },
   "limits": {
-    "maxResults": 5000,
-    "maxQueryTimeSeconds": 30
+    "maxResults": 5000
   }
 }

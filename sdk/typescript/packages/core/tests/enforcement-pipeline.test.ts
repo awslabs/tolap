@@ -50,7 +50,7 @@ function policy(parts: PolicyParts = {}): EffectivePolicy {
     resolvedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     sourceProfiles: ["pipeline-test"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     objectRules: {
       ...(Object.keys(fieldRules).length > 0 ? { fieldRules } : {}),
       ...(parts.rowFilters !== undefined ? { rowFilters: parts.rowFilters } : {}),

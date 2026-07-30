@@ -445,8 +445,9 @@ Both are bounded by the same length limits as `matches` (ReDoS guard).
 ## 8. Permission merging
 
 Absent boolean permissions take their schema default *before* folding:
-`canQuery` → `true`, `canExport` → `false`, `readOnly` → `true`. Then fold:
-`canQuery` AND, `canExport` AND, `readOnly` OR.
+`canQuery` → `true`, the write permissions (`canInsert`/`canUpdate`/`canDelete`)
+→ `false`, `readOnly` → `true`. Then fold: `canQuery` and the write permissions
+AND, `readOnly` OR.
 
 Excluding absent fields from the fold instead of defaulting them inverts the
 result: policy A silent on `readOnly` plus policy B with `readOnly: false` must

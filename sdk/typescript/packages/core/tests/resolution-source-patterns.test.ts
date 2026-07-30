@@ -48,7 +48,7 @@ function definition(
   return {
     version: "1.0",
     name,
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     ...(sourcePatterns !== undefined ? { sourcePatterns } : {}),
     ...extra,
   };
@@ -123,18 +123,17 @@ describe("§9: sourcePatterns filters definitions before merging", () => {
   it("EXPLOIT: an unrelated policy's permission cannot leak into a source", async () => {
     const result = await resolveFor("db:production:patients", [
       definition("db-policy", ["db:production:*"], {
-        permissions: { canQuery: true, canExport: false, readOnly: true },
+        permissions: { canQuery: true, readOnly: true },
       }),
       definition("api-exporter", ["api:internal:*"], {
-        permissions: { canQuery: true, canExport: true, readOnly: false },
+        permissions: { canQuery: true, readOnly: false },
       }),
     ]);
 
     expect(result.sourceProfiles).toEqual(["db-policy"]);
-    // canExport ANDs, readOnly ORs, so folding in api-exporter would be visible
-    // only through sourceProfiles here -- but a readOnly:false policy leaking into
-    // the fold is exactly the shape of the bug, so assert the flags too.
-    expect(result.permissions.canExport).toBe(false);
+    // readOnly ORs, so folding in api-exporter would be visible only through
+    // sourceProfiles here -- but a readOnly:false policy leaking into the fold is
+    // exactly the shape of the bug, so assert the flag too.
     expect(result.permissions.readOnly).toBe(true);
   });
 });

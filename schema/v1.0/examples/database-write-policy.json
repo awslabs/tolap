@@ -10,7 +10,6 @@
     "canInsert": true,
     "canUpdate": true,
     "canDelete": false,
-    "canExport": false,
     "readOnly": false
   },
   "objectRules": {

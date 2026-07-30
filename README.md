@@ -84,7 +84,7 @@ queries when a collection may be large.
 ```json
 {
   "name": "healthcare-analyst",
-  "permissions": { "canQuery": true, "canExport": false, "readOnly": true },
+  "permissions": { "canQuery": true, "readOnly": true },
   "objectRules": {
     "allowedObjects": ["patients", "encounters", "diagnoses"],
     "hiddenObjects": ["billing_internal", "audit_log"],
@@ -100,7 +100,7 @@ queries when a collection may be large.
       { "field": "status", "operator": "notEquals", "value": "deleted" }
     ]
   },
-  "limits": { "maxResults": 5000, "maxQueryTimeSeconds": 30 }
+  "limits": { "maxResults": 5000 }
 }
 ```
 

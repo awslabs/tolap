@@ -65,7 +65,6 @@ def _policy(
             can_insert=can_insert,
             can_update=can_update,
             can_delete=can_delete,
-            can_export=False,
             read_only=read_only,
         ),
         object_rules=object_rules,

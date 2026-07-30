@@ -82,7 +82,7 @@ def _policy(
         user_id="u",
         tenant_id="t",
         source_profiles=["rewriter"],
-        permissions=PolicyPermissions(can_query=can_query, can_export=False, read_only=True),
+        permissions=PolicyPermissions(can_query=can_query, read_only=True),
         object_rules=ObjectRules(
             allowed_objects=allowed_objects,
             hidden_objects=hidden_objects,

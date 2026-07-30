@@ -12,12 +12,11 @@
     "sourceProfiles": ["healthcare-analyst-db"],
     "permissions": {
       "canQuery": true,
-      "canExport": false,
       "readOnly": true
     }
   },
-  "canonicalPayload": "{\"expiresAt\":\"2026-01-15T11:00:00Z\",\"issuedAt\":\"2026-01-15T10:00:00Z\",\"policies\":[{\"expiresAt\":\"2026-01-15T11:00:00Z\",\"permissions\":{\"canExport\":false,\"canQuery\":true,\"readOnly\":true},\"resolvedAt\":\"2026-01-15T10:00:00Z\",\"sourceConnectionId\":\"ds-postgres-healthcare\",\"sourceProfiles\":[\"healthcare-analyst-db\"],\"tenantId\":\"tenant-midwest-health\",\"userId\":\"user-001\",\"version\":\"1.0\"}],\"tenantId\":\"tenant-midwest-health\",\"userId\":\"user-001\",\"version\":\"1.0\"}",
-  "expectedSignature": "mpKFMZqD3NvddMUZJMIJBcvDF28Q/WRwDzpDLe4pHGY=",
-  "expectedSignatureSha512": "EZ1/QbixgohMFZsmI+K0Xq50T0lGtFToJlEkVi+uCf8SvHYJSj2/ShmpI/3XsJ5pu4DlUcwMjXI0JGipY46SpA==",
+  "canonicalPayload": "{\"expiresAt\":\"2026-01-15T11:00:00Z\",\"issuedAt\":\"2026-01-15T10:00:00Z\",\"policies\":[{\"expiresAt\":\"2026-01-15T11:00:00Z\",\"permissions\":{\"canQuery\":true,\"readOnly\":true},\"resolvedAt\":\"2026-01-15T10:00:00Z\",\"sourceConnectionId\":\"ds-postgres-healthcare\",\"sourceProfiles\":[\"healthcare-analyst-db\"],\"tenantId\":\"tenant-midwest-health\",\"userId\":\"user-001\",\"version\":\"1.0\"}],\"tenantId\":\"tenant-midwest-health\",\"userId\":\"user-001\",\"version\":\"1.0\"}",
+  "expectedSignature": "YekLSTYYqzpgSxi9hFOsOWjYLo2qMwwRHc7D4MdGVG4=",
+  "expectedSignatureSha512": "HkNTGpI6OzMolyYW7KcOqqc116kMArdjLEA5VNgX/QsOM2lThZY9OCfrHPg7Hi8IFokHe8M3XoU7IVdnw+ZEgw==",
   "notes": "Per canonical-enforcement-spec.md §1-§2 the signature covers the FULL envelope projection {version,userId,tenantId,issuedAt,expiresAt,policies[]} (integrity stripped from envelope and each policy), serialized with recursively sorted keys, compact separators, no unicode escaping, and null fields omitted. issuedAt is derived from the policy's resolvedAt. All three language SDKs MUST produce expectedSignature byte-for-byte; a determinism-only assertion is insufficient (spec §10)."
 }

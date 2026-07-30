@@ -5,17 +5,17 @@
       "version": "1.0",
       "name": "policy-allows",
       "priority": 10,
-      "permissions": { "canQuery": true, "canExport": true, "readOnly": false }
+      "permissions": { "canQuery": true, "readOnly": false }
     },
     {
       "version": "1.0",
       "name": "policy-denies",
       "priority": 20,
-      "permissions": { "canQuery": false, "canExport": true, "readOnly": false }
+      "permissions": { "canQuery": false, "readOnly": false }
     }
   ],
   "expected": {
     "sourceProfiles": ["policy-allows", "policy-denies"],
-    "permissions": { "canQuery": false, "canExport": true, "readOnly": false }
+    "permissions": { "canQuery": false, "readOnly": false }
   }
 }

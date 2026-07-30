@@ -8,7 +8,7 @@ public class PolicyResolutionEngineTests
     private static readonly PolicyDefinition HealthcarePolicy = new(
         Version: "1.0",
         Name: "healthcare-analyst-db",
-        Permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true),
+        Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true),
         Priority: 10,
         AppliesToAll: false,
         SourcePatterns: new[] { "db:production:patient_*", "db:production:encounter_*" },
@@ -19,7 +19,7 @@ public class PolicyResolutionEngineTests
     private static readonly PolicyDefinition ApiPolicy = new(
         Version: "1.0",
         Name: "internal-api-readonly",
-        Permissions: new PolicyPermissions(CanQuery: true, CanExport: false, ReadOnly: true),
+        Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true),
         Priority: 20,
         AppliesToAll: false,
         SourcePatterns: new[] { "api:internal:*" });
@@ -252,7 +252,7 @@ public class PolicyResolutionEngineTests
         var exportPolicy = new PolicyDefinition(
             Version: "1.0",
             Name: "export-allowed",
-            Permissions: new PolicyPermissions(CanQuery: true, CanExport: true, ReadOnly: true),
+            Permissions: new PolicyPermissions(CanQuery: true, ReadOnly: true),
             Priority: 20,
             AppliesToAll: true);
 
@@ -287,8 +287,6 @@ public class PolicyResolutionEngineTests
 
         result.SourceProfiles.Should().HaveCount(2);
         result.Permissions.CanQuery.Should().BeTrue();
-        // canExport: AND of true and false = false
-        result.Permissions.CanExport.Should().BeFalse();
     }
 
     [Fact]

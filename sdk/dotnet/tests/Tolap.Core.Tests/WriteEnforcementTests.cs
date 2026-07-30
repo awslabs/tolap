@@ -679,7 +679,6 @@ public class WriteEnforcementTests
                 CanInsert: canInsert ? true : null,
                 CanUpdate: canUpdate ? true : null,
                 CanDelete: canDelete ? true : null,
-                CanExport: false,
                 ReadOnly: readOnly),
             ObjectRules: objectRules);
 

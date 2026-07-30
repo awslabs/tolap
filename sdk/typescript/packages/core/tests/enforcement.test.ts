@@ -60,6 +60,35 @@ describe("validateAccess (object access)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Glob metacharacters -- '*' and '?' wildcards, '[abc]' literal (spec §3.1)
+// ---------------------------------------------------------------------------
+
+describe("validateAccess (glob metacharacters)", () => {
+  // Shared corpus the .NET and Python suites read case-for-case, so a divergence
+  // over '?' or bracket handling fails in at least one SDK.
+  const fixture = loadFixture(
+    "validate-object-access-glob-metacharacters.json",
+  );
+  const cases = fixture["cases"] as Array<{
+    objectName: string;
+    policy: Record<string, unknown>;
+    expected: { allowed: boolean; reason?: string };
+    note?: string;
+  }>;
+
+  for (const tc of cases) {
+    it(`${tc.objectName}: ${tc.note ?? (tc.expected.allowed ? "allowed" : "denied")}`, () => {
+      const policy = toEffectivePolicy(tc.policy);
+      const result = validateAccess(tc.objectName, policy);
+      expect(result.allowed).toBe(tc.expected.allowed);
+      if (tc.expected.reason) {
+        expect(result.reason).toBe(tc.expected.reason);
+      }
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Field Access -- allowed set
 // ---------------------------------------------------------------------------
 

@@ -37,7 +37,7 @@ function createPolicy(overrides?: Partial<EffectivePolicy>): EffectivePolicy {
     resolvedAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
     sourceProfiles: ["regression-test"],
-    permissions: { canQuery: true, canExport: false, readOnly: true },
+    permissions: { canQuery: true, readOnly: true },
     integrity: { algorithm: "none", signature: "" },
     ...overrides,
   };

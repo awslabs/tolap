@@ -8,7 +8,6 @@
       "permissions": { "canQuery": true },
       "limits": {
         "maxResults": 10000,
-        "maxQueryTimeSeconds": 60,
         "minSimilarityScore": 0.5,
         "maxObjectSizeBytes": 209715200
       }
@@ -20,7 +19,6 @@
       "permissions": { "canQuery": true },
       "limits": {
         "maxResults": 500,
-        "maxQueryTimeSeconds": 15,
         "minSimilarityScore": 0.8,
         "maxObjectSizeBytes": 52428800
       }
@@ -31,7 +29,6 @@
     "permissions": { "canQuery": true },
     "limits": {
       "maxResults": 500,
-      "maxQueryTimeSeconds": 15,
       "minSimilarityScore": 0.8,
       "maxObjectSizeBytes": 52428800
     }
