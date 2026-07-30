@@ -1,0 +1,26 @@
+dotnet list package --deprecated
+Run: 2026-07-30T15:56:41Z   .NET SDK 10.0.102
+
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+The following sources were used:
+   https://api.nuget.org/v3/index.json
+The given project `Tolap.Core` has no deprecated packages given the current sources.
+The given project `Tolap.Store` has no deprecated packages given the current sources.
+The given project `Tolap.Mcp` has no deprecated packages given the current sources.
+Project `Tolap.Core.Tests` has the following deprecated packages
+   [net9.0]: 
+   Top-level Package      Requested   Resolved   Reason(s)   Alternative      
+   > xunit                2.6.6       2.6.6      Legacy      xunit.v3 >= 0.0.0
+Project `Tolap.Store.Tests` has the following deprecated packages
+   [net9.0]: 
+   Top-level Package      Requested   Resolved   Reason(s)   Alternative      
+   > xunit                2.6.6       2.6.6      Legacy      xunit.v3 >= 0.0.0
+Project `Tolap.Mcp.Tests` has the following deprecated packages
+   [net9.0]: 
+   Top-level Package      Requested   Resolved   Reason(s)   Alternative      
+   > xunit                2.6.6       2.6.6      Legacy      xunit.v3 >= 0.0.0
+Project `Tolap.Integration.Tests` has the following deprecated packages
+   [net9.0]: 
+   Top-level Package      Requested   Resolved   Reason(s)   Alternative      
+   > xunit                2.6.6       2.6.6      Legacy      xunit.v3 >= 0.0.0

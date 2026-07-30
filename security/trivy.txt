@@ -1,0 +1,15 @@
+Trivy — filesystem scan (vuln, secret, misconfig)
+Run: 2026-07-30T15:57:10Z   trivy 0.72.0
+
+
+Report Summary
+
+┌──────────────────────────────────┬──────┬─────────────────┬─────────┬───────────────────┐
+│              Target              │ Type │ Vulnerabilities │ Secrets │ Misconfigurations │
+├──────────────────────────────────┼──────┼─────────────────┼─────────┼───────────────────┤
+│ sdk/typescript/package-lock.json │ npm  │        0        │    -    │         -         │
+└──────────────────────────────────┴──────┴─────────────────┴─────────┴───────────────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+

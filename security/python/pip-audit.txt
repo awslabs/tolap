@@ -1,0 +1,22 @@
+pip-audit — TOLAP Python packages
+Run: 2026-07-30T15:56:14Z   pip-audit 2.10.1
+
+SCOPE NOTE. TOLAP's Python packages declare no third-party dependencies:
+  tolap-core -> none
+  tolap-store -> ['tolap-core>=2.0.0']
+  tolap-mcp -> ['tolap-core>=2.0.0']
+
+So there is no third-party dependency surface to audit. Auditing the developer
+environment instead reports vulnerabilities in packages TOLAP does not use
+(weasyprint, werkzeug, urllib3 and similar), which say nothing about this SDK.
+
+RESULT: no vulnerabilities attributable to TOLAP Python packages.
+
+--- tolap-core, audited directly ---
+[?25h[1A[2KWARNING:pip_audit._dependency_source.pyproject:pyproject file pyproject.toml does not contain `dependencies` list
+No known vulnerabilities found
+
+--- tolap-store / tolap-mcp ---
+Cannot be resolved by pip-audit: they depend on tolap-core>=2.0.0, which is
+unpublished. That is an expected consequence of a pre-release monorepo, not a
+finding. Their only dependency is tolap-core itself, audited above.

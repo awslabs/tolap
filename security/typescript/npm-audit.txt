@@ -1,0 +1,10 @@
+npm audit — TypeScript workspace
+Run: 2026-07-30T15:56:56Z   npm 10.9.3 / node v22.18.0
+
+found 0 vulnerabilities
+
+--- dependency counts (the surface being audited) ---
+resolved packages: 97
+
+NOTE. @tolap/core, @tolap/store and @tolap/mcp declare no runtime dependencies;
+everything resolved here is dev/test tooling (vitest, typescript, @types/*).
