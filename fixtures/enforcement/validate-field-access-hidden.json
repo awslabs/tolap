@@ -1,0 +1,17 @@
+{
+  "description": "Query referencing hidden column -- reject ssn, allow others",
+  "action": "validateFieldAccess",
+  "input": { "fields": ["name", "ssn", "region", "date_of_birth"] },
+  "policy": {
+    "permissions": { "canQuery": true },
+    "objectRules": {
+      "fieldRules": {
+        "hiddenFields": ["ssn", "date_of_birth"]
+      }
+    }
+  },
+  "expected": {
+    "allowed": ["name", "region"],
+    "denied": ["ssn", "date_of_birth"]
+  }
+}

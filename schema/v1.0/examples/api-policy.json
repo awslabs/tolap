@@ -1,0 +1,49 @@
+{
+  "$schema": "https://tolap.dev/schema/v1.0/policy-definition.schema.json",
+  "version": "1.0",
+  "name": "internal-api-readonly",
+  "description": "Read-only access to internal patient and encounter APIs. Admin endpoints are hidden. Response PII fields are masked.",
+  "priority": 20,
+  "appliesToAll": false,
+  "sourcePatterns": ["api:internal:*"],
+  "permissions": {
+    "canQuery": true,
+    "readOnly": true
+  },
+  "objectRules": {
+    "endpointRules": {
+      "allowedEndpoints": [
+        "/api/v1/patients",
+        "/api/v1/patients/*",
+        "/api/v1/encounters",
+        "/api/v1/encounters/*",
+        "/api/v1/medications",
+        "/api/v1/diagnoses"
+      ],
+      "hiddenEndpoints": [
+        "/api/v1/admin/*",
+        "/api/v1/billing/*",
+        "/api/v1/audit/*"
+      ],
+      "allowedMethods": ["GET", "HEAD", "OPTIONS"]
+    },
+    "fieldRules": {
+      "hiddenFields": ["ssn", "date_of_birth", "street_address"],
+      "maskedFields": [
+        {
+          "field": "full_name",
+          "maskType": "partial",
+          "parameters": { "showFirst": 1, "showLast": 0, "maskChar": "*" }
+        },
+        {
+          "field": "email",
+          "maskType": "hash",
+          "parameters": { "algorithm": "sha256" }
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxResults": 1000
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "description": "One policy hides a field, another allows it -- hidden wins (union of hidden sets)",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "policy-permissive",
+      "priority": 10,
+      "permissions": { "canQuery": true },
+      "objectRules": {
+        "fieldRules": {
+          "allowedFields": ["name", "email", "ssn", "region"]
+        }
+      }
+    },
+    {
+      "version": "1.0",
+      "name": "policy-restrictive",
+      "priority": 20,
+      "permissions": { "canQuery": true },
+      "objectRules": {
+        "hiddenObjects": ["audit_log"],
+        "fieldRules": {
+          "hiddenFields": ["ssn", "date_of_birth"]
+        }
+      }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["policy-permissive", "policy-restrictive"],
+    "permissions": { "canQuery": true },
+    "objectRules": {
+      "hiddenObjects": ["audit_log"],
+      "fieldRules": {
+        "allowedFields": ["name", "email", "ssn", "region"],
+        "hiddenFields": ["ssn", "date_of_birth"]
+      }
+    }
+  }
+}

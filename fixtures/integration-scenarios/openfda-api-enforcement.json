@@ -1,0 +1,132 @@
+{
+  "description": "TOLAP enforcement for an openFDA-style analyst policy against pre-recorded responses in fixtures/api/openfda/. Each SDK serves these recordings via its own mock transport and runs the request through its SecureHttpToolWrapper equivalent.",
+  "basePolicy": {
+    "version": "1.0",
+    "permissions": { "canQuery": true, "readOnly": true },
+    "objectRules": {
+      "endpointRules": {
+        "allowedEndpoints": ["/drug/*"],
+        "hiddenEndpoints": ["/food/*"],
+        "allowedMethods": ["GET"]
+      },
+      "fieldRules": {
+        "hiddenFields": ["results.patient.patientsex"],
+        "maskedFields": [
+          {
+            "field": "results.safetyreportid",
+            "maskType": "hash",
+            "parameters": { "algorithm": "sha256" }
+          },
+          {
+            "field": "results.patient.patientonsetage",
+            "maskType": "redact"
+          }
+        ]
+      }
+    },
+    "limits": { "maxResults": 2 }
+  },
+  "scenarios": [
+    {
+      "name": "allowed-drug-event-endpoint-returns-collection",
+      "request": {
+        "method": "GET",
+        "path": "/drug/event.json",
+        "collectionPath": "results"
+      },
+      "expected": { "pass": true, "rowCount": 2 }
+    },
+    {
+      "name": "allowed-drug-label-endpoint-passes",
+      "request": {
+        "method": "GET",
+        "path": "/drug/label.json",
+        "collectionPath": "results"
+      },
+      "expected": { "pass": true, "rowCount": 2 }
+    },
+    {
+      "name": "hidden-food-endpoint-denied",
+      "request": {
+        "method": "GET",
+        "path": "/food/enforcement.json"
+      },
+      "expected": { "pass": false, "errorContains": "endpoint is hidden" }
+    },
+    {
+      "name": "unlisted-device-endpoint-denied",
+      "request": {
+        "method": "GET",
+        "path": "/device/recall.json"
+      },
+      "expected": { "pass": false, "errorContains": "not in allowed set" }
+    },
+    {
+      "name": "post-method-denied-when-only-get-allowed",
+      "request": {
+        "method": "POST",
+        "path": "/drug/event.json"
+      },
+      "expected": { "pass": false, "errorContains": "method not allowed" }
+    },
+    {
+      "name": "safetyreportid-is-sha256-hashed",
+      "request": {
+        "method": "GET",
+        "path": "/drug/event.json",
+        "collectionPath": "results"
+      },
+      "expected": {
+        "pass": true,
+        "rowCount": 2,
+        "maskedField": {
+          "collectionPath": "results",
+          "field": "safetyreportid",
+          "mask": "sha256-16"
+        }
+      }
+    },
+    {
+      "name": "patientonsetage-is-redacted",
+      "request": {
+        "method": "GET",
+        "path": "/drug/event.json",
+        "collectionPath": "results"
+      },
+      "expected": {
+        "pass": true,
+        "rowCount": 2,
+        "maskedField": {
+          "collectionPath": "results",
+          "field": "patient.patientonsetage",
+          "mask": "redacted"
+        }
+      }
+    },
+    {
+      "name": "patientsex-hidden-field-removed-from-every-row",
+      "request": {
+        "method": "GET",
+        "path": "/drug/event.json",
+        "collectionPath": "results"
+      },
+      "expected": {
+        "pass": true,
+        "rowCount": 2,
+        "hiddenField": {
+          "collectionPath": "results",
+          "field": "patient.patientsex"
+        }
+      }
+    },
+    {
+      "name": "max-results-truncates-collection",
+      "request": {
+        "method": "GET",
+        "path": "/drug/event.json",
+        "collectionPath": "results"
+      },
+      "expected": { "pass": true, "rowCount": 2 }
+    }
+  ]
+}

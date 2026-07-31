@@ -1,0 +1,43 @@
+{
+  "version": "1.0",
+  "name": "healthcare-analyst-db",
+  "description": "Database access for healthcare analysts with PII masking and region filtering.",
+  "priority": 10,
+  "appliesToAll": false,
+  "sourcePatterns": ["db:production:patient_*", "db:production:encounter_*"],
+  "permissions": {
+    "canQuery": true,
+    "readOnly": true
+  },
+  "objectRules": {
+    "allowedObjects": ["patients", "encounters", "diagnoses", "medications"],
+    "hiddenObjects": ["billing_internal", "audit_log", "admin_notes"],
+    "fieldRules": {
+      "allowedFields": [
+        "patients.patient_id", "patients.age_group", "patients.region",
+        "encounters.encounter_id", "encounters.encounter_date",
+        "diagnoses.*", "medications.medication_name", "medications.dosage"
+      ],
+      "hiddenFields": ["patients.ssn", "patients.date_of_birth", "patients.street_address"],
+      "maskedFields": [
+        {
+          "field": "patients.full_name",
+          "maskType": "partial",
+          "parameters": { "showFirst": 1, "showLast": 0, "maskChar": "*" }
+        },
+        {
+          "field": "patients.email",
+          "maskType": "hash",
+          "parameters": { "algorithm": "sha256" }
+        }
+      ]
+    },
+    "rowFilters": [
+      { "field": "region", "operator": "in", "values": ["us-east", "us-west"] },
+      { "field": "status", "operator": "notEquals", "value": "deleted" }
+    ]
+  },
+  "limits": {
+    "maxResults": 5000
+  }
+}

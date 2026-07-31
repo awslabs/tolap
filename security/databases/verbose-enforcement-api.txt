@@ -1,0 +1,143 @@
+Verbose api-category enforcement transcript — real HTTP server over a socket
+Run: 2026-07-30T20:43:17Z
+Upstream: tools/test-api/server.py on loopback (NOT a mocked transport)
+Command: python3 tests/integration/verbose_api_log.py
+
+Upstream: http://127.0.0.1:63979 (tools/test-api/server.py, real socket)
+Source  : sdk/python/tests/integration/verbose_api_log.py
+
+Every request below crossed a real socket and every body below is what the server
+actually sent. Claims are checked as they are printed; a FAIL makes this run exit
+non-zero, so a broken transcript cannot be recorded as passing evidence.
+
+==============================================================================
+api: the RAW upstream, so every exclusion below is demonstrably TOLAP's doing
+==============================================================================
+    GET /patients (unenforced, straight from the server): {"results": [{"date_of_birth": "1979-04-12", "email": "alice@example.com", "full_name": "Alice Nguyen", "id": 1, "region": "us-east", "ssn": "111-22-3333", "status": "active", "tags": ["public"]}, {"date_of_birth": "1985-11-02", "email": "bruno@example.com", "full_name": "Bruno Sato", "id": 2, "region": "us-west", "ssn": "222-33-4444", "status": "active", "tags": ["public", "research"]}, {"date_of...
+    upstream records: 5 record(s)
+        {"date_of_birth": "1979-04-12", "email": "alice@example.com", "full_name": "Alice Nguyen", "id": 1, "region": "us-east", "ssn": "111-22-3333", "status": "active", "tags": ["public"]}
+        {"date_of_birth": "1985-11-02", "email": "bruno@example.com", "full_name": "Bruno Sato", "id": 2, "region": "us-west", "ssn": "222-33-4444", "status": "active", "tags": ["public", "research"]}
+        {"date_of_birth": "1992-07-30", "email": "chloe@example.com", "full_name": "Chloe Adeyemi", "id": 3, "region": "eu-west", "ssn": "333-44-5555", "status": "active", "tags": ["confidential"]}
+        {"date_of_birth": "1968-01-19", "email": "dmitri@example.com", "full_name": "Dmitri Volkov", "id": 4, "region": "us-east", "ssn": "444-55-6666", "status": "deleted", "tags": ["public"]}
+        ... 1 more
+
+==============================================================================
+api: ENDPOINT RULES -- the request is refused before it is issued
+==============================================================================
+
+--- allowedEndpoints: /patients only
+    policy: endpointRules.allowedEndpoints=[/patients]
+    requested: GET /admin/audit
+    decision: allowed=False reason='endpoint not in allowed set'
+    OK   an endpoint outside the allow-list is refused
+    OK   CONTROL: the endpoint really is live upstream (HTTP 200), so the denial came from policy and not from a missing route
+    OK   CONTROL: the permitted endpoint is allowed
+
+--- no request reaches the socket when denied
+    policy: same policy, through the wrapper
+    raised  : PermissionError: Access denied: endpoint not in allowed set
+    OK   the wrapper raised instead of returning upstream data
+
+--- allowedMethods: GET only
+    policy: endpointRules.allowedMethods=[GET]
+    POST /echo -> allowed=False reason='method not allowed'
+    OK   POST is refused when only GET is granted
+    OK   CONTROL: GET on the same path is permitted
+
+--- readOnly denies a write even when the method is listed
+    policy: readOnly=true, methods=[GET,POST]
+    POST /echo -> allowed=False reason='method not allowed on a read-only policy'
+    OK   two independent gates: the method allow-list is not sufficient on its own
+
+==============================================================================
+api: FIELD RULES over the real response body
+==============================================================================
+
+--- hiddenFields: ssn
+    policy: fieldRules.hiddenFields=[ssn]
+    sent: GET /patients
+    enforced response: 5 record(s)
+        {"date_of_birth": "1979-04-12", "email": "alice@example.com", "full_name": "Alice Nguyen", "id": 1, "region": "us-east", "status": "active", "tags": ["public"]}
+        {"date_of_birth": "1985-11-02", "email": "bruno@example.com", "full_name": "Bruno Sato", "id": 2, "region": "us-west", "status": "active", "tags": ["public", "research"]}
+        {"date_of_birth": "1992-07-30", "email": "chloe@example.com", "full_name": "Chloe Adeyemi", "id": 3, "region": "eu-west", "status": "active", "tags": ["confidential"]}
+        {"date_of_birth": "1968-01-19", "email": "dmitri@example.com", "full_name": "Dmitri Volkov", "id": 4, "region": "us-east", "status": "deleted", "tags": ["public"]}
+        ... 1 more
+    OK   ssn was present in the raw upstream body, so its removal is the pipeline's work
+    OK   ssn is absent from every enforced record
+    OK   the record count is unchanged -- hiding a field is not dropping a record
+
+--- allowedFields: id, name
+    policy: fieldRules.allowedFields=[id, name]
+    enforced response: 5 record(s)
+        {"id": 1}
+        {"id": 2}
+        {"id": 3}
+        {"id": 4}
+        ... 1 more
+    OK   only the allow-listed keys survive
+
+==============================================================================
+api: MASKING over the real response body
+==============================================================================
+
+--- maskedFields: ssn -> redact
+    policy: maskType=redact
+    before: ssn=['111-22-3333', '222-33-4444', '333-44-5555']
+    after : ssn=['[REDACTED]', '[REDACTED]', '[REDACTED]']
+    OK   the value is replaced, not merely hidden
+    OK   the record survives -- masking is not record suppression
+
+--- maskedFields: ssn -> hash
+    policy: maskType=hash
+    before: ssn=['111-22-3333', '222-33-4444', '333-44-5555']
+    after : ssn=['2e54cc08456e5401', '3371a2c893de6cad', '5158e06a24728730']
+    OK   the value becomes a stable digest
+    OK   the record survives -- masking is not record suppression
+
+--- maskedFields: ssn -> null
+    policy: maskType=null
+    before: ssn=['111-22-3333', '222-33-4444', '333-44-5555']
+    after : ssn=[None, None, None]
+    OK   the value becomes null
+    OK   the record survives -- masking is not record suppression
+
+==============================================================================
+api: ROW FILTERS and LIMITS, applied after the response arrives
+==============================================================================
+
+--- rowFilters: region = us-east
+    policy: rowFilters[region equals us-east]
+    enforced response: 2 record(s)
+        {"date_of_birth": "1979-04-12", "email": "alice@example.com", "full_name": "Alice Nguyen", "id": 1, "region": "us-east", "ssn": "111-22-3333", "status": "active", "tags": ["public"]}
+        {"date_of_birth": "1968-01-19", "email": "dmitri@example.com", "full_name": "Dmitri Volkov", "id": 4, "region": "us-east", "ssn": "444-55-6666", "status": "deleted", "tags": ["public"]}
+    upstream regions: ['eu-west', 'us-east', 'us-west']
+    OK   the upstream returned more than one region, so the filter had work to do
+    OK   only us-east records remain
+    OK   fewer records than upstream returned
+
+--- limits.maxResults = 1
+    policy: limits.maxResults=1
+    enforced response: 1 record(s)
+        {"date_of_birth": "1979-04-12", "email": "alice@example.com", "full_name": "Alice Nguyen", "id": 1, "region": "us-east", "ssn": "111-22-3333", "status": "active", "tags": ["public"]}
+    OK   exactly one record is returned
+    OK   the upstream had more, so the ceiling was enforced here
+
+==============================================================================
+api: real-socket behaviour a mocked transport cannot reach
+==============================================================================
+
+--- a non-2xx upstream status
+    policy: allowedEndpoints=[/status/404]
+    raised  : UpstreamHttpError: HTTP 404 from http://127.0.0.1:63979/notfound
+    OK   a non-2xx upstream response is surfaced as an error, not silently returned
+
+--- query string is stripped before policy evaluation
+    policy: allowedEndpoints=[/patients]
+    sent: GET /patients?region=us-east
+    enforced response: 2 record(s)
+        {"date_of_birth": "1979-04-12", "email": "alice@example.com", "full_name": "Alice Nguyen", "id": 1, "region": "us-east", "ssn": "111-22-3333", "status": "active", "tags": ["public"]}
+        {"date_of_birth": "1968-01-19", "email": "dmitri@example.com", "full_name": "Dmitri Volkov", "id": 4, "region": "us-east", "ssn": "444-55-6666", "status": "deleted", "tags": ["public"]}
+    OK   the path matched the allow-list despite the query string -- otherwise every parameterised request would be denied
+
+==============================================================================
+All claims held against the live HTTP server.

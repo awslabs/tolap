@@ -1,0 +1,25 @@
+db/Athena integration tests — TypeScript, real AWS
+Run: 2026-07-30T19:37:10Z
+Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+
+
+ RUN  v4.1.10 /Users/pspies/code/tolap-public/sdk/typescript/packages/mcp
+
+ ✓ tests/integration/aws/athena-db.test.ts > row-filter pushdown honoured by Athena > BASELINE: unfiltered returns every region 2505ms
+ ✓ tests/integration/aws/athena-db.test.ts > row-filter pushdown honoured by Athena > a row filter is pushed into the SQL and honoured by Athena 2338ms
+ ✓ tests/integration/aws/athena-db.test.ts > row-filter pushdown honoured by Athena > the in operator pushes down 2341ms
+ ✓ tests/integration/aws/athena-db.test.ts > row-filter pushdown honoured by Athena > notEquals pushdown excludes the region 2367ms
+ ✓ tests/integration/aws/athena-db.test.ts > row-filter pushdown honoured by Athena > maxResults is pushed as LIMIT 2334ms
+ ✓ tests/integration/aws/athena-db.test.ts > denials precede execution > canQuery false yields no executable SQL 1ms
+ ✓ tests/integration/aws/athena-db.test.ts > denials precede execution > a table outside allowedObjects is refused 0ms
+ ✓ tests/integration/aws/athena-db.test.ts > denials precede execution > CONTROL: a permitted table produces runnable SQL 2329ms
+ ✓ tests/integration/aws/athena-db.test.ts > post-fetch pipeline over real Athena rows > a hidden field survives the rewrite and is removed after 2342ms
+ ✓ tests/integration/aws/athena-db.test.ts > post-fetch pipeline over real Athena rows > masking applies to real Athena rows 2337ms
+ ✓ tests/integration/aws/athena-db.test.ts > post-fetch pipeline over real Athena rows > allowedFields projects Athena rows 2326ms
+ ✓ tests/integration/aws/athena-db.test.ts > post-fetch pipeline over real Athena rows > the pushdown and the post pass agree on the same policy 4668ms
+
+ Test Files  1 passed (1)
+      Tests  12 passed (12)
+   Start at  15:37:10
+   Duration  28.51s (transform 86ms, setup 0ms, import 192ms, tests 28.24s, environment 0ms)
+

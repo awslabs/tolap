@@ -1,0 +1,13 @@
+# Framework versions these examples were verified against. Pinned to minors rather than exact
+# patches: the integration point (a decorator over a plain function) is stable, but agent
+# frameworks break APIs across minors often enough that an unpinned range would silently rot.
+#
+# The examples skip cleanly when a framework is absent, so you can install only the one you use.
+mcp~=1.29
+strands-agents~=1.50
+langchain-core~=1.5
+openai-agents~=0.19
+pydantic-ai-slim~=2.21
+semantic-kernel~=1.44
+
+pytest~=9.0

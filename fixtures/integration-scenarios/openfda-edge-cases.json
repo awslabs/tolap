@@ -1,0 +1,272 @@
+{
+  "description": "Adversarial / edge-case scenarios for the openFDA API wrapper. Each case tests one corner of the masking, hidden-field, endpoint, or response-shape contract that the happy-path scenarios don't.",
+  "scenarios": [
+    {
+      "name": "hidden-and-masked-overlap-hidden-wins",
+      "comment": "When a field is BOTH in hiddenFields AND maskedFields, the field must be removed entirely (no masked value should leak).",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/*"],
+            "allowedMethods": ["GET"]
+          },
+          "fieldRules": {
+            "hiddenFields": ["results.safetyreportid"],
+            "maskedFields": [
+              {
+                "field": "results.safetyreportid",
+                "maskType": "hash",
+                "parameters": { "algorithm": "sha256" }
+              }
+            ]
+          }
+        }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json", "collectionPath": "results" },
+      "expected": {
+        "pass": true,
+        "hiddenField": { "collectionPath": "results", "field": "safetyreportid" }
+      }
+    },
+    {
+      "name": "mask-applies-to-every-element-of-nested-array",
+      "comment": "results.patient.reaction is an array; masking results.patient.reaction.reactionmeddrapt must hit EVERY element, not just the first.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/*"],
+            "allowedMethods": ["GET"]
+          },
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "results.patient.reaction.reactionmeddrapt",
+                "maskType": "redact"
+              }
+            ]
+          }
+        }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json", "collectionPath": "results" },
+      "expected": {
+        "pass": true,
+        "everyArrayElementMasked": {
+          "arrayPath": "results.patient.reaction",
+          "field": "reactionmeddrapt",
+          "expectedValue": "[REDACTED]"
+        }
+      }
+    },
+    {
+      "name": "mask-deep-nested-array-of-objects",
+      "comment": "results.patient.drug[*].medicinalproduct is a string two array levels deep; masking must traverse correctly.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/*"],
+            "allowedMethods": ["GET"]
+          },
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "results.patient.drug.medicinalproduct",
+                "maskType": "redact"
+              }
+            ]
+          }
+        }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json", "collectionPath": "results" },
+      "expected": {
+        "pass": true,
+        "everyArrayElementMasked": {
+          "arrayPath": "results.patient.drug",
+          "field": "medicinalproduct",
+          "expectedValue": "[REDACTED]"
+        }
+      }
+    },
+    {
+      "name": "hide-field-that-does-not-exist-is-no-op",
+      "comment": "A hiddenField pointing at a path no row has must NOT crash and must NOT damage the rest of the response.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/*"],
+            "allowedMethods": ["GET"]
+          },
+          "fieldRules": {
+            "hiddenFields": ["results.nonexistent.subpath"]
+          }
+        }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json", "collectionPath": "results" },
+      "expected": {
+        "pass": true,
+        "responseShape": {
+          "topLevelKeys": ["meta", "results"],
+          "minResultsCount": 1
+        }
+      }
+    },
+    {
+      "name": "mask-field-that-does-not-exist-is-no-op",
+      "comment": "A maskedField pointing at a missing path must not throw; rest of the body unchanged.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/*"],
+            "allowedMethods": ["GET"]
+          },
+          "fieldRules": {
+            "maskedFields": [
+              { "field": "results.no.such.field", "maskType": "redact" }
+            ]
+          }
+        }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json", "collectionPath": "results" },
+      "expected": {
+        "pass": true,
+        "responseShape": {
+          "topLevelKeys": ["meta", "results"],
+          "minResultsCount": 1
+        }
+      }
+    },
+    {
+      "name": "hash-a-numeric-field-yields-string-hex-16",
+      "comment": "patient.patientonsetage is an integer in the live response; hashing must coerce to string and return 16 hex chars.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/*"],
+            "allowedMethods": ["GET"]
+          },
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "results.patient.patientonsetage",
+                "maskType": "hash",
+                "parameters": { "algorithm": "sha256" }
+              }
+            ]
+          }
+        }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json", "collectionPath": "results" },
+      "expected": {
+        "pass": true,
+        "everyArrayElementMatchesPattern": {
+          "arrayPath": "results",
+          "field": "patient.patientonsetage",
+          "pattern": "^[a-f0-9]{16}$",
+          "allowMissing": true
+        }
+      }
+    },
+    {
+      "name": "max-results-zero-empties-the-collection",
+      "comment": "maxResults=0 must truncate the array to length 0, never to the full set.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/*"],
+            "allowedMethods": ["GET"]
+          }
+        },
+        "limits": { "maxResults": 0 }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json", "collectionPath": "results" },
+      "expected": { "pass": true, "rowCount": 0 }
+    },
+    {
+      "name": "empty-allowed-endpoints-denies-everything",
+      "comment": "An empty allowedEndpoints array must mean 'nothing is allowed', not 'no restriction'.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": [],
+            "allowedMethods": ["GET"]
+          }
+        }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json" },
+      "expected": { "pass": false, "errorContains": "endpoint not in allowed set" }
+    },
+    {
+      "name": "allowed-and-hidden-overlap-hidden-wins",
+      "comment": "If /drug/event.json appears in BOTH allowed and hidden, hidden must win.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/event.json"],
+            "hiddenEndpoints": ["/drug/event.json"],
+            "allowedMethods": ["GET"]
+          }
+        }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json" },
+      "expected": { "pass": false, "errorContains": "endpoint is hidden" }
+    },
+    {
+      "name": "case-sensitive-method-still-works",
+      "comment": "Lowercase method 'get' must be normalized to GET and pass the allow-list.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/*"],
+            "allowedMethods": ["GET"]
+          }
+        }
+      },
+      "request": { "method": "get", "path": "/drug/event.json", "collectionPath": "results" },
+      "expected": { "pass": true, "minResultsCount": 1 }
+    },
+    {
+      "name": "hidden-field-does-not-leak-into-meta",
+      "comment": "Stripping results.patient.patientsex must NOT touch the unrelated `meta` block at the top level.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/drug/*"],
+            "allowedMethods": ["GET"]
+          },
+          "fieldRules": {
+            "hiddenFields": ["results.patient.patientsex"]
+          }
+        }
+      },
+      "request": { "method": "GET", "path": "/drug/event.json", "collectionPath": "results" },
+      "expected": {
+        "pass": true,
+        "responseShape": {
+          "topLevelKeys": ["meta", "results"],
+          "metaMustContainKeys": ["disclaimer", "terms", "license"]
+        }
+      }
+    }
+  ]
+}

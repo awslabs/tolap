@@ -1,0 +1,273 @@
+{
+  "description": "Comprehensive field-rule coverage. Each scenario runs a SELECT against the seeded patients table and asserts which fields are visible, denied, or masked. Covers allowedFields allow-list, glob patterns, all 5 mask types, partial-mask parameters, and custom mask characters.",
+  "scenarios": [
+    {
+      "name": "allowed-fields-permits-only-listed-columns",
+      "comment": "When allowedFields is set, ONLY those fields may be requested. region/status are out of the allow-set and must be denied.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "allowedFields": ["patients.id", "patients.full_name"]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region"] },
+      "fields": ["patients.id", "patients.region"],
+      "expected": { "pass": false, "errorContains": "patients.region" }
+    },
+    {
+      "name": "allowed-fields-passes-when-all-requested-fields-in-set",
+      "comment": "Symmetric positive case: every requested field is in the allow-set so the query runs.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "allowedFields": ["patients.id", "patients.full_name", "patients.region", "patients.status"]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "full_name", "region", "status"] },
+      "fields": ["patients.id", "patients.full_name", "patients.region", "patients.status"],
+      "expected": { "pass": true, "rowCount": 6 }
+    },
+    {
+      "name": "hidden-field-glob-denies-pattern-match",
+      "comment": "patients.* hides every field; the request must fail.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": { "hiddenFields": ["patients.*"] }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region"] },
+      "fields": ["patients.id"],
+      "expected": { "pass": false, "errorContains": "patients.id" }
+    },
+    {
+      "name": "allowed-fields-glob-permits-pattern-match",
+      "comment": "Glob 'patients.*' in allowedFields matches every patients.* field.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": { "allowedFields": ["patients.*"] }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "full_name", "region"] },
+      "fields": ["patients.id", "patients.full_name", "patients.region"],
+      "expected": { "pass": true, "rowCount": 6 }
+    },
+    {
+      "name": "mask-full-replaces-every-character",
+      "comment": "Full mask blanks the entire string with '*'.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "maskedFields": [
+              { "field": "patients.email", "maskType": "full" }
+            ]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "email"] },
+      "fields": ["patients.id", "patients.email"],
+      "expected": {
+        "pass": true,
+        "rowCount": 6,
+        "maskedField": { "field": "email", "mask": "full-stars" }
+      }
+    },
+    {
+      "name": "mask-null-replaces-with-null",
+      "comment": "Null mask replaces the value with JSON null (no string).",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "maskedFields": [
+              { "field": "patients.email", "maskType": "null" }
+            ]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "email"] },
+      "fields": ["patients.id", "patients.email"],
+      "expected": {
+        "pass": true,
+        "rowCount": 6,
+        "maskedField": { "field": "email", "mask": "is-null" }
+      }
+    },
+    {
+      "name": "mask-redact-replaces-with-literal",
+      "comment": "Redact replaces the value with the literal string '[REDACTED]'.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "maskedFields": [
+              { "field": "patients.email", "maskType": "redact" }
+            ]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "email"] },
+      "fields": ["patients.id", "patients.email"],
+      "expected": {
+        "pass": true,
+        "rowCount": 6,
+        "maskedField": { "field": "email", "mask": "redacted" }
+      }
+    },
+    {
+      "name": "partial-mask-with-show-last",
+      "comment": "Partial with showLast=4 keeps the last 4 chars of every email and masks the rest.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "patients.email",
+                "maskType": "partial",
+                "parameters": { "showLast": 4, "maskChar": "*" }
+              }
+            ]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "email"] },
+      "fields": ["patients.id", "patients.email"],
+      "expected": {
+        "pass": true,
+        "rowCount": 6,
+        "maskedField": { "field": "email", "mask": "partial-last-4" }
+      }
+    },
+    {
+      "name": "partial-mask-with-first-and-last",
+      "comment": "Partial with both showFirst=2 and showLast=2 keeps the bookends, stars the middle.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "patients.email",
+                "maskType": "partial",
+                "parameters": { "showFirst": 2, "showLast": 2, "maskChar": "*" }
+              }
+            ]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "email"] },
+      "fields": ["patients.id", "patients.email"],
+      "expected": {
+        "pass": true,
+        "rowCount": 6,
+        "maskedField": { "field": "email", "mask": "partial-first-2-last-2" }
+      }
+    },
+    {
+      "name": "partial-mask-show-everything-degrades-to-full-mask",
+      "comment": "When showFirst+showLast >= len(value), the value MUST NOT be returned unmasked (that would be a fail-open disclosure). It degrades to a full mask. See canonical-enforcement-spec.md §6.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "patients.region",
+                "maskType": "partial",
+                "parameters": { "showFirst": 100, "showLast": 100 }
+              }
+            ]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region"] },
+      "fields": ["patients.id", "patients.region"],
+      "expected": {
+        "pass": true,
+        "rowCount": 6,
+        "maskedField": { "field": "region", "mask": "full-stars" }
+      }
+    },
+    {
+      "name": "partial-mask-custom-mask-char",
+      "comment": "When maskChar='#', masked positions use '#' not '*'.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "patients.full_name",
+                "maskType": "partial",
+                "parameters": { "showFirst": 1, "maskChar": "#" }
+              }
+            ]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "full_name"] },
+      "fields": ["patients.id", "patients.full_name"],
+      "expected": {
+        "pass": true,
+        "rowCount": 6,
+        "maskedField": { "field": "full_name", "mask": "partial-first-1-hash" }
+      }
+    },
+    {
+      "name": "mask-glob-applies-to-every-matching-field",
+      "comment": "A glob in maskedFields like patients.* must mask every column on the row. Defends against a bug where masking only matches exact paths.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["patients"],
+          "fieldRules": {
+            "maskedFields": [
+              { "field": "patients.region", "maskType": "redact" },
+              { "field": "patients.status", "maskType": "redact" }
+            ]
+          }
+        }
+      },
+      "query": { "table": "patients", "columns": ["id", "region", "status"] },
+      "fields": ["patients.id", "patients.region", "patients.status"],
+      "expected": {
+        "pass": true,
+        "rowCount": 6,
+        "everyRowField": [
+          { "field": "region", "equals": "[REDACTED]" },
+          { "field": "status", "equals": "[REDACTED]" }
+        ]
+      }
+    }
+  ]
+}

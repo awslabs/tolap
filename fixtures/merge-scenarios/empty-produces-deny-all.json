@@ -1,0 +1,8 @@
+{
+  "description": "Empty policy set -- produces deny-all policy",
+  "inputs": [],
+  "expected": {
+    "sourceProfiles": [],
+    "permissions": { "canQuery": false, "readOnly": true }
+  }
+}

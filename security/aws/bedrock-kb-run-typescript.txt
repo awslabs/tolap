@@ -1,0 +1,21 @@
+kb enforcement — TypeScript, real Bedrock Knowledge Base
+Run: 2026-07-30T19:44:31Z
+Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1   KB: K3BOEARXHI
+
+
+ RUN  v4.1.10 /Users/pspies/code/tolap-public/sdk/typescript/packages/mcp
+
+ ✓ tests/integration/aws/bedrock-kb.test.ts > §7: the kb pushdown enforces at the source > BASELINE: unfiltered retrieval returns both classifications 535ms
+ ✓ tests/integration/aws/bedrock-kb.test.ts > §7: the kb pushdown enforces at the source > a denylist pushdown excludes secret at the source 981ms
+ ✓ tests/integration/aws/bedrock-kb.test.ts > §7: the kb pushdown enforces at the source > an allowlist pushdown returns only public 520ms
+ ✓ tests/integration/aws/bedrock-kb.test.ts > §7: the kb pushdown enforces at the source > the pushdown and the post pass reach the same verdict 981ms
+ ✓ tests/integration/aws/bedrock-kb.test.ts > §7: Bedrock accepts the generated filter shapes > denylist-only is accepted 216ms
+ ✓ tests/integration/aws/bedrock-kb.test.ts > §7: Bedrock accepts the generated filter shapes > allowlist-only is accepted 195ms
+ ✓ tests/integration/aws/bedrock-kb.test.ts > §7: Bedrock accepts the generated filter shapes > both-anded is accepted 192ms
+ ✓ tests/integration/aws/bedrock-kb.test.ts > §7: Bedrock accepts the generated filter shapes > NEGATIVE CONTROL: a malformed filter is refused before it is sent 1ms
+
+ Test Files  1 passed (1)
+      Tests  8 passed (8)
+   Start at  15:44:32
+   Duration  3.82s (transform 73ms, setup 0ms, import 124ms, tests 3.62s, environment 0ms)
+

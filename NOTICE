@@ -1,0 +1,12 @@
+TOLAP SDK
+Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+This product is licensed under the Apache License, Version 2.0 (the "License").
+See the LICENSE file for the full license text.
+
+The TOLAP SDK core packages (Tolap.Core / tolap-core / @tolap/core) have no
+third-party runtime dependencies; cryptographic, JSON, and collection
+primitives are provided by each language's standard library.
+
+Development and test tooling (e.g. build systems, test runners) is not
+distributed with the published packages and is licensed under its own terms.

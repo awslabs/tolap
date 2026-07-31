@@ -1,0 +1,651 @@
+{
+  "description": "Provider-side kb metadata filters built from tagRules (connector-spec section 7). One corpus, identical output in .NET, Python, and TypeScript. Every expectation here was produced by executing the implementation, not hand-derived. IMPORTANT: a provider filter is a PUSHDOWN and never a replacement for the post-retrieval pass. Post-retrieval tag extraction is recursive, case-insensitive, and spans tags/Tags/labels/classification/metadata.tags; no provider filter reproduces that. So a filter that matches nothing is useless, not unsafe. The property that MUST hold is the other direction: a pushdown must never exclude a chunk the policy permits, which is why an inexact rule is reported in unpushedRules instead of being approximated.",
+  "cases": [
+    {
+      "name": "denylist-single-key",
+      "note": "A denylist on one indexed key: the well-behaved case. notIn excludes exactly the denied tags and leaves an untagged chunk alone, matching the post pass.",
+      "policy": {
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "tagRules": {
+            "deniedTags": [
+              "Secret",
+              "restricted"
+            ]
+          }
+        }
+      },
+      "metadataKeys": [
+        "classification"
+      ],
+      "expected": {
+        "clauses": [
+          {
+            "key": "classification",
+            "op": "notIn",
+            "values": [
+              "restricted",
+              "secret"
+            ]
+          }
+        ],
+        "deniesEverything": false,
+        "unpushedRules": [],
+        "rendered": {
+          "bedrock": {
+            "notIn": {
+              "key": "classification",
+              "value": [
+                "restricted",
+                "secret"
+              ]
+            }
+          },
+          "opensearch": {
+            "bool": {
+              "must_not": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "restricted",
+                            "secret"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "restricted",
+                            "secret"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ]
+            }
+          },
+          "elasticsearch": {
+            "bool": {
+              "must_not": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "restricted",
+                            "secret"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "restricted",
+                            "secret"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ]
+            }
+          },
+          "azureAiSearch": "not classification/any(t: search.in(t, 'restricted,secret'))",
+          "vertexAiSearch": "NOT classification: ANY(\"restricted\") AND NOT classification: ANY(\"secret\")",
+          "pgvector": "(NOT (metadata->'classification' ?| array['restricted', 'secret']) OR metadata->'classification' IS NULL)"
+        }
+      }
+    },
+    {
+      "name": "allowlist-single-key",
+      "note": "An allow-list on one key renders as a positive match. Exact only because there is a single key; see allowlist-multi-key-unpushable.",
+      "policy": {
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "tagRules": {
+            "allowedTags": [
+              "public",
+              "internal"
+            ]
+          }
+        }
+      },
+      "metadataKeys": [
+        "classification"
+      ],
+      "expected": {
+        "clauses": [
+          {
+            "key": "classification",
+            "op": "in",
+            "values": [
+              "internal",
+              "public"
+            ]
+          }
+        ],
+        "deniesEverything": false,
+        "unpushedRules": [],
+        "rendered": {
+          "bedrock": {
+            "in": {
+              "key": "classification",
+              "value": [
+                "internal",
+                "public"
+              ]
+            }
+          },
+          "opensearch": {
+            "bool": {
+              "filter": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "internal",
+                            "public"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "internal",
+                            "public"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ]
+            }
+          },
+          "elasticsearch": {
+            "bool": {
+              "filter": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "internal",
+                            "public"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "internal",
+                            "public"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ]
+            }
+          },
+          "azureAiSearch": "classification/any(t: search.in(t, 'internal,public'))",
+          "vertexAiSearch": "classification: ANY(\"internal\", \"public\")",
+          "pgvector": "metadata->'classification' ?| array['internal', 'public']"
+        }
+      }
+    },
+    {
+      "name": "both-denied-wins",
+      "note": "Both rules push, combined with AND. Mirrors filterByTags precedence: denied wins.",
+      "policy": {
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "tagRules": {
+            "allowedTags": [
+              "public"
+            ],
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "metadataKeys": [
+        "classification"
+      ],
+      "expected": {
+        "clauses": [
+          {
+            "key": "classification",
+            "op": "notIn",
+            "values": [
+              "secret"
+            ]
+          },
+          {
+            "key": "classification",
+            "op": "in",
+            "values": [
+              "public"
+            ]
+          }
+        ],
+        "deniesEverything": false,
+        "unpushedRules": [],
+        "rendered": {
+          "bedrock": {
+            "andAll": [
+              {
+                "notIn": {
+                  "key": "classification",
+                  "value": [
+                    "secret"
+                  ]
+                }
+              },
+              {
+                "in": {
+                  "key": "classification",
+                  "value": [
+                    "public"
+                  ]
+                }
+              }
+            ]
+          },
+          "opensearch": {
+            "bool": {
+              "filter": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "public"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "public"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ],
+              "must_not": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "secret"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "secret"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ]
+            }
+          },
+          "elasticsearch": {
+            "bool": {
+              "filter": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "public"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "public"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ],
+              "must_not": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "secret"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "secret"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ]
+            }
+          },
+          "azureAiSearch": "not classification/any(t: search.in(t, 'secret')) and classification/any(t: search.in(t, 'public'))",
+          "vertexAiSearch": "NOT classification: ANY(\"secret\") AND classification: ANY(\"public\")",
+          "pgvector": "(NOT (metadata->'classification' ?| array['secret']) OR metadata->'classification' IS NULL) AND metadata->'classification' ?| array['public']"
+        }
+      }
+    },
+    {
+      "name": "denylist-multi-key",
+      "note": "A denylist across several keys ANDs one negated clause per key: a chunk must avoid the denied tag under every key, which is what the post pass requires.",
+      "policy": {
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "metadataKeys": [
+        "tags",
+        "classification"
+      ],
+      "expected": {
+        "clauses": [
+          {
+            "key": "tags",
+            "op": "notIn",
+            "values": [
+              "secret"
+            ]
+          },
+          {
+            "key": "classification",
+            "op": "notIn",
+            "values": [
+              "secret"
+            ]
+          }
+        ],
+        "deniesEverything": false,
+        "unpushedRules": [],
+        "rendered": {
+          "bedrock": {
+            "andAll": [
+              {
+                "notIn": {
+                  "key": "tags",
+                  "value": [
+                    "secret"
+                  ]
+                }
+              },
+              {
+                "notIn": {
+                  "key": "classification",
+                  "value": [
+                    "secret"
+                  ]
+                }
+              }
+            ]
+          },
+          "opensearch": {
+            "bool": {
+              "must_not": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "tags": [
+                            "secret"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "tags.keyword": [
+                            "secret"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                },
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "secret"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "secret"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ]
+            }
+          },
+          "elasticsearch": {
+            "bool": {
+              "must_not": [
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "tags": [
+                            "secret"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "tags.keyword": [
+                            "secret"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                },
+                {
+                  "bool": {
+                    "should": [
+                      {
+                        "terms": {
+                          "classification": [
+                            "secret"
+                          ]
+                        }
+                      },
+                      {
+                        "terms": {
+                          "classification.keyword": [
+                            "secret"
+                          ]
+                        }
+                      }
+                    ],
+                    "minimum_should_match": 1
+                  }
+                }
+              ]
+            }
+          },
+          "azureAiSearch": "not tags/any(t: search.in(t, 'secret')) and not classification/any(t: search.in(t, 'secret'))",
+          "vertexAiSearch": "NOT tags: ANY(\"secret\") AND NOT classification: ANY(\"secret\")",
+          "pgvector": "(NOT (metadata->'tags' ?| array['secret']) OR metadata->'tags' IS NULL) AND (NOT (metadata->'classification' ?| array['secret']) OR metadata->'classification' IS NULL)"
+        }
+      }
+    },
+    {
+      "name": "allowlist-multi-key-unpushable",
+      "note": "NOT PUSHED. The post pass admits a chunk tagged public under EITHER key - a disjunction. ANDing per key would demand the tag under every key and drop chunks the policy permits, so it is reported unpushed rather than approximated.",
+      "policy": {
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "tagRules": {
+            "allowedTags": [
+              "public"
+            ]
+          }
+        }
+      },
+      "metadataKeys": [
+        "tags",
+        "classification"
+      ],
+      "expected": {
+        "clauses": [],
+        "deniesEverything": false,
+        "unpushedRules": [
+          "allowedTags"
+        ],
+        "rendered": {
+          "bedrock": null,
+          "opensearch": null,
+          "elasticsearch": null,
+          "azureAiSearch": null,
+          "vertexAiSearch": null,
+          "pgvector": null
+        }
+      }
+    },
+    {
+      "name": "allowlist-empty-denies-all",
+      "note": "deniesEverything. An empty allowedTags denies every chunk; no portable metadata predicate means match-nothing, and rendering a no-op would fail open. The caller MUST skip retrieval.",
+      "policy": {
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "tagRules": {
+            "allowedTags": []
+          }
+        }
+      },
+      "metadataKeys": [
+        "classification"
+      ],
+      "expected": {
+        "clauses": [],
+        "deniesEverything": true,
+        "unpushedRules": [
+          "allowedTags"
+        ],
+        "rendered": {
+          "bedrock": null,
+          "opensearch": null,
+          "elasticsearch": null,
+          "azureAiSearch": null,
+          "vertexAiSearch": null,
+          "pgvector": null
+        }
+      }
+    },
+    {
+      "name": "denylist-empty-denies-nothing",
+      "note": "An empty deniedTags denies nothing, so there is nothing to push and nothing unpushed.",
+      "policy": {
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "tagRules": {
+            "deniedTags": []
+          }
+        }
+      },
+      "metadataKeys": [
+        "classification"
+      ],
+      "expected": {
+        "clauses": [],
+        "deniesEverything": false,
+        "unpushedRules": [],
+        "rendered": {
+          "bedrock": null,
+          "opensearch": null,
+          "elasticsearch": null,
+          "azureAiSearch": null,
+          "vertexAiSearch": null,
+          "pgvector": null
+        }
+      }
+    }
+  ],
+  "providerConfidence": {
+    "bedrock": "verified - exercised against the real service in the reference implementation",
+    "opensearch": "fromGrammar",
+    "elasticsearch": "fromGrammar",
+    "azureAiSearch": "fromGrammar",
+    "vertexAiSearch": "fromGrammar",
+    "pgvector": "fromGrammar"
+  },
+  "pgvectorColumn": "metadata"
+}

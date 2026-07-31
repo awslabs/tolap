@@ -1,0 +1,508 @@
+{
+  "description": "Every row-filter operator the schema permits, applied to one shared record set. Exists because the corpus previously exercised only 9 of the 16 operators, so nothing forced the three SDKs to agree on the other 7 -- which is how a 9-vs-16 divergence shipped: a schema-valid 'between' policy crashed one SDK, silently dropped every row in another, and enforced correctly in the third.",
+  "action": "applyRowFilters",
+  "notes": "Expectations are derived from canonical-enforcement-spec.md section 7, not from any implementation. Every operator drops a row whose referenced field is ABSENT, including the negative ones -- that fail-closed rule is the point of the 'missing' record in each case. A field present with a null value is distinct from an absent field. An absent field is dropped by every operator; a present-null field is kept by the negative operators and matched by isNull, which is what keeps the pushed-down SQL form -- (col <> 'x' OR col IS NULL) -- equivalent to the post-fetch pass. Comparison operators treat a non-comparable value as a non-match rather than raising. 'like'/'notLike' use SQL LIKE wildcards and are case-SENSITIVE, unlike field-name and tag-value matching; 'matches' is a full-match regex. Each case carries a full policy rather than a bare filter so the shared corpus walk discovers it and validates it against policy-definition.schema.json -- a bare filter object would have been silently exempt from schema validation.",
+  "records": [
+    {
+      "id": "low",
+      "score": 10,
+      "region": "us-east",
+      "name": "alice smith"
+    },
+    {
+      "id": "mid",
+      "score": 50,
+      "region": "us-west",
+      "name": "ALICE JONES"
+    },
+    {
+      "id": "high",
+      "score": 90,
+      "region": "eu-west",
+      "name": "bob stone"
+    },
+    {
+      "id": "nullish",
+      "score": null,
+      "region": null,
+      "name": null
+    },
+    {
+      "id": "missing"
+    }
+  ],
+  "cases": [
+    {
+      "name": "equals",
+      "expected": [
+        "low"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "notEquals-drops-absent-field-but-keeps-present-null",
+      "expected": [
+        "mid",
+        "high",
+        "nullish"
+      ],
+      "notes": "'missing' is dropped because the field is ABSENT -- the negative operators failing open on an absent field was a real defect. 'nullish' is KEPT: the field is present with a null value, which is a different case. This is not an arbitrary choice -- when the filter is pushed into SQL the rewriter emits (col <> 'x' OR col IS NULL) precisely so the database and the post-fetch pass select the same rows. Verified against Postgres: the bare form keeps only 'mid', the IS NULL arm keeps 'mid' and 'nullish', matching this expectation.",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "notEquals",
+              "value": "us-east"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "in",
+      "expected": [
+        "low",
+        "mid"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "in",
+              "values": [
+                "us-east",
+                "us-west"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "notIn-drops-absent-field-but-keeps-present-null",
+      "expected": [
+        "high",
+        "nullish"
+      ],
+      "notes": "Same reasoning as notEquals: absent is dropped, present-and-null is kept, so the pushed-down and post-fetch paths agree.",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "notIn",
+              "values": [
+                "us-east",
+                "us-west"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "greaterThan",
+      "expected": [
+        "high"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "score",
+              "operator": "greaterThan",
+              "value": 50
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "greaterThanOrEqual-includes-the-boundary",
+      "expected": [
+        "mid",
+        "high"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "score",
+              "operator": "greaterThanOrEqual",
+              "value": 50
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "lessThan",
+      "expected": [
+        "low"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "score",
+              "operator": "lessThan",
+              "value": 50
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "lessThanOrEqual-includes-the-boundary",
+      "expected": [
+        "low",
+        "mid"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "score",
+              "operator": "lessThanOrEqual",
+              "value": 50
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "contains",
+      "expected": [
+        "low"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "name",
+              "operator": "contains",
+              "value": "smith"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "startsWith",
+      "expected": [
+        "high"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "name",
+              "operator": "startsWith",
+              "value": "bob"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "like-is-case-sensitive",
+      "expected": [
+        "low"
+      ],
+      "notes": "'ALICE JONES' is NOT matched. LIKE is case-sensitive in SQL, and a like filter may be pushed into a WHERE clause verbatim -- matching case-insensitively post-fetch would make the same policy select different rows depending on whether pushdown was enabled.",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "name",
+              "operator": "like",
+              "value": "alice%"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "like-underscore-matches-one-character",
+      "expected": [
+        "low"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "like",
+              "value": "us-eas_"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "notLike-drops-absent-field-but-keeps-present-null",
+      "expected": [
+        "mid",
+        "high",
+        "nullish"
+      ],
+      "notes": "'ALICE JONES' survives because LIKE is case-sensitive, so it does not match the pattern. 'nullish' is KEPT and 'missing' is dropped, identically to notEquals and notIn: notLike is a negative operator, so the pushed-down form must carry the same (col NOT LIKE 'x' OR col IS NULL) arm. This case caught a real divergence -- Python dropped the null row while .NET kept it, and both rewriters omitted the IS NULL arm for notLike while emitting it for the other two negatives. Verified against Postgres: bare NOT LIKE keeps only mid and high; with the IS NULL arm it also keeps nullish.",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "name",
+              "operator": "notLike",
+              "value": "alice%"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "matches-is-a-full-match-regex",
+      "expected": [
+        "low",
+        "mid"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "matches",
+              "value": "us-.*"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "matches-anchors-the-whole-pattern",
+      "expected": [],
+      "notes": "The pattern must compile as ^(?:alice|bob)$, not ^alice|bob$. Without the non-capturing group the anchors bind to one alternative each and 'alice smith' would match -- a real fail-open.",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "name",
+              "operator": "matches",
+              "value": "alice|bob"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "isNull-matches-present-and-null-only",
+      "expected": [
+        "nullish"
+      ],
+      "notes": "'missing' is DROPPED, not matched. 'the field is absent' and 'the field is present and null' are different statements, and only the second is what isNull asks about. A carve-out would also be self-defeating: a projection that omitted the column would start satisfying an isNull filter, so narrowing a query could widen a result.",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "isNull"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "isNotNull",
+      "expected": [
+        "low",
+        "mid",
+        "high"
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "isNotNull"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "between-is-inclusive",
+      "expected": [
+        "low",
+        "mid"
+      ],
+      "notes": "Both bounds are inclusive, and values are ordered [low, high].",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "score",
+              "operator": "between",
+              "values": [
+                10,
+                50
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "between-inverted-range-matches-nothing",
+      "expected": [],
+      "notes": "An inverted range is not silently reordered. Reordering would enforce a policy the author did not write; matching nothing is the fail-closed reading of a range that cannot be satisfied.",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "score",
+              "operator": "between",
+              "values": [
+                50,
+                10
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "type-mismatch-is-a-non-match-not-an-error",
+      "expected": [],
+      "notes": "Comparing a string to a number drops the row rather than raising. One malformed value must not abort the whole result pass.",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "name",
+              "operator": "greaterThan",
+              "value": 50
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "filters-are-ANDed",
+      "expected": [
+        "mid"
+      ],
+      "notes": "A row must satisfy every filter. 'high' passes the score filter but fails the region one.",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "score",
+              "operator": "greaterThanOrEqual",
+              "value": 50
+            },
+            {
+              "field": "region",
+              "operator": "notEquals",
+              "value": "eu-west"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

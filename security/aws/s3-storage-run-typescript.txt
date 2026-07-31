@@ -1,0 +1,37 @@
+storage/S3 integration tests — TypeScript, real AWS
+Run: 2026-07-30T19:26:54Z
+Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Command: TOLAP_TEST_AWS=1 npx vitest run tests/integration/aws/s3-storage.test.ts
+
+
+ RUN  v4.1.10 /Users/pspies/code/tolap-public/sdk/typescript/packages/mcp
+
+ ✓ tests/integration/aws/s3-storage.test.ts > §8: a denied prefix never reaches S3 > a denied prefix issues no list call 1ms
+ ✓ tests/integration/aws/s3-storage.test.ts > §8: a denied prefix never reaches S3 > CONTROL: a permitted prefix does issue a list call 46ms
+ ✓ tests/integration/aws/s3-storage.test.ts > §8: a denied prefix never reaches S3 > a hidden prefix also issues no call 0ms
+ ✓ tests/integration/aws/s3-storage.test.ts > §3.1 prefix globs against real keys > a prefix glob descends arbitrarily 43ms
+ ✓ tests/integration/aws/s3-storage.test.ts > §3.1 prefix globs against real keys > the bare prefix is NOT granted by its own glob 0ms
+ ✓ tests/integration/aws/s3-storage.test.ts > §3.1 prefix globs against real keys > every returned key satisfies the policy 41ms
+ ✓ tests/integration/aws/s3-storage.test.ts > tagRules on a listing > ListObjectsV2 returns no tags 34ms
+ ✓ tests/integration/aws/s3-storage.test.ts > tagRules on a listing > tags are only available via GetObjectTagging 46ms
+ ✓ tests/integration/aws/s3-storage.test.ts > tagRules on a listing > EXPLOIT: allowedTags over a bare listing drops everything 34ms
+ ✓ tests/integration/aws/s3-storage.test.ts > tagRules on a listing > CONTROL: enriching entries with tags makes the allowlist work 272ms
+ ✓ tests/integration/aws/s3-storage.test.ts > tagRules on a listing > a denylist keeps untagged entries 59ms
+ ✓ tests/integration/aws/s3-storage.test.ts > write path > a read-only policy denies a PUT before it is issued 1ms
+ ✓ tests/integration/aws/s3-storage.test.ts > write path > CONTROL: a permitted insert writes and reads back 123ms
+ ✓ tests/integration/aws/s3-storage.test.ts > write path > insert is denied when only update is granted 0ms
+ ✓ tests/integration/aws/s3-storage.test.ts > write path > delete requires canDelete 0ms
+ ✓ tests/integration/aws/s3-storage.test.ts > write path > a write to a denied prefix is refused 0ms
+ ✓ tests/integration/aws/s3-storage.test.ts > write path > writing a read-only metadata field is refused 0ms
+ ✓ tests/integration/aws/s3-storage.test.ts > post-execution pipeline over real object metadata > a hidden metadata field is removed 78ms
+ ✓ tests/integration/aws/s3-storage.test.ts > post-execution pipeline over real object metadata > a masked metadata field is masked 73ms
+ ✓ tests/integration/aws/s3-storage.test.ts > post-execution pipeline over real object metadata > allowedFields projects metadata 68ms
+ ✓ tests/integration/aws/s3-storage.test.ts > post-execution pipeline over real object metadata > a row filter applies to listing entries 233ms
+ ✓ tests/integration/aws/s3-storage.test.ts > post-execution pipeline over real object metadata > maxObjectSizeBytes drops the oversize object 237ms
+ ✓ tests/integration/aws/s3-storage.test.ts > post-execution pipeline over real object metadata > maxResults truncates the listing 212ms
+
+ Test Files  1 passed (1)
+      Tests  23 passed (23)
+   Start at  15:26:55
+   Duration  2.92s (transform 84ms, setup 0ms, import 140ms, tests 2.72s, environment 0ms)
+

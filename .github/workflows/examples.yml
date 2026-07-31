@@ -1,0 +1,100 @@
+# Integration examples, in their own workflow on purpose.
+#
+# These install seven third-party agent frameworks. A breaking release in any of them must not
+# block a change to the SDK, so this is deliberately NOT part of ci.yml — the main gate stays
+# dependent only on the three SDKs and their zero runtime dependencies.
+name: Examples
+
+on:
+  push:
+    paths: ["examples/**", "sdk/python/**", ".github/workflows/examples.yml"]
+  pull_request:
+    paths: ["examples/**", "sdk/python/**", ".github/workflows/examples.yml"]
+  # Weekly, so a framework releasing a breaking change surfaces here rather than in an
+  # integrator's first hour with the docs.
+  schedule:
+    - cron: "0 6 * * 1"
+  # Manually runnable. Without this the path filters above are the only way in, and a
+  # history rewrite or a docs-only push leaves the examples unverified with no way to
+  # check them short of pushing an unrelated commit.
+  workflow_dispatch:
+
+jobs:
+  python-examples:
+    name: Python — seven frameworks, one policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the SDK from source
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e sdk/python/tolap-core -e sdk/python/tolap-store -e sdk/python/tolap-mcp
+
+      - name: Install the agent frameworks
+        run: pip install -r examples/python/requirements.txt
+
+      # Each example is also runnable on its own, which is how an integrator meets it. Running
+      # them here catches an import-time or decorator-registration break that the assertions
+      # below would not reach.
+      - name: Every example runs standalone
+        working-directory: examples/python
+        run: |
+          for f in *_example.py; do
+            echo "--- $f"
+            python "$f"
+          done
+
+      - name: Every framework enforces identically
+        working-directory: examples/python
+        run: python -m pytest test_examples.py -v
+
+  typescript-examples:
+    name: TypeScript — five frameworks, one policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      # The examples resolve @tolap/* through file: references to packages/*, and mcp/store
+      # resolve @tolap/core through its dist — so core must be built before anything else.
+      - name: Build the SDK
+        working-directory: sdk/typescript
+        run: |
+          npm ci
+          (cd packages/core && npx tsc -p tsconfig.json)
+          (cd packages/store && npx tsc -p tsconfig.json)
+          (cd packages/mcp && npx tsc -p tsconfig.json)
+
+      - name: Install the agent frameworks
+        working-directory: examples/typescript
+        run: npm install
+
+      - name: Every example typechecks
+        working-directory: examples/typescript
+        run: npm run typecheck
+
+      - name: Every framework enforces identically
+        working-directory: examples/typescript
+        run: npm test
+
+  dotnet-examples:
+    name: .NET — two frameworks, one policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Every framework enforces identically
+        working-directory: examples/dotnet
+        run: dotnet test -v normal

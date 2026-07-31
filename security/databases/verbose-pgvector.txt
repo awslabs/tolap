@@ -1,0 +1,106 @@
+kb metadata-filter verification — real PostgreSQL + pgvector, real ANN search
+Run: 2026-07-30T21:32:48Z
+Server: PostgreSQL 17.5 (Homebrew) on aarch64-apple-darwin24.4.0, compiled by Apple clang version 17.0.0 (clang-1700.0.13.3), 64-bit
+pgvector: 0.8.1
+Command: python3 tests/integration/verbose_pgvector_log.py
+
+Engine  : PostgreSQL 17.5 (Homebrew)
+pgvector: 0.8.1
+Source  : sdk/python/tests/integration/verbose_pgvector_log.py
+
+Every fragment below was produced by the shipped renderer and spliced into a real
+ANN query. The corpus is adversarial: the secret chunks are the NEAREST neighbours,
+so a filter that enforced nothing could not hide. Claims are checked as they print;
+a FAIL exits non-zero, so a broken transcript cannot be recorded as evidence.
+
+==============================================================================
+pgvector: the adversarial baseline -- secrets are the NEAREST neighbours
+==============================================================================
+    unfiltered, by distance: 5 row(s)
+        id=3 classification='secret'
+        id=4 classification='secret'
+        id=1 classification='public'
+        id=2 classification='public'
+        id=5 classification=(untagged)
+    OK   the two nearest chunks are both secret, so a filter that excluded nothing would be obvious rather than hidden behind a plausible-looking result set
+    OK   an unfiltered top-2 ANN search returns ONLY secret chunks -- this is what the pushdown has to prevent
+
+==============================================================================
+pgvector: the generated fragment, spliced into a real ANN query
+==============================================================================
+
+--- deniedTags: [secret]
+    policy: tagRules.deniedTags=[secret]
+    fragment: (NOT (metadata->'classification' ?| array['secret']) OR metadata->'classification' IS NULL)
+    top 2 with the filter: 2 row(s)
+        id=1 classification='public'
+        id=2 classification='public'
+    OK   PostgreSQL ACCEPTED the fragment (no syntax error)
+    OK   no secret chunk survived, even though both were nearer than every permitted chunk
+    OK   permitted chunks were still returned -- the filter excluded, it did not match nothing
+
+--- allowedTags: [public]
+    policy: tagRules.allowedTags=[public]
+    fragment: metadata->'classification' ?| array['public']
+    top 2 with the filter: 2 row(s)
+        id=1 classification='public'
+        id=2 classification='public'
+    OK   only public chunks are returned
+
+==============================================================================
+pgvector: untagged chunks, where the two directions differ
+==============================================================================
+
+--- deniedTags MUST KEEP an untagged chunk
+    policy: spec section 7
+    all rows: 3 row(s)
+        id=1 classification='public'
+        id=2 classification='public'
+        id=5 classification=(untagged)
+    OK   the untagged chunk survives a denylist -- it carries no denied tag, so nothing denies it
+
+--- allowedTags MUST DROP an untagged chunk
+    policy: spec section 7
+    all rows: 2 row(s)
+        id=1 classification='public'
+        id=2 classification='public'
+    OK   the untagged chunk is dropped by an allowlist -- it carries no proof of allowance
+
+==============================================================================
+pgvector: the pushdown and the normative post pass must agree
+==============================================================================
+
+--- deniedTags=[secret]
+    policy: pushdown vs filter_by_tags over the same corpus
+    pushdown : ids=[1, 2, 5]
+    post-pass: ids=[1, 2, 5]
+    OK   identical verdicts -- the property that makes a pushdown safe rather than merely faster, and the one a stricter-than-normative filter would break
+
+--- allowedTags=[public]
+    policy: pushdown vs filter_by_tags over the same corpus
+    pushdown : ids=[1, 2]
+    post-pass: ids=[1, 2]
+    OK   identical verdicts -- the property that makes a pushdown safe rather than merely faster, and the one a stricter-than-normative filter would break
+
+==============================================================================
+pgvector: numeric metadata is deliberately NOT matched
+==============================================================================
+
+--- classification is the NUMBER 3, denied tag is the string '3'
+    policy: deniedTags=['3']
+    fragment: (NOT (metadata->'classification' ?| array['3']) OR metadata->'classification' IS NULL)
+    pushdown keeps id 6: True    post-pass keeps id 6: True
+    OK   the pushdown and post pass agree that a numeric value carries no tag -- matching it would make the pushdown stricter than the normative pass, a divergence in the other direction
+
+==============================================================================
+pgvector: a refused clause is reported, never approximated
+==============================================================================
+
+--- metadata key that is not a plain identifier
+    policy: key = 'bad-key; DROP TABLE'
+    filter        : None
+    unpushedRules : 1
+    OK   an unexpected identifier is REFUSED rather than quoted into existence, and reported as unpushed so the post pass still enforces the rule
+
+==============================================================================
+All claims held against live PostgreSQL + pgvector.

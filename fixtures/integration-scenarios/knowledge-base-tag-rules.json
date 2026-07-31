@@ -1,0 +1,85 @@
+{
+  "description": "Tag-rule enforcement for knowledge-base / vector-store responses. Each test feeds the SDK a fixed corpus of documents (each with a 'tags' array) and asserts which docs survive the filterByTags step. The corpus is shared across all three SDKs.",
+  "corpus": [
+    { "id": "doc1", "title": "Public diabetes guidelines", "tags": ["public", "endocrinology"] },
+    { "id": "doc2", "title": "Internal protocol", "tags": ["internal", "endocrinology"] },
+    { "id": "doc3", "title": "Confidential patient outcomes", "tags": ["confidential", "outcomes"] },
+    { "id": "doc4", "title": "Public hypertension guidelines", "tags": ["public", "cardiology"] },
+    { "id": "doc5", "title": "Untagged research note", "tags": [] },
+    { "id": "doc6", "title": "Cross-tagged: confidential AND public", "tags": ["confidential", "public"] }
+  ],
+  "scenarios": [
+    {
+      "name": "allowed-tags-keeps-only-public",
+      "comment": "allowedTags=[public] keeps every doc with 'public' in its tag list (doc1, doc4, doc6) and drops the rest.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "tagRules": { "allowedTags": ["public"] }
+        }
+      },
+      "expected": { "pass": true, "idsEqual": ["doc1", "doc4", "doc6"] }
+    },
+    {
+      "name": "denied-tags-drops-confidential",
+      "comment": "deniedTags=[confidential] drops every doc with 'confidential' (doc3, doc6).",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "tagRules": { "deniedTags": ["confidential"] }
+        }
+      },
+      "expected": { "pass": true, "idsEqual": ["doc1", "doc2", "doc4", "doc5"] }
+    },
+    {
+      "name": "denied-tags-precedence-over-allowed",
+      "comment": "doc6 has BOTH 'confidential' and 'public'. deniedTags must win, so doc6 is dropped despite matching allowedTags=[public].",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "tagRules": {
+            "allowedTags": ["public"],
+            "deniedTags": ["confidential"]
+          }
+        }
+      },
+      "expected": { "pass": true, "idsEqual": ["doc1", "doc4"] }
+    },
+    {
+      "name": "untagged-doc-fails-closed-against-allowed-tags",
+      "comment": "doc5 has tags=[]. With allowedTags set, it must be dropped — no tag means no proof of allowance.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "tagRules": { "allowedTags": ["public"] }
+        }
+      },
+      "expected": { "pass": true, "idMustNotInclude": ["doc5"] }
+    },
+    {
+      "name": "no-tag-rules-passes-everything-through",
+      "comment": "No tagRules block at all -> all docs pass through unchanged.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true }
+      },
+      "expected": { "pass": true, "idsEqual": ["doc1", "doc2", "doc3", "doc4", "doc5", "doc6"] }
+    },
+    {
+      "name": "multi-allowed-tag-union-semantics",
+      "comment": "allowedTags=[public, outcomes] keeps any doc with EITHER tag (union, not intersection): doc1, doc3, doc4, doc6.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "tagRules": { "allowedTags": ["public", "outcomes"] }
+        }
+      },
+      "expected": { "pass": true, "idsEqual": ["doc1", "doc3", "doc4", "doc6"] }
+    }
+  ]
+}

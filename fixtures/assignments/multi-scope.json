@@ -1,0 +1,18 @@
+{
+  "version": "1.0",
+  "policyName": "data-lake-analyst",
+  "assignee": {
+    "type": "role",
+    "identifier": "data-analyst"
+  },
+  "scope": {
+    "tenantId": "tenant-midwest-health",
+    "sourceConnectionId": "ds-s3-datalake-prod"
+  },
+  "active": true,
+  "audit": {
+    "grantedBy": "admin-jane-doe",
+    "grantedAt": "2026-02-01T09:00:00Z",
+    "reason": "Scoped to production data lake only"
+  }
+}

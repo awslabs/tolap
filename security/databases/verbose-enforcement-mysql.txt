@@ -1,0 +1,149 @@
+Verbose enforcement transcript — real mysql
+Run: 2026-07-30T20:43:17Z
+Command: python3 tests/integration/verbose_enforcement_log.py mysql
+
+Engine : mysql 9.6.0
+Dialect: mysql
+Source : sdk/python/tests/integration/verbose_enforcement_log.py
+
+Every row and every SQL statement below came from the live engine. Claims are
+checked as they are printed; a FAIL line makes this run exit non-zero, so a broken
+transcript cannot be recorded as passing evidence.
+
+==============================================================================
+mysql: the ENGINE does the filtering (row filters pushed into SQL)
+==============================================================================
+    unfiltered: 6 row(s), columns ['id', 'region', 'status', 'full_name', 'ssn']
+        id=1, region='us-east', status='active', full_name='John Smith', ssn='111-22-3333'
+        id=2, region='us-west', status='active', full_name='Jane Doe', ssn='222-33-4444'
+        id=3, region='us-east', status='active', full_name='Mary Johnson', ssn='333-44-5555'
+        id=4, region='us-central', status='active', full_name='Bob Wilson', ssn='444-55-6666'
+        id=5, region='eu-west', status='active', full_name='Alice Brown', ssn='555-66-7777'
+        id=6, region='us-west', status='deleted', full_name='Carl Davis', ssn='666-77-8888'
+
+--- dialect sanity: identifier quoting
+    policy: dialect=mysql
+    probe: SELECT id, region, status, full_name, ssn FROM patients WHERE `status` = 'active' ORDER BY id
+    OK   identifiers are quoted with ` as mysql requires -- the wrong quote style turns a column reference into a string literal and the filter fails OPEN
+
+--- row filter: region IN (us-east, us-west)
+    policy: rowFilters[region in [us-east, us-west]]
+    sent: SELECT id, region, status, full_name, ssn FROM patients WHERE `region` IN ('us-east', 'us-west') ORDER BY id
+    returned: 4 row(s), columns ['id', 'region', 'status', 'full_name', 'ssn']
+        id=1, region='us-east', status='active', full_name='John Smith', ssn='111-22-3333'
+        id=2, region='us-west', status='active', full_name='Jane Doe', ssn='222-33-4444'
+        id=3, region='us-east', status='active', full_name='Mary Johnson', ssn='333-44-5555'
+        id=6, region='us-west', status='deleted', full_name='Carl Davis', ssn='666-77-8888'
+    OK   the rewritten SQL carries a WHERE clause
+    OK   the engine returned fewer rows than unfiltered (4 < 6)
+    OK   no excluded region survived
+    OK   the post-fetch pass finds nothing left to remove (pushdown was complete)
+
+--- negative operator: status != deleted
+    policy: rowFilters[status notEquals deleted]
+    sent: SELECT id, region, status, full_name, ssn FROM patients WHERE (`status` <> 'deleted' OR `status` IS NULL) ORDER BY id
+    returned: 5 row(s), columns ['id', 'region', 'status', 'full_name', 'ssn']
+        id=1, region='us-east', status='active', full_name='John Smith', ssn='111-22-3333'
+        id=2, region='us-west', status='active', full_name='Jane Doe', ssn='222-33-4444'
+        id=3, region='us-east', status='active', full_name='Mary Johnson', ssn='333-44-5555'
+        id=4, region='us-central', status='active', full_name='Bob Wilson', ssn='444-55-6666'
+        id=5, region='eu-west', status='active', full_name='Alice Brown', ssn='555-66-7777'
+    OK   'deleted' is absent from the engine's own result
+    OK   pushdown and post-fetch pass select identical ids -- the rewrite is a faithful translation of the policy, not a looser one
+
+==============================================================================
+mysql: MASKING applied to real rows returned by the engine
+==============================================================================
+
+--- maskedFields: ssn -> redact
+    policy: maskType=redact
+    before: ssn=['111-22-3333', '222-33-4444', '333-44-5555']
+    after : ssn=['[REDACTED]', '[REDACTED]', '[REDACTED]']
+    OK   value is replaced, not merely hidden
+    OK   the row itself survives -- masking is not row suppression
+
+--- maskedFields: ssn -> partial
+    policy: maskType=partial
+    before: ssn=['111-22-3333', '222-33-4444', '333-44-5555']
+    after : ssn=['***********', '***********', '***********']
+    OK   only a suffix/prefix remains visible
+    OK   the row itself survives -- masking is not row suppression
+
+--- maskedFields: ssn -> hash
+    policy: maskType=hash
+    before: ssn=['111-22-3333', '222-33-4444', '333-44-5555']
+    after : ssn=['2e54cc08456e5401', '3371a2c893de6cad', '5158e06a24728730']
+    OK   value becomes a stable digest
+    OK   the row itself survives -- masking is not row suppression
+    OK   the digest is deterministic across runs (joinable without revealing the value)
+
+--- maskedFields: ssn -> null
+    policy: maskType=null
+    before: ssn=['111-22-3333', '222-33-4444', '333-44-5555']
+    after : ssn=[None, None, None]
+    OK   value becomes null
+    OK   the row itself survives -- masking is not row suppression
+
+==============================================================================
+mysql: FIELD RULES over real rows
+==============================================================================
+
+--- hiddenFields: ssn -- explicit column list
+    policy: fieldRules.hiddenFields=[ssn]
+    sent: SELECT id, region, status, full_name FROM patients ORDER BY id
+    OK   ssn was pruned from the SELECT list, so the engine never returned it
+
+--- hiddenFields: ssn -- SELECT *
+    policy: same policy, SELECT * FROM patients
+    sent: SELECT * FROM patients ORDER BY id
+    OK   SELECT * is left alone, so the engine still returns ssn
+    after post-fetch pass: 6 row(s), columns ['id', 'full_name', 'email', 'date_of_birth', 'region', 'status']
+        id=1, full_name='John Smith', email='john.smith@example.com', date_of_birth=datetime.date(1980, 3, 12), region='us-east', status='active'
+        id=2, full_name='Jane Doe', email='jane.doe@example.com', date_of_birth=datetime.date(1975, 9, 1), region='us-west', status='active'
+        id=3, full_name='Mary Johnson', email='mary.j@example.com', date_of_birth=datetime.date(1990, 12, 30), region='us-east', status='active'
+        id=4, full_name='Bob Wilson', email='bob.wilson@example.com', date_of_birth=datetime.date(1965, 7, 22), region='us-central', status='active'
+        id=5, full_name='Alice Brown', email='alice.brown@example.com', date_of_birth=datetime.date(1988, 2, 14), region='eu-west', status='active'
+        id=6, full_name='Carl Davis', email='carl.davis@example.com', date_of_birth=datetime.date(1972, 11, 5), region='us-west', status='deleted'
+    OK   the post-fetch pass removed ssn from every row -- if it were optimised away, the hidden field would reach the caller
+
+--- allowedFields: id, region
+    policy: fieldRules.allowedFields=[patients.id, patients.region]
+    requested: [patients.id, patients.ssn]
+    allowed  : ['patients.id']
+    denied   : ['patients.ssn']
+    OK   the out-of-allow-set field is denied before any SQL is sent
+    OK   the in-allow-set field is still usable -- a denial is per field, not per request
+
+--- CONTROL: both fields inside the allow-set
+    policy: same policy
+    allowed  : ['patients.id', 'patients.region']
+    OK   nothing is denied when every requested field is permitted
+
+==============================================================================
+mysql: LIMITS pushed into SQL
+==============================================================================
+
+--- limits.maxResults = 2
+    policy: limits.maxResults=2
+    sent: SELECT id, region, status, full_name, ssn FROM patients ORDER BY id LIMIT 2
+    returned: 2 row(s), columns ['id', 'region', 'status', 'full_name', 'ssn']
+        id=1, region='us-east', status='active', full_name='John Smith', ssn='111-22-3333'
+        id=2, region='us-west', status='active', full_name='Jane Doe', ssn='222-33-4444'
+    OK   LIMIT reached the SQL
+    OK   the engine returned exactly 2 rows
+
+==============================================================================
+mysql: DENIALS happen before SQL is issued
+==============================================================================
+
+--- permissions.canQuery = false
+    policy: canQuery=false
+    decision: allowed=False reason='query not permitted'
+    OK   no SQL is produced for a policy that cannot query
+
+--- CONTROL: canQuery = true on the same object
+    policy: canQuery=true
+    OK   the paired control is permitted
+
+==============================================================================
+All claims held against the live engine.

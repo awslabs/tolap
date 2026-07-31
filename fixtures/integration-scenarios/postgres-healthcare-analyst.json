@@ -1,0 +1,103 @@
+{
+  "description": "End-to-end TOLAP enforcement for the README's healthcare-analyst policy against the seeded Postgres schema. The same policy is reused across scenarios; only the query and expected result vary.",
+  "basePolicy": {
+    "version": "1.0",
+    "permissions": { "canQuery": true, "readOnly": true },
+    "objectRules": {
+      "allowedObjects": ["patients", "encounters", "diagnoses"],
+      "hiddenObjects": ["billing_internal", "audit_log"],
+      "fieldRules": {
+        "hiddenFields": ["patients.ssn", "patients.date_of_birth"],
+        "maskedFields": [
+          {
+            "field": "patients.email",
+            "maskType": "hash",
+            "parameters": { "algorithm": "sha256" }
+          },
+          {
+            "field": "patients.full_name",
+            "maskType": "partial",
+            "parameters": { "showFirst": 1, "maskChar": "*" }
+          }
+        ]
+      },
+      "rowFilters": [
+        { "field": "region", "operator": "in", "values": ["us-east", "us-west"] },
+        { "field": "status", "operator": "notEquals", "value": "deleted" }
+      ]
+    },
+    "limits": { "maxResults": 5000 }
+  },
+  "scenarios": [
+    {
+      "name": "allowed-patients-query-returns-filtered-rows",
+      "query": {
+        "table": "patients",
+        "columns": ["id", "full_name", "region", "status"]
+      },
+      "expected": {
+        "pass": true,
+        "idsEqual": [1, 2, 3],
+        "regions": ["us-east", "us-west", "us-east"]
+      }
+    },
+    {
+      "name": "hidden-billing-table-denied",
+      "query": { "table": "billing_internal", "columns": ["id"] },
+      "expected": { "pass": false, "errorContains": "object is hidden" }
+    },
+    {
+      "name": "hidden-audit-table-denied",
+      "query": { "table": "audit_log", "columns": ["id"] },
+      "expected": { "pass": false, "errorContains": "object is hidden" }
+    },
+    {
+      "name": "unlisted-table-denied",
+      "query": { "table": "pharmacy_orders", "columns": ["id"] },
+      "expected": { "pass": false, "errorContains": "not in allowed set" }
+    },
+    {
+      "name": "selecting-hidden-ssn-denied",
+      "query": { "table": "patients", "columns": ["id", "ssn"] },
+      "expected": { "pass": false, "errorContains": "patients.ssn" }
+    },
+    {
+      "name": "selecting-hidden-dob-denied",
+      "query": { "table": "patients", "columns": ["id", "date_of_birth"] },
+      "expected": { "pass": false, "errorContains": "patients.date_of_birth" }
+    },
+    {
+      "name": "email-is-sha256-hashed",
+      "query": {
+        "table": "patients",
+        "columns": ["id", "email", "region", "status"]
+      },
+      "expected": {
+        "pass": true,
+        "idsEqual": [1, 2, 3],
+        "maskedField": { "field": "email", "mask": "sha256-16" }
+      }
+    },
+    {
+      "name": "full-name-is-partially-masked",
+      "query": {
+        "table": "patients",
+        "columns": ["id", "full_name", "region", "status"]
+      },
+      "expected": {
+        "pass": true,
+        "idsEqual": [1, 2, 3],
+        "maskedField": { "field": "full_name", "mask": "partial-first-1" }
+      }
+    },
+    {
+      "name": "max-results-truncates-after-row-filtering",
+      "query": {
+        "table": "patients",
+        "columns": ["id", "region", "status"]
+      },
+      "policyOverride": { "limits": { "maxResults": 2 } },
+      "expected": { "pass": true, "rowCount": 2 }
+    }
+  ]
+}

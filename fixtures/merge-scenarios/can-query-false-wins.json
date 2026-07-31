@@ -1,0 +1,21 @@
+{
+  "description": "One policy sets canQuery=false -- AND produces false",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "policy-allows",
+      "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": false }
+    },
+    {
+      "version": "1.0",
+      "name": "policy-denies",
+      "priority": 20,
+      "permissions": { "canQuery": false, "readOnly": false }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["policy-allows", "policy-denies"],
+    "permissions": { "canQuery": false, "readOnly": false }
+  }
+}

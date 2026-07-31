@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "name": "data-lake-analyst",
+  "description": "Storage access for data lake analysts with prefix restrictions.",
+  "priority": 20,
+  "appliesToAll": false,
+  "sourcePatterns": ["storage:datalake:*"],
+  "permissions": {
+    "canQuery": true,
+    "readOnly": true
+  },
+  "objectRules": {
+    "allowedObjects": ["curated/*", "published/*", "reports/*"],
+    "hiddenObjects": ["raw/*", "staging/*", "admin/*", "backups/*"],
+    "fieldRules": {
+      "hiddenFields": ["x-amz-server-side-encryption-key"],
+      "maskedFields": [
+        {
+          "field": "x-amz-meta-uploaded-by",
+          "maskType": "hash",
+          "parameters": { "algorithm": "sha256" }
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxResults": 500,
+    "maxObjectSizeBytes": 104857600
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "tolap-examples-typescript",
+  "private": true,
+  "type": "module",
+  "description": "TOLAP enforcement in five TypeScript agent frameworks",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@langchain/core": "~1.2",
+    "@mastra/core": "~1.55",
+    "@modelcontextprotocol/sdk": "~1.30",
+    "@openai/agents": "~0.14",
+    "@tolap/core": "file:../../sdk/typescript/packages/core",
+    "@tolap/mcp": "file:../../sdk/typescript/packages/mcp",
+    "@tolap/store": "file:../../sdk/typescript/packages/store",
+    "ai": "~7.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "typescript": "~5.7",
+    "vitest": "~4.1"
+  }
+}

@@ -1,0 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tolap-mcp"
+version = "2.0.0"
+requires-python = ">=3.10"
+description = "TOLAP SDK MCP - Secure MCP tool wrapper with policy enforcement"
+dependencies = ["tolap-core>=2.0.0"]
