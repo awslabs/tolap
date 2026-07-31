@@ -1,0 +1,37 @@
+2026-08-04T12:25:42-04:00	INFO	[vuln] Vulnerability scanning is enabled
+2026-08-04T12:25:42-04:00	INFO	[misconfig] Misconfiguration scanning is enabled
+2026-08-04T12:25:42-04:00	INFO	[checks-client] Using existing checks from cache	path="/Users/pspies/Library/Caches/trivy/policy/content"
+2026-08-04T12:25:42-04:00	INFO	[secret] Secret scanning is enabled
+2026-08-04T12:25:42-04:00	INFO	[secret] If your scanning is slow, please try '--scanners vuln,misconfig' to disable secret scanning
+2026-08-04T12:25:42-04:00	INFO	[secret] Please see https://trivy.dev/docs/v0.72/guide/scanner/secret#recommendation for faster secret detection
+2026-08-04T12:25:45-04:00	WARN	[pip] Unable to find python `site-packages` directory. License detection is skipped.	err="site-packages directory not found"
+2026-08-04T12:25:45-04:00	INFO	Suppressing dependencies for development and testing. To display them, try the '--include-dev-deps' flag.
+2026-08-04T12:25:45-04:00	INFO	Number of language-specific files	num=2
+2026-08-04T12:25:45-04:00	INFO	[npm] Detecting vulnerabilities...
+2026-08-04T12:25:45-04:00	INFO	Detected config files	num=0
+
+Report Summary
+
+┌───────────────────────────────────────┬──────┬─────────────────┬─────────┬───────────────────┐
+│                Target                 │ Type │ Vulnerabilities │ Secrets │ Misconfigurations │
+├───────────────────────────────────────┼──────┼─────────────────┼─────────┼───────────────────┤
+│ examples/typescript/package-lock.json │ npm  │        1        │    -    │         -         │
+├───────────────────────────────────────┼──────┼─────────────────┼─────────┼───────────────────┤
+│ sdk/typescript/package-lock.json      │ npm  │        0        │    -    │         -         │
+└───────────────────────────────────────┴──────┴─────────────────┴─────────┴───────────────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+
+
+examples/typescript/package-lock.json (npm)
+===========================================
+Total: 1 (UNKNOWN: 0, LOW: 1, MEDIUM: 0, HIGH: 0, CRITICAL: 0)
+
+┌────────────────────────┬───────────────┬──────────┬──────────┬───────────────────┬───────────────┬─────────────────────────────────────────────────────┐
+│        Library         │ Vulnerability │ Severity │  Status  │ Installed Version │ Fixed Version │                        Title                        │
+├────────────────────────┼───────────────┼──────────┼──────────┼───────────────────┼───────────────┼─────────────────────────────────────────────────────┤
+│ @ai-sdk/provider-utils │ CVE-2026-8769 │ LOW      │ affected │ 3.0.30            │               │ @ai-sdk/provider-utils has an Uncontrolled Resource │
+│                        │               │          │          │                   │               │ Consumption issue                                   │
+│                        │               │          │          │                   │               │ https://avd.aquasec.com/nvd/cve-2026-8769           │
+└────────────────────────┴───────────────┴──────────┴──────────┴───────────────────┴───────────────┴─────────────────────────────────────────────────────┘

@@ -1,0 +1,4 @@
+# Coverage output produced by coverage.sh: raw per-project cobertura reports, the
+# merged report, and any rendered HTML. Regenerated on every run, so it is never
+# committed.
+artifacts/

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://tolap.dev/schema/v1.0/policy-definition.schema.json",
+  "version": "1.0",
+  "name": "research-kb-access",
+  "description": "Knowledge base access for research analysts. Can search public and internal documents. Classified and restricted documents are denied. High similarity threshold to ensure relevant results.",
+  "priority": 15,
+  "appliesToAll": false,
+  "sourcePatterns": ["kb:research:*", "kb:clinical:*"],
+  "permissions": {
+    "canQuery": true,
+    "readOnly": true
+  },
+  "objectRules": {
+    "tagRules": {
+      "allowedTags": ["public", "internal", "research", "clinical-summary"],
+      "deniedTags": ["classified", "restricted", "legal-hold", "pii-raw"]
+    }
+  },
+  "limits": {
+    "maxResults": 50,
+    "minSimilarityScore": 0.75
+  }
+}

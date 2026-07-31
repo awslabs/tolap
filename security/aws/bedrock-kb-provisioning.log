@@ -1,0 +1,17 @@
+[provision] S3 source bucket tolap-kb-src-194d2a8b47
+[provision] OpenSearch Serverless collection tolap-194d2a8b47 (+ encryption/network/access policies)
+[provision] waiting for IAM role propagation
+[provision] vector index
+[provision] index create retry 0: AuthorizationException(403, 'security_exception', 'OpenSearch exception [type=authorization_exception, reason=User does not have permissions for the requested resource]')
+[provision] index create retry 1: AuthorizationException(403, 'security_exception', 'OpenSearch exception [type=authorization_exception, reason=User does not have permissions for the requested resource]')
+[provision] knowledge base
+[provision] data source + ingestion
+[provision] KB is ready
+[provision] deleted knowledge base
+[provision] deleted collection
+[provision] deleted ACCESS_POLICY
+[provision] deleted NET_POLICY
+[provision] deleted ENC_POLICY
+[provision] deleted role policy
+[provision] deleted role
+[provision] deleted bucket objects + bucket

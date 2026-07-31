@@ -1,0 +1,706 @@
+/*
+ * Plain CSS, no framework. The console is a handful of forms and tables; a design
+ * system would be more bytes to audit than the app itself.
+ *
+ * Colors are declared for both schemes and every foreground/background pair is
+ * chosen to stay legible in each. The badges carry text as well as color, so a
+ * "revoked" install is distinguishable without relying on hue.
+ */
+
+:root {
+  --bg: #ffffff;
+  --surface: #f6f7f9;
+  --border: #d6d9de;
+  --text: #14171a;
+  --muted: #5b6470;
+  --accent: #0b5fa5;
+  --ok-bg: #e4f4e8;
+  --ok-fg: #1c5b2c;
+  --warn-bg: #fdf3d8;
+  --warn-fg: #6b4c07;
+  --err-bg: #fbe6e6;
+  --err-fg: #8a1c1c;
+  --info-bg: #e6eff8;
+  --info-fg: #10426b;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14171a;
+    --surface: #1d2126;
+    --border: #333a42;
+    --text: #eef1f4;
+    --muted: #a2acb8;
+    --accent: #6db3f2;
+    --ok-bg: #16321d;
+    --ok-fg: #93dca6;
+    --warn-bg: #33290c;
+    --warn-fg: #f0d182;
+    --err-bg: #35191a;
+    --err-fg: #f0a3a3;
+    --info-bg: #14293c;
+    --info-fg: #9ccbf0;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  overflow-x: auto;
+}
+
+/* -- Shell ---------------------------------------------------------------- */
+
+.app {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.app__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+}
+
+.app__header h1 {
+  font-size: 20px;
+  margin: 0;
+}
+
+.app__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.app__tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 16px 0;
+}
+
+.tab {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  padding: 8px 14px;
+}
+
+.tab:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.tab--active {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Visible focus everywhere: this console is operated by keyboard as often as not. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* -- Pages ---------------------------------------------------------------- */
+
+.page {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.page--single {
+  display: block;
+}
+
+@media (max-width: 860px) {
+  .page {
+    grid-template-columns: 1fr;
+  }
+}
+
+.page__list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.page h2 {
+  font-size: 17px;
+  margin: 0 0 8px;
+}
+
+.page h3 {
+  font-size: 15px;
+  margin: 24px 0 8px;
+}
+
+.page h4 {
+  font-size: 14px;
+  margin: 16px 0 6px;
+}
+
+.policy-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.policy-list button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 8px;
+  padding: 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.policy-list button:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+/* -- Forms ---------------------------------------------------------------- */
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0 0 16px;
+  padding: 12px 16px 16px;
+}
+
+legend {
+  font-weight: 600;
+  padding: 0 6px;
+}
+
+label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin: 10px 0 4px;
+}
+
+fieldset label > input[type="checkbox"],
+fieldset label > input[type="radio"],
+.radio-row label > input {
+  margin-right: 6px;
+}
+
+fieldset label:has(> input[type="checkbox"]),
+fieldset label:has(> input[type="radio"]) {
+  font-weight: 400;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="datetime-local"],
+input:not([type]),
+select,
+textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  padding: 7px 9px;
+  width: 100%;
+}
+
+textarea {
+  font-family: var(--mono);
+  font-size: 13px;
+  resize: vertical;
+}
+
+button {
+  background: var(--accent);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+  padding: 8px 14px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* A disabled fieldset is how auditor mode renders. Make it obviously inert
+   rather than subtly different, so nobody types into a form that cannot save. */
+fieldset:disabled {
+  background: var(--surface);
+  opacity: 0.75;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.actions button + button,
+.radio-row {
+  background: none;
+  color: var(--text);
+}
+
+.actions button:not([type="submit"]) {
+  background: none;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.radio-row {
+  display: flex;
+  gap: 16px;
+  margin: 8px 0;
+}
+
+.radio-row label {
+  font-weight: 400;
+  margin: 0;
+}
+
+.inline-form {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-top: 20px;
+  padding: 12px 16px 16px;
+}
+
+.nested {
+  border-left: 2px solid var(--border);
+  margin: 8px 0 0 4px;
+  padding-left: 12px;
+}
+
+/* -- Tables --------------------------------------------------------------- */
+
+table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+td button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  padding: 4px 10px;
+}
+
+.detail {
+  display: inline-block;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- Banners and badges --------------------------------------------------- */
+
+.banner {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  margin: 12px 0;
+  padding: 10px 14px;
+}
+
+.banner ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+}
+
+.banner--success {
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+}
+
+.banner--warning {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.banner--error {
+  background: var(--err-bg);
+  color: var(--err-fg);
+}
+
+.banner--info {
+  background: var(--info-bg);
+  color: var(--info-fg);
+}
+
+.badge {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badge--admin,
+.badge--published,
+.badge--ok {
+  background: var(--ok-bg);
+  border-color: transparent;
+  color: var(--ok-fg);
+}
+
+.badge--auditor,
+.badge--draft,
+.badge--install {
+  background: var(--info-bg);
+  border-color: transparent;
+  color: var(--info-fg);
+}
+
+.badge--warn,
+.badge--superseded {
+  background: var(--warn-bg);
+  border-color: transparent;
+  color: var(--warn-fg);
+}
+
+.badge--deny {
+  background: var(--err-bg);
+  border-color: transparent;
+  color: var(--err-fg);
+}
+
+.muted,
+.hint,
+.field-picker__hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.hint {
+  margin: 4px 0 10px;
+}
+
+/* -- Field picker --------------------------------------------------------- */
+
+.field-picker {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.field-picker__label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.field-picker__empty {
+  background: var(--warn-bg);
+  border-radius: 6px;
+  color: var(--warn-fg);
+  font-size: 13px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+}
+
+.field-picker__selected {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.field-picker__chip {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+}
+
+.field-picker__chip button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+.field-picker__warning {
+  color: var(--warn-fg);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.field-picker__pattern {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.field-picker__add {
+  display: flex;
+  gap: 6px;
+}
+
+/* -- Diff ----------------------------------------------------------------- */
+
+.diff pre {
+  line-height: 1.45;
+}
+
+.diff__added {
+  background: var(--ok-bg);
+  color: var(--ok-fg);
+}
+
+.diff__removed {
+  background: var(--err-bg);
+  color: var(--err-fg);
+}
+
+/* -- Sign-in -------------------------------------------------------------- */
+
+.signin {
+  margin: 12vh auto 0;
+  max-width: 460px;
+  padding: 24px;
+}
+
+.signin h1 {
+  font-size: 20px;
+}
+
+.signin__primary {
+  font-size: 15px;
+  padding: 10px 18px;
+  width: 100%;
+}
+
+.signin__manual {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 16px;
+}
+
+.signin__manual summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.credential {
+  user-select: all;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+/* -- Rule editors (masking, row filters, methods) -------------------------- */
+
+.rule-editor {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.rule-editor__list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+
+.rule-editor__row {
+  border-left: 2px solid var(--border);
+  margin-bottom: 10px;
+  padding-left: 10px;
+}
+
+.rule-editor__inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* The field name is the part most worth reading, so it gets the room. */
+.rule-editor__inputs input[type="text"] {
+  flex: 1 1 200px;
+}
+
+.rule-editor__inputs select {
+  flex: 0 1 auto;
+  width: auto;
+}
+
+.rule-editor__inputs textarea {
+  flex: 1 1 200px;
+}
+
+.rule-editor__inputs button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  flex: 0 0 auto;
+  padding: 4px 10px;
+}
+
+/* Explains a choice; must not compete with the control it describes. */
+.rule-editor__note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+/* A rule that will not do what the author intended. Same treatment as the
+   not-in-catalog chip, since it is the same class of mistake. */
+.rule-editor__warning {
+  background: var(--warn-bg);
+  border-radius: 4px;
+  color: var(--warn-fg);
+  font-size: 12px;
+  margin: 4px 0 0;
+  padding: 4px 8px;
+}
+
+.method-grid {
+  display: grid;
+  gap: 4px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  margin: 8px 0;
+}
+
+.method-grid__item {
+  align-items: center;
+  display: flex;
+  font-weight: 400;
+  gap: 6px;
+  margin: 0;
+}
+
+/* Mask parameters: a short row of small labelled controls under a rule. */
+.rule-editor__params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 6px 0 0;
+}
+
+.rule-editor__param {
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  font-weight: 400;
+  gap: 3px;
+  margin: 0;
+}
+
+/* Numbers and single characters need a box, not a column. */
+.rule-editor__param input,
+.rule-editor__param select {
+  color: var(--text);
+  padding: 4px 6px;
+  width: auto;
+}
+
+.rule-editor__param input[type="number"] {
+  width: 6em;
+}
+
+.rule-editor__param input[maxlength="1"] {
+  width: 3.5em;
+}
+
+/* -- "There is more than this" -------------------------------------------- */
+
+/* The state matters more than the button: a truncated list that looks complete is
+   how a reviewer concludes nothing happened. */
+.more-results {
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.more-results--complete {
+  border-top: none;
+  color: var(--muted);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+.more-results__warning {
+  background: var(--warn-bg);
+  border-radius: 6px;
+  color: var(--warn-fg);
+  font-size: 13px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+}

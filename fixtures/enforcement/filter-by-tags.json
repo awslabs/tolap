@@ -1,0 +1,29 @@
+{
+  "description": "Tag filtering -- allowed and denied tags applied to search results",
+  "action": "filterByTags",
+  "input": {
+    "results": [
+      { "id": "doc-1", "title": "Public Research Paper", "tags": ["public", "research"] },
+      { "id": "doc-2", "title": "Internal Memo", "tags": ["internal", "research"] },
+      { "id": "doc-3", "title": "Classified Report", "tags": ["classified", "research"] },
+      { "id": "doc-4", "title": "Legal Hold Document", "tags": ["internal", "legal-hold"] },
+      { "id": "doc-5", "title": "Clinical Summary", "tags": ["clinical-summary", "public"] }
+    ]
+  },
+  "policy": {
+    "permissions": { "canQuery": true },
+    "objectRules": {
+      "tagRules": {
+        "allowedTags": ["public", "internal", "research", "clinical-summary"],
+        "deniedTags": ["classified", "legal-hold"]
+      }
+    }
+  },
+  "expected": {
+    "results": [
+      { "id": "doc-1", "title": "Public Research Paper", "tags": ["public", "research"] },
+      { "id": "doc-2", "title": "Internal Memo", "tags": ["internal", "research"] },
+      { "id": "doc-5", "title": "Clinical Summary", "tags": ["clinical-summary", "public"] }
+    ]
+  }
+}

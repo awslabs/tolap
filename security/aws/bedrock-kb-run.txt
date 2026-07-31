@@ -1,0 +1,20 @@
+kb enforcement tests — real Bedrock Knowledge Base
+Run: 2026-07-30T19:04:51Z
+Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+KB: 6L98ITSF3A  (OpenSearch Serverless vector store, Titan v2 embeddings)
+Corpus: 4 documents — 2 classification=public, 2 classification=secret
+Command: TOLAP_TEST_AWS=1 TOLAP_TEST_KB_ID=... pytest test_bedrock_kb_e2e.py test_bedrock_kb_filter.py -v
+
+============================= test session starts ==============================
+collecting ... collected 8 items
+
+tests/integration/aws/test_bedrock_kb_e2e.py::TestPushdownEnforcesAtTheSource::test_unfiltered_retrieval_returns_both_classifications PASSED [ 12%]
+tests/integration/aws/test_bedrock_kb_e2e.py::TestPushdownEnforcesAtTheSource::test_denylist_pushdown_excludes_secret_at_the_source PASSED [ 25%]
+tests/integration/aws/test_bedrock_kb_e2e.py::TestPushdownEnforcesAtTheSource::test_allowlist_pushdown_returns_only_public PASSED [ 37%]
+tests/integration/aws/test_bedrock_kb_e2e.py::TestPushdownEnforcesAtTheSource::test_pushdown_and_post_pass_reach_the_same_verdict PASSED [ 50%]
+tests/integration/aws/test_bedrock_kb_filter.py::TestBedrockAcceptsGeneratedFilters::test_generated_filter_shape_is_accepted[denylist-only] PASSED [ 62%]
+tests/integration/aws/test_bedrock_kb_filter.py::TestBedrockAcceptsGeneratedFilters::test_generated_filter_shape_is_accepted[allowlist-only] PASSED [ 75%]
+tests/integration/aws/test_bedrock_kb_filter.py::TestBedrockAcceptsGeneratedFilters::test_generated_filter_shape_is_accepted[both-anded] PASSED [ 87%]
+tests/integration/aws/test_bedrock_kb_filter.py::TestBedrockAcceptsGeneratedFilters::test_negative_control_a_malformed_filter_is_rejected PASSED [100%]
+
+============================== 8 passed in 3.31s ===============================

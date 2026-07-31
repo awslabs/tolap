@@ -1,0 +1,50 @@
+{
+  "description": "Endpoint access validation -- allowed, hidden, method restricted",
+  "action": "validateEndpoint",
+  "cases": [
+    {
+      "path": "/api/v1/patients",
+      "method": "GET",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/api/v1/patients", "/api/v1/patients/*"],
+            "hiddenEndpoints": ["/api/v1/admin/*"],
+            "allowedMethods": ["GET", "HEAD", "OPTIONS"]
+          }
+        }
+      },
+      "expected": { "allowed": true }
+    },
+    {
+      "path": "/api/v1/admin/users",
+      "method": "GET",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/api/v1/patients", "/api/v1/patients/*"],
+            "hiddenEndpoints": ["/api/v1/admin/*"],
+            "allowedMethods": ["GET", "HEAD", "OPTIONS"]
+          }
+        }
+      },
+      "expected": { "allowed": false, "reason": "endpoint is hidden" }
+    },
+    {
+      "path": "/api/v1/patients",
+      "method": "POST",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "endpointRules": {
+            "allowedEndpoints": ["/api/v1/patients"],
+            "allowedMethods": ["GET", "HEAD", "OPTIONS"]
+          }
+        }
+      },
+      "expected": { "allowed": false, "reason": "method not allowed" }
+    }
+  ]
+}

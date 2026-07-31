@@ -1,0 +1,17 @@
+db/Athena integration tests — .NET, real AWS
+Run: 2026-07-30T19:33:45Z
+Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+NOTE: this suite found a real fail-open in .NET ValidateAccess (missing canQuery gate).
+
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.InOperator_Pushdown [2 s]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.HiddenField_SurvivesTheRewriteAndIsRemovedAfter [2 s]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.PushdownAndPostPass_AgreeOnTheSamePolicy [4 s]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.RowFilter_IsPushedIntoTheSqlAndHonouredByAthena [2 s]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.TableOutsideAllowedObjects_IsRefused [< 1 ms]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.MaxResults_IsPushedAsLimit [2 s]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.NotEquals_PushdownExcludesTheRegion [2 s]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.Masking_AppliesToRealAthenaRows [2 s]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.Baseline_UnfilteredReturnsEveryRegion [2 s]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.CanQueryFalse_YieldsNoExecutableSql [< 1 ms]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.Control_PermittedTableProducesRunnableSql [2 s]
+  Passed Tolap.Integration.Tests.Aws.AthenaDbTests.AllowedFields_ProjectsAthenaRows [2 s]

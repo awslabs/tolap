@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tolap.dev/schema/v1.0/policy-definition.schema.json",
+  "title": "TOLAP Policy Definition",
+  "description": "Defines a reusable security policy for Tool-Object Level Access Protocol (TOLAP). Specifies which objects, fields, rows, tags, and endpoints a user can access, and how results are masked or limited.",
+  "type": "object",
+  "required": [
+    "version",
+    "name",
+    "permissions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for validation tooling."
+    },
+    "version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "TOLAP schema version. Must be '1.0' for this schema."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+      "description": "Unique identifier for this policy definition. Lowercase alphanumeric with hyphens."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1024,
+      "description": "Human-readable description of what this policy allows or restricts."
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000,
+      "default": 100,
+      "description": "Priority for merge ordering. Lower values take precedence when merge rules produce a tie."
+    },
+    "appliesToAll": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, this policy applies to all data sources accessible by the assignee. When false, use sourcePatterns to scope."
+    },
+    "sourcePatterns": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z]+:[^:]*:[^:]+$"
+      },
+      "description": "Glob patterns in 'category:namespace:pattern' format that define which data sources this policy applies to. Examples: 'db:production:patient_*', 'api:internal:*', 'kb:*:*'. Categories: db, api, kb, storage."
+    },
+    "permissions": {
+      "type": "object",
+      "required": [
+        "canQuery"
+      ],
+      "additionalProperties": false,
+      "description": "Top-level permission flags.",
+      "properties": {
+        "canQuery": {
+          "type": "boolean",
+          "description": "Whether the user can execute reads against the data source: select, get, search, list. Merged with AND."
+        },
+        "canInsert": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the user can create new records or objects. Defaults to false: a policy that does not ask for write access does not receive it. Merged with AND, and denied outright when readOnly is true. See docs/connector-spec.md section 4."
+        },
+        "canUpdate": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the user can modify existing records or objects. Defaults to false. Merged with AND, and denied outright when readOnly is true. An update is additionally denied unless the target row satisfies the policy's rowFilters. See docs/connector-spec.md section 4."
+        },
+        "canDelete": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the user can remove records or objects. Defaults to false. Merged with AND, and denied outright when readOnly is true. A delete is additionally denied unless the target row satisfies the policy's rowFilters. See docs/connector-spec.md section 4."
+        },
+        "readOnly": {
+          "type": "boolean",
+          "default": true,
+          "description": "When true, every write is denied regardless of canInsert/canUpdate/canDelete: this is a ceiling, not a peer. Merged with OR, so any applicable policy can impose it while the write permissions are merged with AND. See docs/connector-spec.md section 4."
+        }
+      }
+    },
+    "objectRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Rules governing access to data objects. 'Objects' is source-agnostic: tables, endpoints, knowledge bases, storage prefixes, etc.",
+      "properties": {
+        "allowedObjects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Objects the user can access. If omitted, all non-hidden objects are accessible. Supports glob patterns."
+        },
+        "hiddenObjects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Objects hidden from the user. Hidden objects do not appear in schema introspection and cannot be queried. Takes precedence over allowedObjects."
+        },
+        "fieldRules": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Rules governing access to fields within objects. 'Fields' is source-agnostic: columns, response fields, document attributes, object metadata.",
+          "properties": {
+            "allowedFields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Fields the user can access. If omitted, all non-hidden fields are accessible. Supports 'object.field' dot notation and glob patterns."
+            },
+            "hiddenFields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Fields completely hidden from the user. Do not appear in schema introspection. Takes precedence over allowedFields."
+            },
+            "maskedFields": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/maskingRule"
+              },
+              "description": "Fields returned with values masked according to the specified masking type."
+            },
+            "readOnlyFields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Fields that are readable but NOT writable. No effect on reads -- such a field is returned normally, subject to hidden/allowed/masking rules. On a write, a payload containing one of these fields is rejected outright. Union on merge: any policy can make a field read-only. See docs/connector-spec.md section 4.3."
+            }
+          }
+        },
+        "rowFilters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/filterRule"
+          },
+          "description": "Filter conditions applied to every result. All filters are ANDed together, and a record missing a referenced field is dropped (fail closed). Enforcement is applied to returned records; an SDK MAY additionally push filters into the source (a SQL WHERE clause, a knowledge-base metadata filter) as an optimization, but that never replaces the post-execution pass. See docs/canonical-enforcement-spec.md section 4."
+        },
+        "tagRules": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Tag-based access control for knowledge bases and document stores.",
+          "properties": {
+            "allowedTags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only documents with at least one of these tags are returned."
+            },
+            "deniedTags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Documents with any of these tags are excluded. Takes precedence over allowedTags."
+            }
+          }
+        },
+        "endpointRules": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Endpoint-based access control for API sources.",
+          "properties": {
+            "allowedEndpoints": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Endpoint patterns the user can access. Supports glob patterns. Examples: '/api/patients', '/api/encounters/*'."
+            },
+            "hiddenEndpoints": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Endpoint patterns hidden from the user. Do not appear in endpoint listing. Takes precedence over allowedEndpoints."
+            },
+            "allowedMethods": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "GET",
+                  "HEAD",
+                  "OPTIONS",
+                  "POST",
+                  "PUT",
+                  "PATCH",
+                  "DELETE"
+                ]
+              },
+              "description": "HTTP methods the user can use. If omitted, defaults to read-only methods: GET, HEAD, OPTIONS."
+            }
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Operational limits applied to queries and results.",
+      "properties": {
+        "maxResults": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of rows, results, or items returned per query. Zero is valid and means return nothing -- a coherent deny-all that a minimum of 1 would forbid expressing. Applies per call, not as a budget across paginated calls."
+        },
+        "minSimilarityScore": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Minimum similarity score for vector search results. Higher values are more restrictive."
+        },
+        "maxObjectSizeBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum size in bytes for individual objects (files, documents) that can be accessed."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "maskingRule": {
+      "type": "object",
+      "required": [
+        "field",
+        "maskType"
+      ],
+      "additionalProperties": false,
+      "description": "Defines how a field value is masked before being returned to the user.",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Field name or 'object.field' dot-notation path."
+        },
+        "maskType": {
+          "type": "string",
+          "enum": [
+            "full",
+            "partial",
+            "hash",
+            "null",
+            "redact"
+          ],
+          "description": "Masking type. full: replace entire value. partial: reveal some characters. hash: replace with cryptographic hash. null: replace with null. redact: replace with [REDACTED]."
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Parameters specific to the masking type.",
+          "properties": {
+            "showFirst": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "For 'partial' masking: number of leading characters to reveal."
+            },
+            "showLast": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "For 'partial' masking: number of trailing characters to reveal."
+            },
+            "maskChar": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1,
+              "default": "*",
+              "description": "For 'partial' and 'full' masking: the character used to replace masked characters."
+            },
+            "algorithm": {
+              "type": "string",
+              "enum": [
+                "sha256",
+                "sha512",
+                "blake2b"
+              ],
+              "description": "For 'hash' masking: the hashing algorithm to use."
+            }
+          }
+        }
+      }
+    },
+    "filterRule": {
+      "type": "object",
+      "required": [
+        "field",
+        "operator"
+      ],
+      "additionalProperties": false,
+      "description": "A filter condition applied to data before it is returned.",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Field name to filter on."
+        },
+        "operator": {
+          "type": "string",
+          "enum": [
+            "equals",
+            "notEquals",
+            "in",
+            "notIn",
+            "greaterThan",
+            "greaterThanOrEqual",
+            "lessThan",
+            "lessThanOrEqual",
+            "contains",
+            "startsWith",
+            "like",
+            "notLike",
+            "matches",
+            "isNull",
+            "isNotNull",
+            "between"
+          ],
+          "description": "Comparison operator. 'matches' uses regular-expression matching; 'like'/'notLike' use SQL LIKE wildcards ('%' for any sequence, '_' for any single character). A row missing the referenced field is dropped for every operator, including the negative ones."
+        },
+        "value": {
+          "description": "Single comparison value. Use for every operator except 'in', 'notIn', 'between' (which use 'values'), and 'isNull'/'isNotNull' (which take no value)."
+        },
+        "values": {
+          "type": "array",
+          "items": {},
+          "description": "Array of comparison values. Use with 'in' and 'notIn'; use with 'between' as exactly two values ordered [low, high] inclusive."
+        }
+      }
+    }
+  }
+}

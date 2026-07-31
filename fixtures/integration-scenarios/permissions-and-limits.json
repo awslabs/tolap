@@ -1,0 +1,93 @@
+{
+  "description": "Coverage for permission flags, object-rule globs, and PolicyLimits values that didn't have integration coverage. Run against the seeded patients table.",
+  "scenarios": [
+    {
+      "name": "can-query-false-blocks-everything",
+      "comment": "canQuery=false must short-circuit before any object-rule evaluation, even when allowedObjects is permissive.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": false },
+        "objectRules": { "allowedObjects": ["patients"] }
+      },
+      "query": { "table": "patients", "columns": ["id"] },
+      "fields": ["patients.id"],
+      "expected": { "pass": false, "errorContains": "query not permitted" }
+    },
+    {
+      "name": "object-glob-matches-pattern",
+      "comment": "allowedObjects: [\"patient*\"] must match \"patients\" via glob.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["patient*"] }
+      },
+      "query": { "table": "patients", "columns": ["id"] },
+      "fields": ["patients.id"],
+      "expected": { "pass": true, "rowCount": 6 }
+    },
+    {
+      "name": "object-glob-non-match-denies",
+      "comment": "allowedObjects: [\"order*\"] must deny \"patients\" since the glob doesn't match.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["order*"] }
+      },
+      "query": { "table": "patients", "columns": ["id"] },
+      "fields": ["patients.id"],
+      "expected": { "pass": false, "errorContains": "not in allowed set" }
+    },
+    {
+      "name": "hidden-object-glob-takes-precedence",
+      "comment": "allowedObjects=[*] but hiddenObjects=[patient*] — hidden must win.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": {
+          "allowedObjects": ["*"],
+          "hiddenObjects": ["patient*"]
+        }
+      },
+      "query": { "table": "patients", "columns": ["id"] },
+      "fields": ["patients.id"],
+      "expected": { "pass": false, "errorContains": "object is hidden" }
+    },
+    {
+      "name": "object-rules-null-permits-everything",
+      "comment": "When objectRules is omitted entirely, no object-level restriction applies.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true }
+      },
+      "query": { "table": "patients", "columns": ["id"] },
+      "fields": ["patients.id"],
+      "expected": { "pass": true, "rowCount": 6 }
+    },
+    {
+      "name": "max-results-one-truncates-to-single-row",
+      "comment": "maxResults=1 keeps exactly one row.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["patients"] },
+        "limits": { "maxResults": 1 }
+      },
+      "query": { "table": "patients", "columns": ["id"] },
+      "fields": ["patients.id"],
+      "expected": { "pass": true, "rowCount": 1 }
+    },
+    {
+      "name": "max-results-larger-than-row-count-no-op",
+      "comment": "maxResults higher than the actual row count must NOT pad — six rows stay six rows.",
+      "policy": {
+        "version": "1.0",
+        "permissions": { "canQuery": true },
+        "objectRules": { "allowedObjects": ["patients"] },
+        "limits": { "maxResults": 1000 }
+      },
+      "query": { "table": "patients", "columns": ["id"] },
+      "fields": ["patients.id"],
+      "expected": { "pass": true, "rowCount": 6 }
+    }
+  ]
+}

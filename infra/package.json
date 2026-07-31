@@ -1,0 +1,32 @@
+{
+  "name": "@tolap/infra",
+  "version": "1.0.0",
+  "description": "CDK application deploying the TOLAP Policy Server.",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy --all",
+    "destroy": "cdk destroy --all"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {},
+  "devDependencies": {
+    "aws-cdk": "^2.1036.0",
+    "aws-cdk-lib": "^2.263.0",
+    "constructs": "^10.4.2",
+    "typescript": "^5.4.0",
+    "@types/node": "^25.5.2",
+    "vitest": "^4.1.9"
+  },
+  "private": true,
+  "bin": {
+    "infra": "bin/infra.js"
+  },
+  "type": "module"
+}

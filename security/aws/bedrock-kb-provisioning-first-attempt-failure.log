@@ -1,0 +1,23 @@
+[provision] S3 source bucket tolap-kb-src-6135de1668
+[provision] OpenSearch Serverless collection tolap-6135de1668 (+ encryption/network/access policies)
+[provision] waiting for IAM role propagation
+[provision] vector index
+[provision] knowledge base
+[provision] data source + ingestion
+Traceback (most recent call last):
+  File [35m"/Users/pspies/code/tolap-public/sdk/python/tests/integration/aws/provision_bedrock_kb.py"[0m, line [35m328[0m, in [35m<module>[0m
+    raise SystemExit([31mmain[0m[1;31m()[0m)
+                     [31m~~~~[0m[1;31m^^[0m
+  File [35m"/Users/pspies/code/tolap-public/sdk/python/tests/integration/aws/provision_bedrock_kb.py"[0m, line [35m307[0m, in [35mmain[0m
+    env = up(args.region)
+  File [35m"/Users/pspies/code/tolap-public/sdk/python/tests/integration/aws/provision_bedrock_kb.py"[0m, line [35m105[0m, in [35mup[0m
+    job = [31mc["agent"].start_ingestion_job[0m[1;31m(knowledgeBaseId=kb_id, dataSourceId=ds_id)[0m["ingestionJob"]
+          [31m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/pspies/.pyenv/versions/3.13.2/lib/python3.13/site-packages/botocore/client.py"[0m, line [35m602[0m, in [35m_api_call[0m
+    return [31mself._make_api_call[0m[1;31m(operation_name, kwargs)[0m
+           [31m~~~~~~~~~~~~~~~~~~~[0m[1;31m^^^^^^^^^^^^^^^^^^^^^^^^[0m
+  File [35m"/Users/pspies/.pyenv/versions/3.13.2/lib/python3.13/site-packages/botocore/context.py"[0m, line [35m123[0m, in [35mwrapper[0m
+    return func(*args, **kwargs)
+  File [35m"/Users/pspies/.pyenv/versions/3.13.2/lib/python3.13/site-packages/botocore/client.py"[0m, line [35m1078[0m, in [35m_make_api_call[0m
+    raise error_class(parsed_response, operation_name)
+[1;35mbotocore.errorfactory.ConflictException[0m: [35mAn error occurred (ConflictException) when calling the StartIngestionJob operation: You cannot start an ingestion job on a knowledgeBase with status CREATING.[0m

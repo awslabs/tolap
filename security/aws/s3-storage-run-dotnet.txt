@@ -1,0 +1,28 @@
+storage/S3 integration tests — .NET, real AWS
+Run: 2026-07-30T19:21:16Z
+Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Command: TOLAP_TEST_AWS=1 dotnet test --filter Aws.S3StorageTests
+
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.BarePrefix_IsNotGrantedByItsOwnGlob [4 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.Control_PermittedInsert_WritesAndReadsBack [174 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.Control_PermittedPrefix_DoesIssueAListCall [56 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.Delete_RequiresCanDelete [< 1 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.Insert_DeniedWhenOnlyUpdateIsGranted [< 1 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.ListObjects_ReturnsNoTags [42 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.AllowedFields_ProjectsMetadata [78 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.HiddenMetadataField_IsRemoved [75 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.AllowedTags_OverABareListing_DropsEverything [40 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.EnrichingEntriesWithTags_MakesTheAllowlistWork [246 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.MaskedMetadataField_IsMasked [74 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.EveryReturnedKey_SatisfiesThePolicy [44 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.WriteToDeniedPrefix_IsRefused [< 1 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.WritingAReadOnlyMetadataField_IsRefused [< 1 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.MaxObjectSize_DropsTheOversizeObject [213 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.MaxResults_TruncatesTheListing [244 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.DeniedPrefix_IssuesNoListCall [< 1 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.RowFilter_OverListingEntries [215 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.HiddenPrefix_AlsoIssuesNoCall [< 1 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.TagsAreOnlyAvailableViaGetObjectTagging [48 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.Denylist_KeepsUntaggedEntries [48 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.PrefixGlob_DescendsArbitrarily [39 ms]
+  Passed Tolap.Integration.Tests.Aws.S3StorageTests.ReadOnlyPolicy_DeniesAPutBeforeItIsIssued [< 1 ms]

@@ -1,0 +1,33 @@
+storage/S3 integration tests — real AWS
+Run: 2026-07-30T19:00:54Z
+Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Command: TOLAP_TEST_AWS=1 pytest tests/integration/aws/test_s3_storage.py -v
+
+============================= test session starts ==============================
+collecting ... collected 23 items
+
+tests/integration/aws/test_s3_storage.py::TestDeniedPrefixNeverReachesS3::test_denied_prefix_issues_no_list_call PASSED [  4%]
+tests/integration/aws/test_s3_storage.py::TestDeniedPrefixNeverReachesS3::test_control_permitted_prefix_does_issue_a_list_call PASSED [  8%]
+tests/integration/aws/test_s3_storage.py::TestDeniedPrefixNeverReachesS3::test_hidden_prefix_also_issues_no_call PASSED [ 13%]
+tests/integration/aws/test_s3_storage.py::TestPrefixGlobsAgainstRealKeys::test_prefix_glob_descends_arbitrarily PASSED [ 17%]
+tests/integration/aws/test_s3_storage.py::TestPrefixGlobsAgainstRealKeys::test_bare_prefix_is_not_granted_by_its_own_glob PASSED [ 21%]
+tests/integration/aws/test_s3_storage.py::TestPrefixGlobsAgainstRealKeys::test_every_returned_key_satisfies_the_policy PASSED [ 26%]
+tests/integration/aws/test_s3_storage.py::TestTagRulesOnAListing::test_list_objects_returns_no_tags PASSED [ 30%]
+tests/integration/aws/test_s3_storage.py::TestTagRulesOnAListing::test_tags_are_only_available_via_get_object_tagging PASSED [ 34%]
+tests/integration/aws/test_s3_storage.py::TestTagRulesOnAListing::test_allowed_tags_over_a_bare_listing_drops_everything PASSED [ 39%]
+tests/integration/aws/test_s3_storage.py::TestTagRulesOnAListing::test_enriching_entries_with_tags_makes_the_allowlist_work PASSED [ 43%]
+tests/integration/aws/test_s3_storage.py::TestTagRulesOnAListing::test_denylist_keeps_untagged_entries PASSED [ 47%]
+tests/integration/aws/test_s3_storage.py::TestWritePath::test_readonly_policy_denies_a_put_before_it_is_issued PASSED [ 52%]
+tests/integration/aws/test_s3_storage.py::TestWritePath::test_control_permitted_insert_writes_and_reads_back PASSED [ 56%]
+tests/integration/aws/test_s3_storage.py::TestWritePath::test_insert_denied_when_only_update_is_granted PASSED [ 60%]
+tests/integration/aws/test_s3_storage.py::TestWritePath::test_delete_requires_can_delete PASSED [ 65%]
+tests/integration/aws/test_s3_storage.py::TestWritePath::test_write_to_denied_prefix_is_refused PASSED [ 69%]
+tests/integration/aws/test_s3_storage.py::TestReadOnlyFieldsOnWrite::test_writing_a_read_only_metadata_field_is_refused PASSED [ 73%]
+tests/integration/aws/test_s3_storage.py::TestPostExecutionPipelineOverRealMetadata::test_hidden_metadata_field_is_removed PASSED [ 78%]
+tests/integration/aws/test_s3_storage.py::TestPostExecutionPipelineOverRealMetadata::test_masked_metadata_field_is_masked PASSED [ 82%]
+tests/integration/aws/test_s3_storage.py::TestPostExecutionPipelineOverRealMetadata::test_allowed_fields_projects_metadata PASSED [ 86%]
+tests/integration/aws/test_s3_storage.py::TestPostExecutionPipelineOverRealMetadata::test_row_filter_over_listing_entries PASSED [ 91%]
+tests/integration/aws/test_s3_storage.py::TestPostExecutionPipelineOverRealMetadata::test_max_object_size_drops_the_oversize_object PASSED [ 95%]
+tests/integration/aws/test_s3_storage.py::TestPostExecutionPipelineOverRealMetadata::test_max_results_truncates_the_listing PASSED [100%]
+
+============================== 23 passed in 4.00s ==============================

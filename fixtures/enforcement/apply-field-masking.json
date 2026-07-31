@@ -1,0 +1,37 @@
+{
+  "description": "Field masking -- all five mask types applied to a record",
+  "action": "applyFieldMasking",
+  "input": {
+    "record": {
+      "name": "John Smith",
+      "email": "john.smith@example.com",
+      "phone": "555-123-4567",
+      "ssn": "123-45-6789",
+      "notes": "Patient prefers morning appointments"
+    }
+  },
+  "policy": {
+    "permissions": { "canQuery": true },
+    "objectRules": {
+      "fieldRules": {
+        "maskedFields": [
+          { "field": "name", "maskType": "partial", "parameters": { "showFirst": 1, "showLast": 0, "maskChar": "*" } },
+          { "field": "email", "maskType": "hash", "parameters": { "algorithm": "sha256" } },
+          { "field": "phone", "maskType": "full", "parameters": { "maskChar": "*" } },
+          { "field": "ssn", "maskType": "null" },
+          { "field": "notes", "maskType": "redact" }
+        ]
+      }
+    }
+  },
+  "expected": {
+    "record": {
+      "name": "J*********",
+      "email": "a]sha256 hash of john.smith@example.com",
+      "phone": "************",
+      "ssn": null,
+      "notes": "[REDACTED]"
+    }
+  },
+  "notes": "The email hash value is implementation-specific (SHA-256 of the original value). Tests should verify format, not exact value. The name partial mask reveals first 1 char and masks the rest."
+}

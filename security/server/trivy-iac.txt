@@ -1,0 +1,655 @@
+2026-08-07T14:18:26-04:00	INFO	[misconfig] Misconfiguration scanning is enabled
+2026-08-07T14:18:26-04:00	INFO	[checks-client] Using existing checks from cache	path="/Users/pspies/Library/Caches/trivy/policy/content"
+2026-08-07T14:18:27-04:00	INFO	Detected config files	num=6
+
+Report Summary
+
+┌──────────────────────────────────────────────────────────────────────────────────┬────────────────┬───────────────────┐
+│                                      Target                                      │      Type      │ Misconfigurations │
+├──────────────────────────────────────────────────────────────────────────────────┼────────────────┼───────────────────┤
+│ TolapDatabase.template.json                                                      │ cloudformation │         4         │
+├──────────────────────────────────────────────────────────────────────────────────┼────────────────┼───────────────────┤
+│ TolapEdge.template.json                                                          │ cloudformation │         6         │
+├──────────────────────────────────────────────────────────────────────────────────┼────────────────┼───────────────────┤
+│ TolapIdentity.template.json                                                      │ cloudformation │         4         │
+├──────────────────────────────────────────────────────────────────────────────────┼────────────────┼───────────────────┤
+│ TolapNetwork.template.json                                                       │ cloudformation │         7         │
+├──────────────────────────────────────────────────────────────────────────────────┼────────────────┼───────────────────┤
+│ TolapServer.template.json                                                        │ cloudformation │         6         │
+├──────────────────────────────────────────────────────────────────────────────────┼────────────────┼───────────────────┤
+│ asset.967c9ea26c4d55c01343b2b380fe26b8be47b5ebdb4ef6cdba4eef60ce0baf9d/infra/do- │   dockerfile   │         0         │
+│ cker/Dockerfile                                                                  │                │                   │
+└──────────────────────────────────────────────────────────────────────────────────┴────────────────┴───────────────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+
+
+TolapDatabase.template.json (cloudformation)
+============================================
+Tests: 45 (SUCCESSES: 41, FAILURES: 4)
+Failures: 4 (UNKNOWN: 0, LOW: 2, MEDIUM: 0, HIGH: 1, CRITICAL: 1)
+
+AWS-0078 (LOW): Cluster instance Performance Insights enctyption does not use a customer-managed KMS key.
+════════════════════════════════════════
+Amazon RDS uses the AWS managed key for your new DB instance. For complete control over KMS keys, including establishing and maintaining their key policies, IAM policies, and grants, enabling and disabling them, and rotating their cryptographic material, use a customer managed keys.
+The encryption key specified in `performance_insights_kms_key_id` references a KMS ARN
+
+
+See https://avd.aquasec.com/misconfig/aws-0078
+────────────────────────────────────────
+ TolapDatabase.template.json:157-181
+────────────────────────────────────────
+ 157 ┌   "Clusterwriter2D9E9F4C": {
+ 158 │    "Type": "AWS::RDS::DBInstance",
+ 159 │    "Properties": {
+ 160 │     "DBClusterIdentifier": {
+ 161 │      "Ref": "ClusterEB0386A7"
+ 162 │     },
+ 163 │     "DBInstanceClass": "db.serverless",
+ 164 │     "EnablePerformanceInsights": true,
+ 165 └     "Engine": "aurora-postgresql",
+ ...   
+────────────────────────────────────────
+
+
+AWS-0079 (HIGH): Cluster does not specify a customer managed key for storage encryption.
+════════════════════════════════════════
+Encryption should be enabled for an RDS Aurora cluster.
+When enabling encryption by setting the kms_key_id, the storage_encrypted must also be set to true.
+
+
+See https://avd.aquasec.com/misconfig/aws-0079
+────────────────────────────────────────
+ TolapDatabase.template.json:100-156
+────────────────────────────────────────
+ 100 ┌   "ClusterEB0386A7": {
+ 101 │    "Type": "AWS::RDS::DBCluster",
+ 102 │    "Properties": {
+ 103 │     "BackupRetentionPeriod": 7,
+ 104 │     "CopyTagsToSnapshot": true,
+ 105 │     "DBClusterParameterGroupName": "default.aurora-postgresql16",
+ 106 │     "DBSubnetGroupName": {
+ 107 │      "Ref": "ClusterSubnetsDCFA5CB7"
+ 108 └     },
+ ...   
+────────────────────────────────────────
+
+
+AWS-0098 (LOW): Secret is not encrypted with a customer managed key.
+════════════════════════════════════════
+Secrets Manager encrypts secrets by default using a default key created by AWS. To ensure control and granularity of secret encryption, CMK's should be used explicitly.
+
+
+See https://avd.aquasec.com/misconfig/aws-0098
+────────────────────────────────────────
+ TolapDatabase.template.json:51-84
+────────────────────────────────────────
+  51 ┌   "TolapDatabaseClusterSecret29F656373fdaad7efa858a3daf9490cf0a702aeb": {
+  52 │    "Type": "AWS::SecretsManager::Secret",
+  53 │    "Properties": {
+  54 │     "Description": {
+  55 │      "Fn::Join": [
+  56 │       "",
+  57 │       [
+  58 │        "Generated by the CDK for stack: ",
+  59 └        {
+  ..   
+────────────────────────────────────────
+
+
+AWS-0104 (CRITICAL): Security group rule allows unrestricted egress to any IP address.
+════════════════════════════════════════
+Opening up ports to connect out to the public internet is generally to be avoided. You should restrict access to IP addresses or ranges that are explicitly required where possible.
+
+
+See https://avd.aquasec.com/misconfig/aws-0104
+────────────────────────────────────────
+ TolapDatabase.template.json:32
+   via TolapDatabase.template.json:31-35 (ClusterSecurityGroup0921994B)
+────────────────────────────────────────
+  31        {
+  32 [       "CidrIp": "0.0.0.0/0",
+  33         "Description": "Allow all outbound traffic by default",
+  34         "IpProtocol": "-1"
+  35        }
+────────────────────────────────────────
+
+
+
+TolapEdge.template.json (cloudformation)
+========================================
+Tests: 42 (SUCCESSES: 36, FAILURES: 6)
+Failures: 6 (UNKNOWN: 0, LOW: 3, MEDIUM: 0, HIGH: 3, CRITICAL: 0)
+
+AWS-0013 (HIGH): Distribution uses an insecure minimum TLS protocol version.
+════════════════════════════════════════
+You should not use outdated/insecure TLS versions for encryption. You should be using the latest TLS policies available.
+Note: that setting *minimum_protocol_version = "TLSv1.X"* is only possible when *cloudfront_default_certificate* is false (eg. you are not using the cloudfront.net domain name).
+If *cloudfront_default_certificate* is true then the Cloudfront API will only allow setting *minimum_protocol_version = "TLSv1"*, and setting it to any other value will result in a perpetual diff in your *terraform plan*'s.
+The only option when using the cloudfront.net domain name is to ignore this rule.
+
+
+See https://avd.aquasec.com/misconfig/aws-0013
+────────────────────────────────────────
+ TolapEdge.template.json:670-845
+────────────────────────────────────────
+ 670 ┌   "Distribution830FAC52": {
+ 671 │    "Type": "AWS::CloudFront::Distribution",
+ 672 │    "Properties": {
+ 673 │     "DistributionConfig": {
+ 674 │      "CacheBehaviors": [
+ 675 │       {
+ 676 │        "AllowedMethods": [
+ 677 │         "GET",
+ 678 └         "HEAD",
+ ...   
+────────────────────────────────────────
+
+
+AWS-0066 (LOW): Function does not have tracing enabled.
+════════════════════════════════════════
+X-Ray tracing enables end-to-end debugging and analysis of all function activity. This will allow for identifying bottlenecks, slow downs and timeouts.
+
+
+See https://avd.aquasec.com/misconfig/aws-0066
+────────────────────────────────────────
+ TolapEdge.template.json:1012-1044
+────────────────────────────────────────
+1012 ┌   "AWS679f53fac002430cb0da5b7982bd22872D164C4C": {
+1013 │    "Type": "AWS::Lambda::Function",
+1014 │    "Properties": {
+1015 │     "Code": {
+1016 │      "S3Bucket": "cdk-hnb659fds-assets-<ACCOUNT-ID>-us-west-2",
+1017 │      "S3Key": "9b8fce7ae7f25ef82fdbaf6b72523b99d0875c0c9c826642819fb51f11d9b125.zip"
+1018 │     },
+1019 │     "Handler": "index.handler",
+1020 └     "Role": {
+....   
+────────────────────────────────────────
+
+
+AWS-0066 (LOW): Function does not have tracing enabled.
+════════════════════════════════════════
+X-Ray tracing enables end-to-end debugging and analysis of all function activity. This will allow for identifying bottlenecks, slow downs and timeouts.
+
+
+See https://avd.aquasec.com/misconfig/aws-0066
+────────────────────────────────────────
+ TolapEdge.template.json:232-270
+────────────────────────────────────────
+ 232 ┌   "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
+ 233 │    "Type": "AWS::Lambda::Function",
+ 234 │    "Properties": {
+ 235 │     "Code": {
+ 236 │      "S3Bucket": "cdk-hnb659fds-assets-<ACCOUNT-ID>-us-west-2",
+ 237 │      "S3Key": "faa95a81ae7d7373f3e1f242268f904eb748d8d0fdd306e8a6fe515a1905a7d6.zip"
+ 238 │     },
+ 239 │     "Timeout": 900,
+ 240 └     "MemorySize": 128,
+ ...   
+────────────────────────────────────────
+
+
+AWS-0089 (LOW): Bucket has logging disabled
+════════════════════════════════════════
+Ensures S3 bucket logging is enabled for S3 buckets
+
+See https://avd.aquasec.com/misconfig/aws-0089
+────────────────────────────────────────
+ TolapEdge.template.json:3-61
+────────────────────────────────────────
+   3 ┌   "AccessLogs8B620ECA": {
+   4 │    "Type": "AWS::S3::Bucket",
+   5 │    "Properties": {
+   6 │     "BucketEncryption": {
+   7 │      "ServerSideEncryptionConfiguration": [
+   8 │       {
+   9 │        "ServerSideEncryptionByDefault": {
+  10 │         "SSEAlgorithm": "AES256"
+  11 └        }
+  ..   
+────────────────────────────────────────
+
+
+AWS-0132 (HIGH): Bucket does not encrypt data with a customer managed key.
+════════════════════════════════════════
+Encryption using AWS keys provides protection for your S3 buckets. To gain greater control over encryption, such as key rotation, access policies, and auditability, use customer managed keys (CMKs) with SSE-KMS.
+Note that SSE-KMS is not supported for S3 server access logging destination buckets; in such cases, use SSE-S3 instead.
+
+
+See https://avd.aquasec.com/misconfig/aws-0132
+────────────────────────────────────────
+ TolapEdge.template.json:271-314
+────────────────────────────────────────
+ 271 ┌   "ConsoleBucketA1BD9FF9": {
+ 272 │    "Type": "AWS::S3::Bucket",
+ 273 │    "Properties": {
+ 274 │     "BucketEncryption": {
+ 275 │      "ServerSideEncryptionConfiguration": [
+ 276 │       {
+ 277 │        "ServerSideEncryptionByDefault": {
+ 278 │         "SSEAlgorithm": "AES256"
+ 279 └        }
+ ...   
+────────────────────────────────────────
+
+
+AWS-0132 (HIGH): Bucket does not encrypt data with a customer managed key.
+════════════════════════════════════════
+Encryption using AWS keys provides protection for your S3 buckets. To gain greater control over encryption, such as key rotation, access policies, and auditability, use customer managed keys (CMKs) with SSE-KMS.
+Note that SSE-KMS is not supported for S3 server access logging destination buckets; in such cases, use SSE-S3 instead.
+
+
+See https://avd.aquasec.com/misconfig/aws-0132
+────────────────────────────────────────
+ TolapEdge.template.json:3-61
+────────────────────────────────────────
+   3 ┌   "AccessLogs8B620ECA": {
+   4 │    "Type": "AWS::S3::Bucket",
+   5 │    "Properties": {
+   6 │     "BucketEncryption": {
+   7 │      "ServerSideEncryptionConfiguration": [
+   8 │       {
+   9 │        "ServerSideEncryptionByDefault": {
+  10 │         "SSEAlgorithm": "AES256"
+  11 └        }
+  ..   
+────────────────────────────────────────
+
+
+
+TolapIdentity.template.json (cloudformation)
+============================================
+Tests: 29 (SUCCESSES: 25, FAILURES: 4)
+Failures: 4 (UNKNOWN: 0, LOW: 4, MEDIUM: 0, HIGH: 0, CRITICAL: 0)
+
+AWS-0066 (LOW): Function does not have tracing enabled.
+════════════════════════════════════════
+X-Ray tracing enables end-to-end debugging and analysis of all function activity. This will allow for identifying bottlenecks, slow downs and timeouts.
+
+
+See https://avd.aquasec.com/misconfig/aws-0066
+────────────────────────────────────────
+ TolapIdentity.template.json:260-290
+────────────────────────────────────────
+ 260 ┌   "SeedAdminFunctionEF0ED9F4": {
+ 261 │    "Type": "AWS::Lambda::Function",
+ 262 │    "Properties": {
+ 263 │     "Code": {
+ 264 │      "ZipFile": "/**\n * Create the seeded TOLAP administrator in the Cognito user pool.\n *\n * A custom resource rather than plain CloudFormation, because `AWS::Cognito::User`\n * cannot set a *permanent* password. A user created the ordinary way lands in\n * FORCE_CHANGE_PASSWORD, and the console's authorization-code flow has no way to\n * answer a NEW_PASSWORD_REQUIRED challenge -- the operator reaches the sign-in page,\n * is refused, and nothing says why.\n *\n * Written as inline JS rather than bundled TypeScript so it stays readable in the\n * CloudFormation template an approver reviews, and so it needs no build step.\n *\n * Idempotent: re-running a deployment must not fail because the user exists, and\n * must not reset a password an operator has already rotated.\n */\n\nconst {\n  CognitoIdentityProviderClient,\n  AdminCreateUserCommand,\n  AdminSetUserPasswordCommand,\n  AdminAddUserToGroupCommand,\n  AdminGetUserCommand,\n  UsernameExistsException,\n} = require(\"@aws-sdk/client-cognito-identity-provider\");\nconst {\n  SecretsManagerClient,\n  GetSecretValueCommand,\n} = require(\"@aws-sdk/client-secrets-manager\");\n\nconst cognito = new CognitoIdentityProviderClient({});\nconst secrets = new SecretsManagerClient({});\n\nexports.handler = async (event) => {\n  const { RequestType, ResourceProperties } = event;\n  const { UserPoolId, SecretArn, GroupName } = ResourceProperties;\n\n  // Deleting the stack must not delete administrators. The pool is RETAIN and the\n  // Lambda has no AdminDeleteUser permission, so this is belt and braces -- but an\n  // explicit no-op is clearer than relying on a missing permission.\n  if (RequestType === \"Delete\") {\n    return { PhysicalResourceId: event.PhysicalResourceId ?? \"seeded-admin\" };\n  }\n\n  const secret = await secrets.send(\n    new GetSecretValueCommand({ SecretId: SecretArn }),\n  );\n  const { username, email, password } = JSON.parse(secret.SecretString);\n\n  if (!username || !password) {\n    throw new Error(\"admin secret is missing username or password\");\n  }\n\n  let created = false;\n  try {\n    await cognito.send(\n      new AdminCreateUserCommand({\n        UserPoolId,\n        Username: username,\n        UserAttributes: [\n          { Name: \"email\", Value: email },\n          // Marked verified because there is no mailbox behind the placeholder\n          // address; an unverified user cannot complete account recovery, and the\n          // operator would hit that only later, while locked out.\n          { Name: \"email_verified\", Value: \"true\" },\n        ],\n        // No invitation email: the address is a placeholder and the credentials are\n        // in Secrets Manager, so a message would either bounce or leak.\n        MessageAction: \"SUPPRESS\",\n      }),\n    );\n    created = true;\n  } catch (error) {\n    if (!(error instanceof UsernameExistsException)) throw error;\n    // Already present, from an earlier deployment.\n  }\n\n  if (created) {\n    // Permanent, so there is no forced-reset challenge the console cannot answer.\n    // Only on creation: an operator who has rotated this password must not have it\n    // silently reset to the secret's value by the next `cdk deploy`.\n    await cognito.send(\n      new AdminSetUserPasswordCommand({\n        UserPoolId,\n        Username: username,\n        Password: password,\n        Permanent: true,\n      }),\n    );\n  }\n\n  // Group membership is asserted every time. This is the one part worth repairing on\n  // update: a user outside `tolap-admin` cannot use the console at all, and the call\n  // is a no-op when they are already a member.\n  await cognito.send(\n    new AdminAddUserToGroupCommand({\n      UserPoolId,\n      Username: username,\n      GroupName,\n    }),\n  );\n\n  // Read back rather than trusting the writes. A user who exists but is not\n  // CONFIRMED cannot sign in, and finding that out now beats finding it out at the\n  // sign-in page with no diagnostic.\n  const user = await cognito.send(\n    new AdminGetUserCommand({ UserPoolId, Username: username }),\n  );\n  if (user.UserStatus !== \"CONFIRMED\") {\n    throw new Error(\n      `seeded administrator is ${user.UserStatus}, expected CONFIRMED; the console cannot sign in with this account`,\n    );\n  }\n\n  return {\n    PhysicalResourceId: `seeded-admin-${username}`,\n    Data: {\n      Username: username,\n      // Deliberately no password here: Data lands in the CloudFormation template's\n      // resource metadata and in `describe-stacks` output, both of which are widely\n      // readable. The secret is the only place it belongs.\n      Created: String(created),\n    },\n  };\n};\n"
+ 265 │     },
+ 266 │     "Description": "Creates the seeded TOLAP administrator in the user pool",
+ 267 │     "Handler": "index.handler",
+ 268 └     "Role": {
+ ...   
+────────────────────────────────────────
+
+
+AWS-0066 (LOW): Function does not have tracing enabled.
+════════════════════════════════════════
+X-Ray tracing enables end-to-end debugging and analysis of all function activity. This will allow for identifying bottlenecks, slow downs and timeouts.
+
+
+See https://avd.aquasec.com/misconfig/aws-0066
+────────────────────────────────────────
+ TolapIdentity.template.json:384-417
+────────────────────────────────────────
+ 384 ┌   "LogRetentionaae0aa3c5b4d4f87b02d85b201efdd8aFD4BFC8A": {
+ 385 │    "Type": "AWS::Lambda::Function",
+ 386 │    "Properties": {
+ 387 │     "Handler": "index.handler",
+ 388 │     "Runtime": "nodejs24.x",
+ 389 │     "Timeout": 900,
+ 390 │     "Code": {
+ 391 │      "S3Bucket": "cdk-hnb659fds-assets-<ACCOUNT-ID>-us-west-2",
+ 392 └      "S3Key": "2819175352ad1ce0dae768e83fc328fb70fb5f10b4a8ff0ccbcb791f02b0716d.zip"
+ ...   
+────────────────────────────────────────
+
+
+AWS-0066 (LOW): Function does not have tracing enabled.
+════════════════════════════════════════
+X-Ray tracing enables end-to-end debugging and analysis of all function activity. This will allow for identifying bottlenecks, slow downs and timeouts.
+
+
+See https://avd.aquasec.com/misconfig/aws-0066
+────────────────────────────────────────
+ TolapIdentity.template.json:513-561
+────────────────────────────────────────
+ 513 ┌   "SeedAdminProviderframeworkonEventC0D31BF1": {
+ 514 │    "Type": "AWS::Lambda::Function",
+ 515 │    "Properties": {
+ 516 │     "Code": {
+ 517 │      "S3Bucket": "cdk-hnb659fds-assets-<ACCOUNT-ID>-us-west-2",
+ 518 │      "S3Key": "e16ffb3b34af185b8b30c88fdb19faa13b6c42bb38580485c4e84b384ee48b63.zip"
+ 519 │     },
+ 520 │     "Description": "AWS CDK resource provider framework - onEvent (TolapIdentity/SeedAdminProvider)",
+ 521 └     "Environment": {
+ ...   
+────────────────────────────────────────
+
+
+AWS-0098 (LOW): Secret is not encrypted with a customer managed key.
+════════════════════════════════════════
+Secrets Manager encrypts secrets by default using a default key created by AWS. To ensure control and granularity of secret encryption, CMK's should be used explicitly.
+
+
+See https://avd.aquasec.com/misconfig/aws-0098
+────────────────────────────────────────
+ TolapIdentity.template.json:151-175
+────────────────────────────────────────
+ 151 ┌   "AdminSecretB9452750": {
+ 152 │    "Type": "AWS::SecretsManager::Secret",
+ 153 │    "Properties": {
+ 154 │     "Description": "Seeded TOLAP policy-server administrator. Break-glass account: enable MFA and add real users.",
+ 155 │     "GenerateSecretString": {
+ 156 │      "ExcludeCharacters": "\"'\\$`|&;<>()[]{}",
+ 157 │      "GenerateStringKey": "password",
+ 158 │      "PasswordLength": 24,
+ 159 └      "RequireEachIncludedType": true,
+ ...   
+────────────────────────────────────────
+
+
+
+TolapNetwork.template.json (cloudformation)
+===========================================
+Tests: 49 (SUCCESSES: 42, FAILURES: 7)
+Failures: 7 (UNKNOWN: 0, LOW: 1, MEDIUM: 0, HIGH: 2, CRITICAL: 4)
+
+AWS-0017 (LOW): Log group is not encrypted.
+════════════════════════════════════════
+CloudWatch log groups are encrypted by default, however, to get the full benefit of controlling key rotation and other KMS aspects a KMS CMK should be used.
+
+
+See https://avd.aquasec.com/misconfig/aws-0017
+────────────────────────────────────────
+ TolapNetwork.template.json:3-19
+────────────────────────────────────────
+   3 ┌   "FlowLogs16C1943A": {
+   4 │    "Type": "AWS::Logs::LogGroup",
+   5 │    "Properties": {
+   6 │     "RetentionInDays": 30,
+   7 │     "Tags": [
+   8 │      {
+   9 │       "Key": "Application",
+  10 │       "Value": "tolap-policy-server"
+  11 └      }
+  ..   
+────────────────────────────────────────
+
+
+AWS-0104 (CRITICAL): Security group rule allows unrestricted egress to any IP address.
+════════════════════════════════════════
+Opening up ports to connect out to the public internet is generally to be avoided. You should restrict access to IP addresses or ranges that are explicitly required where possible.
+
+
+See https://avd.aquasec.com/misconfig/aws-0104
+────────────────────────────────────────
+ TolapNetwork.template.json:985
+   via TolapNetwork.template.json:984-988 (VpcCloudWatchLogsEndpointSecurityGroupE044298A)
+────────────────────────────────────────
+ 984        {
+ 985 [       "CidrIp": "0.0.0.0/0",
+ 986         "Description": "Allow all outbound traffic by default",
+ 987         "IpProtocol": "-1"
+ 988        }
+────────────────────────────────────────
+
+
+AWS-0104 (CRITICAL): Security group rule allows unrestricted egress to any IP address.
+════════════════════════════════════════
+Opening up ports to connect out to the public internet is generally to be avoided. You should restrict access to IP addresses or ranges that are explicitly required where possible.
+
+
+See https://avd.aquasec.com/misconfig/aws-0104
+────────────────────────────────────────
+ TolapNetwork.template.json:888
+   via TolapNetwork.template.json:887-891 (VpcEcrDockerEndpointSecurityGroup5D41A216)
+────────────────────────────────────────
+ 887        {
+ 888 [       "CidrIp": "0.0.0.0/0",
+ 889         "Description": "Allow all outbound traffic by default",
+ 890         "IpProtocol": "-1"
+ 891        }
+────────────────────────────────────────
+
+
+AWS-0104 (CRITICAL): Security group rule allows unrestricted egress to any IP address.
+════════════════════════════════════════
+Opening up ports to connect out to the public internet is generally to be avoided. You should restrict access to IP addresses or ranges that are explicitly required where possible.
+
+
+See https://avd.aquasec.com/misconfig/aws-0104
+────────────────────────────────────────
+ TolapNetwork.template.json:791
+   via TolapNetwork.template.json:790-794 (VpcEcrEndpointSecurityGroup13145954)
+────────────────────────────────────────
+ 790        {
+ 791 [       "CidrIp": "0.0.0.0/0",
+ 792         "Description": "Allow all outbound traffic by default",
+ 793         "IpProtocol": "-1"
+ 794        }
+────────────────────────────────────────
+
+
+AWS-0104 (CRITICAL): Security group rule allows unrestricted egress to any IP address.
+════════════════════════════════════════
+Opening up ports to connect out to the public internet is generally to be avoided. You should restrict access to IP addresses or ranges that are explicitly required where possible.
+
+
+See https://avd.aquasec.com/misconfig/aws-0104
+────────────────────────────────────────
+ TolapNetwork.template.json:694
+   via TolapNetwork.template.json:693-697 (VpcSecretsManagerEndpointSecurityGroup9A5498C7)
+────────────────────────────────────────
+ 693        {
+ 694 [       "CidrIp": "0.0.0.0/0",
+ 695         "Description": "Allow all outbound traffic by default",
+ 696         "IpProtocol": "-1"
+ 697        }
+────────────────────────────────────────
+
+
+AWS-0164 (HIGH): Subnet associates public IP address.
+════════════════════════════════════════
+You should limit the provision of public IP addresses for resources. Resources should not be exposed on the public internet, but should have access limited to consumers required for the function of your application.
+
+
+See https://avd.aquasec.com/misconfig/aws-0164
+────────────────────────────────────────
+ TolapNetwork.template.json:47
+   via TolapNetwork.template.json:42-73 (VpcpublicSubnet1Subnet2BB74ED7)
+────────────────────────────────────────
+  42     "VpcpublicSubnet1Subnet2BB74ED7": {
+  ..   
+  47 [     "MapPublicIpOnLaunch": true,
+  ..   
+  73     },
+────────────────────────────────────────
+
+
+AWS-0164 (HIGH): Subnet associates public IP address.
+════════════════════════════════════════
+You should limit the provision of public IP addresses for resources. Resources should not be exposed on the public internet, but should have access limited to consumers required for the function of your application.
+
+
+See https://avd.aquasec.com/misconfig/aws-0164
+────────────────────────────────────────
+ TolapNetwork.template.json:182
+   via TolapNetwork.template.json:177-208 (VpcpublicSubnet2SubnetE34B022A)
+────────────────────────────────────────
+ 177     "VpcpublicSubnet2SubnetE34B022A": {
+ ...   
+ 182 [     "MapPublicIpOnLaunch": true,
+ ...   
+ 208     },
+────────────────────────────────────────
+
+
+
+TolapServer.template.json (cloudformation)
+==========================================
+Tests: 54 (SUCCESSES: 48, FAILURES: 6)
+Failures: 6 (UNKNOWN: 0, LOW: 2, MEDIUM: 0, HIGH: 0, CRITICAL: 4)
+
+AWS-0017 (LOW): Log group is not encrypted.
+════════════════════════════════════════
+CloudWatch log groups are encrypted by default, however, to get the full benefit of controlling key rotation and other KMS aspects a KMS CMK should be used.
+
+
+See https://avd.aquasec.com/misconfig/aws-0017
+────────────────────────────────────────
+ TolapServer.template.json:271-287
+────────────────────────────────────────
+ 271 ┌   "TaskDefServerLogGroupCC00FFFF": {
+ 272 │    "Type": "AWS::Logs::LogGroup",
+ 273 │    "Properties": {
+ 274 │     "RetentionInDays": 90,
+ 275 │     "Tags": [
+ 276 │      {
+ 277 │       "Key": "Application",
+ 278 │       "Value": "tolap-policy-server"
+ 279 └      }
+ ...   
+────────────────────────────────────────
+
+
+AWS-0036 (CRITICAL): Container definition contains a potentially sensitive in environment variable name "{\"endline\": 174, \"explicit\": true, \"filepath\": \"TolapServer.template.json\", \"fskey\": \"02e39836c68c577ac266897407d7ea0b1aeff34a38c2150c4fc47b0b797bdb68\", \"managed\": true, \"parent\": {\"endline\": 178, \"explicit\": false, \"filepath\": \"TolapServer.template.json\", \"fskey\": \"02e39836c68c577ac266897407d7ea0b1aeff34a38c2150c4fc47b0b797bdb68\", \"managed\": true, \"resource\": \"TaskDef54694570\", \"sourceprefix\": \"\", \"startline\": 173, \"unresolvable\": false}, \"resource\": \"\", \"sourceprefix\": \"\", \"startline\": 174, \"unresolvable\": false, \"value\": \"DATABASE_SECRET_ID\"}"
+════════════════════════════════════════
+You should not make secrets available to a user in plaintext in any scenario. Secrets can instead be pulled from a secure secret storage system by the service requiring them.
+
+
+See https://avd.aquasec.com/misconfig/aws-0036
+────────────────────────────────────────
+ TolapServer.template.json:113-235
+   via TolapServer.template.json:112-236 (TaskDef54694570)
+────────────────────────────────────────
+ 112       "ContainerDefinitions": [
+ 113 ┌      {
+ 114 │       "Environment": [
+ 115 │        {
+ 116 │         "Name": "PORT",
+ 117 │         "Value": "8080"
+ 118 │        },
+ 119 │        {
+ 120 └         "Name": "RESOLVE_PORT",
+ ...   
+────────────────────────────────────────
+
+
+AWS-0054 (CRITICAL): Listener for application load balancer does not use HTTPS.
+════════════════════════════════════════
+Plain HTTP is unencrypted and human-readable. This means that if a malicious actor was to eavesdrop on your connection, they would be able to see all of your data flowing back and forth.
+You should use HTTPS, which is HTTP over an encrypted (TLS) connection, meaning eavesdroppers cannot read your traffic.
+
+
+See https://avd.aquasec.com/misconfig/aws-0054
+────────────────────────────────────────
+ TolapServer.template.json:671-691
+────────────────────────────────────────
+ 671 ┌   "AdminAlbAdminListenerC160E194": {
+ 672 │    "Type": "AWS::ElasticLoadBalancingV2::Listener",
+ 673 │    "Properties": {
+ 674 │     "DefaultActions": [
+ 675 │      {
+ 676 │       "TargetGroupArn": {
+ 677 │        "Ref": "AdminAlbAdminListenerAdminTargetGroup9CD372FB"
+ 678 │       },
+ 679 └       "Type": "forward"
+ ...   
+────────────────────────────────────────
+
+
+AWS-0054 (CRITICAL): Listener for application load balancer does not use HTTPS.
+════════════════════════════════════════
+Plain HTTP is unencrypted and human-readable. This means that if a malicious actor was to eavesdrop on your connection, they would be able to see all of your data flowing back and forth.
+You should use HTTPS, which is HTTP over an encrypted (TLS) connection, meaning eavesdroppers cannot read your traffic.
+
+
+See https://avd.aquasec.com/misconfig/aws-0054
+────────────────────────────────────────
+ TolapServer.template.json:822-842
+────────────────────────────────────────
+ 822 ┌   "ResolveAlbInternalResolveListenerV2D1F25DAD": {
+ 823 │    "Type": "AWS::ElasticLoadBalancingV2::Listener",
+ 824 │    "Properties": {
+ 825 │     "DefaultActions": [
+ 826 │      {
+ 827 │       "TargetGroupArn": {
+ 828 │        "Ref": "ResolveAlbInternalResolveListenerV2ResolveTargetV2Group35FEBA65"
+ 829 │       },
+ 830 └       "Type": "forward"
+ ...   
+────────────────────────────────────────
+
+
+AWS-0098 (LOW): Secret is not encrypted with a customer managed key.
+════════════════════════════════════════
+Secrets Manager encrypts secrets by default using a default key created by AWS. To ensure control and granularity of secret encryption, CMK's should be used explicitly.
+
+
+See https://avd.aquasec.com/misconfig/aws-0098
+────────────────────────────────────────
+ TolapServer.template.json:3-26
+────────────────────────────────────────
+   3 ┌   "SigningKeyEEFC2790": {
+   4 │    "Type": "AWS::SecretsManager::Secret",
+   5 │    "Properties": {
+   6 │     "Description": "HMAC signing key for TOLAP policy artifacts. Rotate by adding a second kid -- see docs/policy-server.md.",
+   7 │     "GenerateSecretString": {
+   8 │      "ExcludeCharacters": ":,\"'\\$`|&;<>()[]{} ",
+   9 │      "ExcludePunctuation": false,
+  10 │      "PasswordLength": 48,
+  11 └      "RequireEachIncludedType": false
+  ..   
+────────────────────────────────────────
+
+
+AWS-0104 (CRITICAL): Security group rule allows unrestricted egress to any IP address.
+════════════════════════════════════════
+Opening up ports to connect out to the public internet is generally to be avoided. You should restrict access to IP addresses or ranges that are explicitly required where possible.
+
+
+See https://avd.aquasec.com/misconfig/aws-0104
+────────────────────────────────────────
+ TolapServer.template.json:470
+   via TolapServer.template.json:469-473 (ServiceSecurityGroupC96ED6A7)
+────────────────────────────────────────
+ 469        {
+ 470 [       "CidrIp": "0.0.0.0/0",
+ 471         "Description": "Allow all outbound traffic by default",
+ 472         "IpProtocol": "-1"
+ 473        }
+────────────────────────────────────────
+
+
+
+📣 [34mNotices:[0m
+  - Version 0.73.0 of Trivy is now available, current version is 0.72.0
+
+To suppress version checks, run Trivy scans with the --skip-version-check flag
+
+
+2026-08-07T14:18:27-04:00	INFO	[misconfig] Misconfiguration scanning is enabled
+2026-08-07T14:18:27-04:00	INFO	[checks-client] Using existing checks from cache	path="/Users/pspies/Library/Caches/trivy/policy/content"
+2026-08-07T14:18:28-04:00	INFO	Detected config files	num=1
+
+Report Summary
+
+┌────────────┬────────────┬───────────────────┐
+│   Target   │    Type    │ Misconfigurations │
+├────────────┼────────────┼───────────────────┤
+│ Dockerfile │ dockerfile │         0         │
+└────────────┴────────────┴───────────────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+
+
+📣 [34mNotices:[0m
+  - Version 0.73.0 of Trivy is now available, current version is 0.72.0
+
+To suppress version checks, run Trivy scans with the --skip-version-check flag
+

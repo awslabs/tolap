@@ -1,0 +1,14 @@
+# npm audit report
+
+@ai-sdk/provider-utils  <=3.0.97
+@ai-sdk/provider-utils has an Uncontrolled Resource Consumption issue - https://github.com/advisories/GHSA-866g-f22w-33x8
+fix available via `npm audit fix`
+node_modules/@ai-sdk/provider-utils-v5
+  @mastra/core  <=0.0.0-zod-v4-stuff-20250825154219 || 0.10.2-alpha.0 - 0.24.10-alpha.0
+  Depends on vulnerable versions of @ai-sdk/provider-utils
+  node_modules/@mastra/core
+
+2 low severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix

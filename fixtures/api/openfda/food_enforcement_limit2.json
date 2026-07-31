@@ -1,0 +1,69 @@
+{
+  "meta": {
+    "disclaimer": "Do not rely on openFDA to make decisions regarding medical care. While we make every effort to ensure that data is accurate, you should assume all results are unvalidated. We may limit or otherwise restrict your access to the API in line with our Terms of Service.",
+    "terms": "https://open.fda.gov/terms/",
+    "license": "https://open.fda.gov/license/",
+    "last_updated": "2026-06-03",
+    "results": {
+      "skip": 0,
+      "limit": 2,
+      "total": 28966
+    }
+  },
+  "results": [
+    {
+      "status": "Terminated",
+      "city": "Davie",
+      "state": "FL",
+      "country": "United States",
+      "classification": "Class II",
+      "openfda": {},
+      "product_type": "Food",
+      "event_id": "75272",
+      "recalling_firm": "Pharmatech LLC",
+      "address_1": "4131 SW 47th Ave Ste 1403",
+      "address_2": "",
+      "postal_code": "33314-4036",
+      "voluntary_mandated": "Voluntary: Firm initiated",
+      "initial_firm_notification": "Letter",
+      "distribution_pattern": "FL, MI, MS, and OH.",
+      "recall_number": "F-0276-2017",
+      "product_description": "CytoDetox, Hydrolyzed Clinoptilolite Fragments, 1 oz./30 mL, OTC Non-Sterile.  Dietary supplement.",
+      "product_quantity": "1,990 bottles",
+      "reason_for_recall": "Recall initiated as a precautionary measure due to potential risk of product contamination with Burkholderia cepacia.",
+      "recall_initiation_date": "20160808",
+      "center_classification_date": "20161025",
+      "termination_date": "20240923",
+      "report_date": "20161102",
+      "code_info": "UPC No. 632687615989; Lot No. 30661601, Exp. Date 05/2018.",
+      "more_code_info": ""
+    },
+    {
+      "country": "United States",
+      "city": "Millbrae",
+      "address_1": "375 Adrian Rd",
+      "reason_for_recall": "Mooncake products, manufactured and distributed by Magic Gourmet Trading, Inc. of Milbrae, CA did not have adequate product labeling, including ingredient statements and allergen declaration. Undeclared ingredients include wheat, peanut oil.",
+      "address_2": "",
+      "product_quantity": "2 cases (1 pc/bx, 48bx/cs)",
+      "code_info": "FG-M1MOT-UW  Best by Nov 1, 2016.",
+      "center_classification_date": "20170106",
+      "distribution_pattern": "CA, WA, OR.",
+      "state": "CA",
+      "product_description": "Koi Palace Mini Moon Cake: Single Box - Mini Oolong Tea Paste  Unit Size 1/2 lb. and 1/4 lb. in circular box (1 piece) and rectangular boxes (4, 6 or 8 pieces).",
+      "report_date": "20170118",
+      "classification": "Class II",
+      "openfda": {},
+      "recalling_firm": "Magic Gourmet Trading Inc",
+      "recall_number": "F-0865-2017",
+      "initial_firm_notification": "Two or more of the following: Email, Fax, Letter, Press Release, Telephone, Visit",
+      "product_type": "Food",
+      "event_id": "75069",
+      "termination_date": "20170111",
+      "more_code_info": "",
+      "recall_initiation_date": "20160831",
+      "postal_code": "94030-3104",
+      "voluntary_mandated": "Voluntary: Firm initiated",
+      "status": "Terminated"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+===== server =====
+found 0 vulnerabilities
+===== console =====
+found 0 vulnerabilities
+===== infra =====
+found 0 vulnerabilities

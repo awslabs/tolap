@@ -1,0 +1,23 @@
+db/Athena (Trino dialect) integration tests — real AWS
+Run: 2026-07-30T19:11:40Z
+Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Backend: Athena primary workgroup over a Glue table on seeded S3 CSV
+Command: TOLAP_TEST_AWS=1 pytest tests/integration/aws/test_athena_db.py -v
+
+============================= test session starts ==============================
+collecting ... collected 12 items
+
+tests/integration/aws/test_athena_db.py::TestRowFilterPushdown::test_baseline_unfiltered_returns_every_region PASSED [  8%]
+tests/integration/aws/test_athena_db.py::TestRowFilterPushdown::test_row_filter_is_pushed_into_the_sql_and_honoured_by_athena PASSED [ 16%]
+tests/integration/aws/test_athena_db.py::TestRowFilterPushdown::test_in_operator_pushdown PASSED [ 25%]
+tests/integration/aws/test_athena_db.py::TestRowFilterPushdown::test_not_equals_pushdown_excludes_the_region PASSED [ 33%]
+tests/integration/aws/test_athena_db.py::TestRowFilterPushdown::test_max_results_is_pushed_as_limit PASSED [ 41%]
+tests/integration/aws/test_athena_db.py::TestDenialsPrecedeExecution::test_can_query_false_yields_no_executable_sql PASSED [ 50%]
+tests/integration/aws/test_athena_db.py::TestDenialsPrecedeExecution::test_table_outside_allowed_objects_is_refused PASSED [ 58%]
+tests/integration/aws/test_athena_db.py::TestDenialsPrecedeExecution::test_control_permitted_table_produces_runnable_sql PASSED [ 66%]
+tests/integration/aws/test_athena_db.py::TestPostFetchOverRealAthenaRows::test_hidden_field_survives_the_rewrite_and_is_removed_after PASSED [ 75%]
+tests/integration/aws/test_athena_db.py::TestPostFetchOverRealAthenaRows::test_masking_applies_to_real_athena_rows PASSED [ 83%]
+tests/integration/aws/test_athena_db.py::TestPostFetchOverRealAthenaRows::test_allowed_fields_projects_athena_rows PASSED [ 91%]
+tests/integration/aws/test_athena_db.py::TestPostFetchOverRealAthenaRows::test_pushdown_and_post_pass_agree_on_the_same_policy PASSED [100%]
+
+============================= 12 passed in 30.95s ==============================

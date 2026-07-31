@@ -1,0 +1,39 @@
+{
+  "description": "Row filters from multiple policies -- all present (AND logic)",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "policy-region",
+      "priority": 10,
+      "permissions": { "canQuery": true },
+      "objectRules": {
+        "rowFilters": [
+          { "field": "region", "operator": "in", "values": ["us-east", "us-west"] }
+        ]
+      }
+    },
+    {
+      "version": "1.0",
+      "name": "policy-status",
+      "priority": 20,
+      "permissions": { "canQuery": true },
+      "objectRules": {
+        "rowFilters": [
+          { "field": "status", "operator": "notEquals", "value": "deleted" },
+          { "field": "created_at", "operator": "greaterThan", "value": "2025-01-01" }
+        ]
+      }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["policy-region", "policy-status"],
+    "permissions": { "canQuery": true },
+    "objectRules": {
+      "rowFilters": [
+        { "field": "region", "operator": "in", "values": ["us-east", "us-west"] },
+        { "field": "status", "operator": "notEquals", "value": "deleted" },
+        { "field": "created_at", "operator": "greaterThan", "value": "2025-01-01" }
+      ]
+    }
+  }
+}

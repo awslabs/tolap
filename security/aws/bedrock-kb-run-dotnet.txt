@@ -1,0 +1,12 @@
+kb enforcement — .NET, real Bedrock Knowledge Base
+Run: 2026-07-30T19:44:26Z
+Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1   KB: K3BOEARXHI
+
+  Passed Tolap.Integration.Tests.Aws.BedrockKbTests.AllowlistPushdown_ReturnsOnlyPublic [823 ms]
+  Passed Tolap.Integration.Tests.Aws.BedrockKbTests.PushdownAndPostPass_ReachTheSameVerdict [926 ms]
+  Passed Tolap.Integration.Tests.Aws.BedrockKbTests.DenylistPushdown_ExcludesSecretAtTheSource [446 ms]
+  Passed Tolap.Integration.Tests.Aws.BedrockKbTests.NegativeControl_AMalformedFilterIsRejected [7 ms]
+  Passed Tolap.Integration.Tests.Aws.BedrockKbTests.Baseline_UnfilteredRetrievalReturnsBothClassifications [493 ms]
+  Passed Tolap.Integration.Tests.Aws.BedrockKbTests.GeneratedFilterShape_IsAccepted(name: "denylist-only") [116 ms]
+  Passed Tolap.Integration.Tests.Aws.BedrockKbTests.GeneratedFilterShape_IsAccepted(name: "allowlist-only") [111 ms]
+  Passed Tolap.Integration.Tests.Aws.BedrockKbTests.GeneratedFilterShape_IsAccepted(name: "both-anded") [101 ms]

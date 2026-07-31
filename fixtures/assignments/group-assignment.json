@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "policyName": "internal-api-readonly",
+  "assignee": {
+    "type": "group",
+    "identifier": "research-analysts"
+  },
+  "scope": {
+    "tenantId": "tenant-midwest-health"
+  },
+  "active": true,
+  "audit": {
+    "grantedBy": "admin-jane-doe",
+    "grantedAt": "2026-01-10T08:00:00Z",
+    "reason": "Standard group access for research team"
+  }
+}

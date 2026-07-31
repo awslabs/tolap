@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "policyName": "healthcare-analyst-db",
+  "assignee": {
+    "type": "user",
+    "identifier": "user-001"
+  },
+  "scope": {
+    "tenantId": "tenant-midwest-health"
+  },
+  "active": true,
+  "audit": {
+    "grantedBy": "admin-jane-doe",
+    "grantedAt": "2026-01-15T10:00:00Z",
+    "reason": "Analyst role for Q1 reporting"
+  }
+}

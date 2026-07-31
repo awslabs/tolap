@@ -1,0 +1,15 @@
+openFDA live API tests — real requests to api.fda.gov
+Run: 2026-07-30T20:27:01Z
+Command: TOLAP_TEST_LIVE=1 python3 -m pytest tests/integration/test_openfda_record.py -v
+
+Note: this mode re-records fixtures/api/openfda/*.json as a side effect.
+The refreshed fixtures were reverted after this run — re-recording was not the intent.
+
+============================= test session starts ==============================
+platform darwin -- Python 3.13.2, pytest-9.0.2, pluggy-1.6.0 -- /Users/pspies/.pyenv/versions/3.13.2/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/pspies/code/tolap-public/sdk/python
+plugins: anyio-4.9.0, typeguard-2.13.3, zarr-3.1.5
+collecting ... collected 3 items
+
+tests/integration/test_openfda_record.py::test_record_live_response[drug_event_limit3.json-/drug/event.json-params0] 

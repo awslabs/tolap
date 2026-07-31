@@ -1,0 +1,17 @@
+===== server =====
+found 0 vulnerabilities
+===== console =====
+found 0 vulnerabilities
+===== infra =====
+# npm audit report
+
+brace-expansion  4.0.0 - 5.0.8
+Severity: high
+brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation - https://github.com/advisories/GHSA-rgw5-rvv9-x895
+fix available via `npm audit fix`
+node_modules/aws-cdk-lib/node_modules/brace-expansion
+
+1 high severity vulnerability
+
+To address all issues, run:
+  npm audit fix
