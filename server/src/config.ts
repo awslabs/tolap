@@ -29,8 +29,16 @@ export interface ServerConfig {
   readonly databaseUrl: string;
   readonly signingKey: string;
   readonly ttlSeconds: number;
+  /** Admin API + console listener. */
   readonly port: number;
   readonly host: string;
+  /** Resolve listener, separate so it can bind a different interface. */
+  readonly resolvePort: number;
+  readonly resolveHost: string;
+  readonly cognitoIssuer: string;
+  readonly cognitoAudience: string;
+  readonly adminGroup: string;
+  readonly auditorGroup: string;
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -82,8 +90,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   }
 
   const port = integer(env, "PORT", 8080);
-  if (port < 1 || port > 65535) {
-    throw new Error(`PORT must be between 1 and 65535, got ${port}.`);
+  const resolvePort = integer(env, "RESOLVE_PORT", 8081);
+  for (const [name, value] of [
+    ["PORT", port],
+    ["RESOLVE_PORT", resolvePort],
+  ] as const) {
+    if (value < 1 || value > 65535) {
+      throw new Error(`${name} must be between 1 and 65535, got ${value}.`);
+    }
+  }
+  if (port === resolvePort) {
+    // Sharing a port would silently collapse the two-listener split, putting the
+    // policy-authoring surface on whatever interface the resolve port was meant
+    // to expose to remote installs.
+    throw new Error(
+      `PORT and RESOLVE_PORT must differ; both are ${port}. The admin and resolve ` +
+        "listeners are separate so they can bind different interfaces.",
+    );
   }
 
   return {
@@ -91,7 +114,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     signingKey,
     ttlSeconds,
     port,
+    // Loopback by default. A policy server that binds every interface the moment
+    // it starts is reachable before an operator has decided it should be.
     host: env.HOST ?? "127.0.0.1",
+    resolvePort,
+    resolveHost: env.RESOLVE_HOST ?? env.HOST ?? "127.0.0.1",
+    cognitoIssuer: required(env, "COGNITO_ISSUER"),
+    cognitoAudience: required(env, "COGNITO_AUDIENCE"),
+    adminGroup: env.TOLAP_ADMIN_GROUP ?? "tolap-admin",
+    auditorGroup: env.TOLAP_AUDITOR_GROUP ?? "tolap-auditor",
   };
 }
 

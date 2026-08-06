@@ -1,0 +1,483 @@
+/**
+ * The admin API: policy authoring, assignments, installs, catalog, audit.
+ *
+ * Every route requires a Cognito-authenticated principal. Reads accept `auditor`;
+ * anything that writes requires `admin`. The split exists so a compliance reviewer
+ * can inspect policy without holding the ability to change it -- see
+ * docs/policy-server.md.
+ *
+ * This listener is separate from the resolve one so an operator can bind it to a
+ * private interface. That is defense in depth; the guards below are the control.
+ */
+
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
+import Fastify from "fastify";
+import { parseSourceIdentity, type PolicyAssignment, type PolicyDefinition } from "@tolap/core";
+import { AdminAuthError, type AdminPrincipal } from "../auth/cognito.ts";
+import {
+  AuthorizationError,
+  requireAdmin,
+  type TokenVerifier,
+} from "../auth/guards.ts";
+import { issueCredential } from "../auth/install-credential.ts";
+import type { Actor, PostgresPolicyStore } from "../db/store.ts";
+import { buildSignedArtifact } from "../signing/artifact.ts";
+import {
+  SchemaValidationError,
+  validateSchema,
+} from "../validation.ts";
+import { parseManifest, ManifestError } from "../catalog/manifest.ts";
+import { importOpenApi } from "../catalog/import-openapi.ts";
+import { importSqlDdl } from "../catalog/import-sql.ts";
+
+export interface AdminDeps {
+  readonly store: PostgresPolicyStore;
+  readonly verifier: TokenVerifier;
+  readonly signingKey: string;
+  readonly ttlSeconds: number;
+}
+
+const actorOf = (principal: AdminPrincipal): Actor => ({
+  // The audit row records the Cognito subject, which is stable, rather than the
+  // email, which can change.
+  id: principal.subject,
+  kind: "admin",
+});
+
+export const adminRoutes =
+  (deps: AdminDeps): FastifyPluginAsync =>
+  async (app) => {
+    const { store } = deps;
+
+    /** Authenticate and require a role. Throws AuthorizationError otherwise. */
+    const auth = (
+      request: FastifyRequest,
+      role: "admin" | "auditor" = "admin",
+    ): Promise<AdminPrincipal> =>
+      requireAdmin(request.headers.authorization, deps.verifier, role);
+
+    // -- Session -----------------------------------------------------------
+
+    app.get("/v1/me", async (request) => {
+      // The console calls this after the OIDC redirect to learn which role it
+      // should render. Requires only `auditor`, so both roles can ask.
+      const principal = await auth(request, "auditor");
+      return {
+        subject: principal.subject,
+        email: principal.email,
+        role: principal.role,
+      };
+    });
+
+    // -- Policies ----------------------------------------------------------
+
+    app.get("/v1/policies", async (request) => {
+      await auth(request, "auditor");
+      return { policies: await store.listDefinitions() };
+    });
+
+    app.get<{ Params: { name: string } }>(
+      "/v1/policies/:name",
+      async (request, reply) => {
+        await auth(request, "auditor");
+        const policy = await store.getDefinition(request.params.name);
+        if (!policy) return reply.code(404).send({ error: "policy not found" });
+        return policy;
+      },
+    );
+
+    app.post<{ Body: unknown; Querystring: { fragment?: string } }>(
+      "/v1/policies/validate",
+      async (request) => {
+        // Read-only: validating a candidate policy changes nothing, so an auditor
+        // may do it. Used for live feedback in the editor.
+        await auth(request, "auditor");
+        return validateSchema(request.body, "policy-definition", {
+          fragment: request.query.fragment === "true",
+        });
+      },
+    );
+
+    app.put<{ Params: { name: string }; Body: PolicyDefinition }>(
+      "/v1/policies/:name",
+      async (request, reply) => {
+        const principal = await auth(request);
+        const body = request.body;
+
+        if (body?.name !== request.params.name) {
+          // A mismatch means the caller is confused about which policy they are
+          // editing; guessing which one they meant is how the wrong policy gets
+          // overwritten.
+          return reply
+            .code(400)
+            .send({ error: "policy name in body must match the URL" });
+        }
+
+        // Full document validation on the write path: a partial policy must not
+        // reach the datastore, where it would resolve and be enforced.
+        const result = validateSchema(body, "policy-definition");
+        if (!result.valid) {
+          return reply.code(422).send({ error: "validation failed", errors: result.errors });
+        }
+
+        await store.putDefinitionAs(body, actorOf(principal));
+        return reply.code(200).send(body);
+      },
+    );
+
+    app.delete<{ Params: { name: string } }>(
+      "/v1/policies/:name",
+      async (request, reply) => {
+        const principal = await auth(request);
+        const deleted = await store.deleteDefinitionAs(
+          request.params.name,
+          actorOf(principal),
+        );
+        if (!deleted) return reply.code(404).send({ error: "policy not found" });
+        return reply.code(204).send();
+      },
+    );
+
+    // -- Versions ----------------------------------------------------------
+
+    app.get<{ Params: { name: string } }>(
+      "/v1/policies/:name/versions",
+      async (request) => {
+        await auth(request, "auditor");
+        return { versions: await store.listVersions(request.params.name) };
+      },
+    );
+
+    app.post<{
+      Params: { name: string };
+      Body: { policy: PolicyDefinition; note?: string };
+    }>("/v1/policies/:name/versions", async (request, reply) => {
+      const principal = await auth(request);
+      const { policy, note } = request.body ?? {};
+
+      if (policy?.name !== request.params.name) {
+        return reply
+          .code(400)
+          .send({ error: "policy name in body must match the URL" });
+      }
+
+      // Drafts are validated as documents too. A draft is a candidate for
+      // publishing, and validating only at publish time means the error arrives
+      // when someone is trying to ship.
+      const result = validateSchema(policy, "policy-definition");
+      if (!result.valid) {
+        return reply.code(422).send({ error: "validation failed", errors: result.errors });
+      }
+
+      const versionNo = await store.saveDraft(policy, actorOf(principal), note);
+      return reply.code(201).send({ name: policy.name, versionNo });
+    });
+
+    app.post<{ Params: { name: string; versionNo: string } }>(
+      "/v1/policies/:name/versions/:versionNo/publish",
+      async (request, reply) => {
+        const principal = await auth(request);
+        const versionNo = Number(request.params.versionNo);
+        if (!Number.isInteger(versionNo)) {
+          return reply.code(400).send({ error: "versionNo must be an integer" });
+        }
+        try {
+          const policy = await store.publish(
+            request.params.name,
+            versionNo,
+            actorOf(principal),
+          );
+          return { published: policy };
+        } catch (error) {
+          return reply.code(404).send({ error: (error as Error).message });
+        }
+      },
+    );
+
+    app.post<{ Params: { name: string; versionNo: string } }>(
+      "/v1/policies/:name/versions/:versionNo/rollback",
+      async (request, reply) => {
+        const principal = await auth(request);
+        const versionNo = Number(request.params.versionNo);
+        if (!Number.isInteger(versionNo)) {
+          return reply.code(400).send({ error: "versionNo must be an integer" });
+        }
+        try {
+          const newVersionNo = await store.rollback(
+            request.params.name,
+            versionNo,
+            actorOf(principal),
+          );
+          return { newVersionNo };
+        } catch (error) {
+          return reply.code(404).send({ error: (error as Error).message });
+        }
+      },
+    );
+
+    // -- Assignments -------------------------------------------------------
+
+    app.get<{ Querystring: { assignee?: string } }>(
+      "/v1/assignments",
+      async (request) => {
+        await auth(request, "auditor");
+        return {
+          assignments: await store.listAssignments(request.query.assignee),
+        };
+      },
+    );
+
+    app.post<{ Body: PolicyAssignment }>("/v1/assignments", async (request, reply) => {
+      const principal = await auth(request);
+
+      const result = validateSchema(request.body, "policy-assignment");
+      if (!result.valid) {
+        return reply.code(422).send({ error: "validation failed", errors: result.errors });
+      }
+
+      // An assignment naming a policy that does not exist would sit in the table
+      // contributing nothing while appearing, in the UI, to grant access.
+      if (!(await store.getDefinition(request.body.policyName))) {
+        return reply
+          .code(422)
+          .send({ error: `policy '${request.body.policyName}' does not exist` });
+      }
+
+      await store.putAssignmentAs(request.body, actorOf(principal));
+      return reply.code(201).send(request.body);
+    });
+
+    app.delete<{ Querystring: { policyName?: string; assignee?: string } }>(
+      "/v1/assignments",
+      async (request, reply) => {
+        const principal = await auth(request);
+        const { policyName, assignee } = request.query;
+        if (!policyName || !assignee) {
+          return reply
+            .code(400)
+            .send({ error: "policyName and assignee are required" });
+        }
+        const revoked = await store.revokeAssignment(
+          policyName,
+          assignee,
+          actorOf(principal),
+        );
+        if (!revoked) return reply.code(404).send({ error: "no live assignment" });
+        return reply.code(204).send();
+      },
+    );
+
+    // -- Resolve preview ---------------------------------------------------
+
+    app.get<{
+      Querystring: { userId?: string; tenantId?: string; sourceConnectionId?: string };
+    }>("/v1/resolve/preview", async (request, reply) => {
+      await auth(request, "auditor");
+      const { userId, tenantId, sourceConnectionId } = request.query;
+
+      if (!userId || !tenantId || !sourceConnectionId) {
+        return reply.code(400).send({
+          error: "userId, tenantId and sourceConnectionId are required",
+        });
+      }
+      if (parseSourceIdentity(sourceConnectionId) == null) {
+        return reply
+          .code(400)
+          .send({ error: "sourceConnectionId must be 'category:namespace:name'" });
+      }
+
+      const policy = await store.resolvePolicy(userId, tenantId, sourceConnectionId);
+
+      // Returned UNSIGNED, deliberately. A preview is for a human to read in the
+      // console; signing it would produce a usable credential on a route an
+      // auditor can reach, turning a read-only inspection tool into a way to mint
+      // access.
+      return {
+        effectivePolicy: policy,
+        contributingPolicies: policy.sourceProfiles,
+      };
+    });
+
+    // -- Installs ----------------------------------------------------------
+
+    app.get("/v1/installs", async (request) => {
+      await auth(request, "auditor");
+      return { installs: await store.listInstalls() };
+    });
+
+    app.post<{ Body: { id?: string; name?: string } }>(
+      "/v1/installs",
+      async (request, reply) => {
+        const principal = await auth(request);
+        const { id, name } = request.body ?? {};
+
+        if (!id || !name) {
+          return reply.code(400).send({ error: "id and name are required" });
+        }
+        // The id is embedded in the credential and used as a lookup key, so keep
+        // it to a conservative character set rather than discovering later what a
+        // colon or a slash does to the parsing.
+        if (!/^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/.test(id)) {
+          return reply.code(400).send({
+            error: "id must be lowercase alphanumeric with hyphens, 2-64 chars",
+          });
+        }
+        if (await store.getInstall(id)) {
+          return reply.code(409).send({ error: "install id already registered" });
+        }
+
+        const issued = issueCredential(id);
+        await store.createInstall(id, name, issued.hash, actorOf(principal));
+
+        // The secret is returned exactly once and never recoverable: only its hash
+        // is stored. Said plainly in the response so a caller that discards it
+        // knows to re-register rather than going looking for it.
+        return reply.code(201).send({
+          id,
+          name,
+          credential: issued.secret,
+          notice:
+            "Store this credential now. It is not recoverable -- only its hash is kept.",
+        });
+      },
+    );
+
+    app.delete<{ Params: { id: string } }>(
+      "/v1/installs/:id",
+      async (request, reply) => {
+        const principal = await auth(request);
+        const revoked = await store.revokeInstall(
+          request.params.id,
+          actorOf(principal),
+        );
+        if (!revoked) {
+          return reply.code(404).send({ error: "no live install with that id" });
+        }
+        return reply.code(204).send();
+      },
+    );
+
+    // -- Source catalog ----------------------------------------------------
+
+    app.get("/v1/catalog", async (request) => {
+      await auth(request, "auditor");
+      return { sources: await store.listSources() };
+    });
+
+    app.get<{ Params: { id: string } }>("/v1/catalog/:id", async (request, reply) => {
+      await auth(request, "auditor");
+      const source = await store.getSource(request.params.id);
+      if (!source) return reply.code(404).send({ error: "source not found" });
+      return source;
+    });
+
+    app.put<{ Body: unknown }>("/v1/catalog", async (request, reply) => {
+      const principal = await auth(request);
+      try {
+        const manifest = parseManifest(request.body);
+        await store.putSourceAs(manifest, "manifest", actorOf(principal));
+        return reply.code(200).send(manifest);
+      } catch (error) {
+        if (error instanceof ManifestError) {
+          return reply.code(422).send({ error: error.message });
+        }
+        throw error;
+      }
+    });
+
+    app.post<{
+      Body: { sourceConnectionId?: string; spec?: unknown };
+    }>("/v1/catalog/import/openapi", async (request, reply) => {
+      const principal = await auth(request);
+      const { sourceConnectionId, spec } = request.body ?? {};
+      if (!sourceConnectionId || spec === undefined) {
+        return reply
+          .code(400)
+          .send({ error: "sourceConnectionId and spec are required" });
+      }
+      try {
+        const manifest = importOpenApi(sourceConnectionId, spec);
+        await store.putSourceAs(manifest, "openapi", actorOf(principal));
+        return reply.code(200).send(manifest);
+      } catch (error) {
+        if (error instanceof ManifestError) {
+          return reply.code(422).send({ error: error.message });
+        }
+        throw error;
+      }
+    });
+
+    app.post<{
+      Body: { sourceConnectionId?: string; ddl?: string };
+    }>("/v1/catalog/import/sql", async (request, reply) => {
+      const principal = await auth(request);
+      const { sourceConnectionId, ddl } = request.body ?? {};
+      if (!sourceConnectionId || typeof ddl !== "string") {
+        return reply
+          .code(400)
+          .send({ error: "sourceConnectionId and ddl are required" });
+      }
+      try {
+        const manifest = importSqlDdl(sourceConnectionId, ddl);
+        await store.putSourceAs(manifest, "sql", actorOf(principal));
+        return reply.code(200).send(manifest);
+      } catch (error) {
+        if (error instanceof ManifestError) {
+          return reply.code(422).send({ error: error.message });
+        }
+        throw error;
+      }
+    });
+
+    app.delete<{ Params: { id: string } }>(
+      "/v1/catalog/:id",
+      async (request, reply) => {
+        const principal = await auth(request);
+        const deleted = await store.deleteSourceAs(
+          request.params.id,
+          actorOf(principal),
+        );
+        if (!deleted) return reply.code(404).send({ error: "source not found" });
+        return reply.code(204).send();
+      },
+    );
+
+    // -- Audit -------------------------------------------------------------
+
+    app.get<{ Querystring: { limit?: string } }>("/v1/audit", async (request) => {
+      // Readable by an auditor: reading the audit log is the auditor's job.
+      await auth(request, "auditor");
+      const limit = Number(request.query.limit ?? 200);
+      return {
+        entries: await store.listAudit(Number.isInteger(limit) ? limit : 200),
+      };
+    });
+
+    app.get("/health", async () => ({ status: "ok" }));
+  };
+
+export function buildAdminApp(deps: AdminDeps): FastifyInstance {
+  const app = Fastify({ logger: false });
+
+  app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof AuthorizationError) {
+      // 401 versus 403 is preserved here, unlike on the resolve port: the console
+      // needs to distinguish "log in again" from "your role cannot do this", and
+      // the caller is already authenticated for the 403 case.
+      return reply.code(error.status).send({ error: error.message });
+    }
+    if (error instanceof AdminAuthError) {
+      return reply.code(401).send({ error: error.message });
+    }
+    if (error instanceof SchemaValidationError) {
+      return reply
+        .code(422)
+        .send({ error: "validation failed", errors: error.errors });
+    }
+    app.log.error(error);
+    return reply.code(500).send({ error: "internal error" });
+  });
+
+  void app.register(adminRoutes(deps));
+  return app;
+}

@@ -33,6 +33,7 @@ import type {
 } from "@tolap/store";
 import type { Pool } from "pg";
 import type { InstallRecord } from "../auth/guards.ts";
+import type { SourceManifest } from "../catalog/manifest.ts";
 
 /** Who performed a write, for the audit log. */
 export interface Actor {
@@ -607,6 +608,74 @@ export class PostgresPolicyStore implements PolicyStore {
       () => groups,
       () => roles,
     );
+  }
+
+  // -- Source catalog ------------------------------------------------------
+  //
+  // Authoring convenience only. Nothing here is read at resolve time, so a stale
+  // or wrong catalog cannot change what a policy permits -- it can only mislead
+  // the person authoring one.
+
+  async putSourceAs(
+    manifest: SourceManifest,
+    importedFrom: string,
+    actor: Actor,
+  ): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO tolap_sources
+         (source_connection_id, category, display_name, manifest_json, imported_from)
+       VALUES ($1, $2, $3, $4::jsonb, $5)
+       ON CONFLICT (source_connection_id) DO UPDATE SET
+         category = EXCLUDED.category,
+         display_name = EXCLUDED.display_name,
+         manifest_json = EXCLUDED.manifest_json,
+         imported_from = EXCLUDED.imported_from,
+         updated_at = now()`,
+      [
+        manifest.sourceConnectionId,
+        manifest.category,
+        manifest.displayName ?? null,
+        JSON.stringify(manifest),
+        importedFrom,
+      ],
+    );
+    await this.record(
+      actor,
+      "catalog.put",
+      { kind: "source", id: manifest.sourceConnectionId },
+      {
+        importedFrom,
+        objects: manifest.objects.length,
+        endpoints: manifest.endpoints.length,
+      },
+    );
+  }
+
+  async getSource(id: string): Promise<SourceManifest | undefined> {
+    const { rows } = await this.pool.query(
+      "SELECT manifest_json FROM tolap_sources WHERE source_connection_id = $1",
+      [id],
+    );
+    return rows.length ? (rows[0].manifest_json as SourceManifest) : undefined;
+  }
+
+  async listSources(): Promise<SourceManifest[]> {
+    const { rows } = await this.pool.query(
+      "SELECT manifest_json FROM tolap_sources ORDER BY source_connection_id",
+    );
+    return rows.map((r) => r.manifest_json as SourceManifest);
+  }
+
+  async deleteSourceAs(id: string, actor: Actor): Promise<boolean> {
+    const { rowCount } = await this.pool.query(
+      "DELETE FROM tolap_sources WHERE source_connection_id = $1",
+      [id],
+    );
+    const deleted = (rowCount ?? 0) > 0;
+    if (deleted) {
+      await this.record(actor, "catalog.delete", { kind: "source", id });
+    }
+    return deleted;
   }
 
   // -- Installs ------------------------------------------------------------
