@@ -240,6 +240,17 @@ var merged = PolicyMerger.Merge(new[] { policyA, policyB });
 
 The Quick Start examples above use the built-in `InMemoryPolicyStore` -- great for development, testing, and single-process deployments. In production, you will want a centralized store backed by a database so that all services share the same policies.
 
+> **There is a working implementation of this.** [`server/`](server/) is a policy
+> server with a PostgreSQL store, a `GET /v1/resolve` endpoint that returns a signed
+> policy every one of the three SDKs can verify, schema validation, immutable policy
+> versions with publish and rollback, an audit trail, and Cognito-authenticated
+> admin access. [`console/`](console/) is its UI. Start with
+> [`docs/policy-server.md`](docs/policy-server.md) if you would rather run one than
+> build one.
+>
+> The rest of this section is for integrators embedding TOLAP directly, or building
+> a store against a different backend.
+
 The SDK defines a store interface (`IPolicyStore` in .NET, `PolicyStore` protocol in Python, `PolicyStore` interface in TypeScript). Implement it against any backend. Here is a PostgreSQL example for each language:
 
 ### Schema
@@ -426,6 +437,7 @@ full list of what TOLAP does not guarantee.
 ## Documentation
 
 - [Architecture Guide](docs/architecture.md) -- Components, data flow, sequence diagrams
+- [Policy Server](docs/policy-server.md) -- Running the central policy server in [`server/`](server/) and its console: Cognito setup, the two roles, install registration, and the signed artifact `/v1/resolve` returns
 - [Canonical Enforcement Spec](docs/canonical-enforcement-spec.md) -- Normative cross-language behavior: canonical signing, enforcement pipeline order, fail-closed rules
 - [Connector Spec](docs/connector-spec.md) -- Normative per-category behavior: which policy fields apply to `db` / `api` / `kb` / `storage`, what an object and a record mean for each, and which fields are advisory rather than enforced
 - [Local Testing](docs/local-testing.md) -- Running the suites against live Postgres/MySQL and the test API server
@@ -490,6 +502,8 @@ tolap/
     dotnet/        Tolap.Core, Tolap.Store, Tolap.Mcp
     python/        tolap-core, tolap-store, tolap-mcp
     typescript/    @tolap/core, @tolap/store, @tolap/mcp
+  server/          Policy server: central store, resolve API, Cognito admin auth
+  console/         Admin UI for the policy server
   examples/        14 agent-framework integrations, CI-tested (see below)
     python/        MCP SDK, Strands, LangChain, OpenAI Agents,
                    Pydantic AI, Semantic Kernel, Bedrock Agents

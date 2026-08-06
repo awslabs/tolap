@@ -7,6 +7,61 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added — policy server and console
+
+`docs/architecture.md` has described a "Centralized Policy Store" and a "Policy
+Service API" since the first release, in prose, with an endpoint table and a
+caching design. None of it was implemented, so every adopter built persistence, an
+admin surface, and policy distribution themselves — three times over, once per
+language. [`server/`](server/) and [`console/`](console/) are that component.
+
+- **`GET /v1/resolve`** returns a signed policy that **all three SDKs verify**.
+  This needed a finding, not just plumbing: the SDKs do not verify the same
+  artifact. Python and .NET check the `SecurityContext` envelope and read
+  `issuedAt`; the TypeScript wrapper verifies a *bare* `EffectivePolicy` through
+  `validatePolicy` and reads `resolvedAt`. Those are HMACs over two different byte
+  strings, so a server signing only one works with one SDK and silently fails the
+  others. The artifact carries both signatures — sound because the envelope
+  projection strips `integrity` before hashing (canonical spec §2 rule 1) — plus
+  both spellings of the same instant. `signContext` already produces both.
+- **PostgreSQL store** implementing the SDK's `PolicyStore` interface, so the SDK's
+  own `resolve()` does the merging. Policy bodies are opaque `jsonb`: §3 makes `[]`
+  and `null` opposites for an allow-list, and a normalized table cannot represent
+  "empty list" distinctly from "no rows". Regression tests assert the *enforcement
+  decision* after a round trip, not just the JSON.
+- **Immutable versions** with publish and rollback. Rollback appends a new version
+  rather than mutating history, so "we rolled back" is its own audit event.
+- **Central schema validation** in two modes — full document, and a fragment mode
+  that relaxes only the top-level `required` so a half-authored draft still gets
+  types, enums, bounds and nested `required`. Checked against the repository's own
+  fixtures, including the two `invalid-` ones it must reject. Validation is central
+  rather than per-SDK because the core packages stay dependency-free and three
+  independent draft-2020-12 interpretations is exactly what §14 argues against.
+- **Source catalog** (uploaded manifest, or imported from OpenAPI / SQL DDL) so the
+  console offers real object and field names. This is the highest-value correctness
+  feature here: `hiddenFields: ["ssn"]` protects nothing when the column is
+  `ssn_number`, and *nothing in TOLAP can detect that* — the policy validates,
+  signs, resolves and enforces perfectly while guarding a column that does not
+  exist. The catalog is never an enforcement input.
+- **Resolve preview**, returned unsigned, for the one thing TOLAP does not
+  guarantee: that a policy says what its author meant.
+- **Cognito admin auth** with two roles (`admin` writes, `auditor` reads).
+  RS256 verified from the pool's JWKS with `node:crypto`, so a security-critical
+  path takes no new dependency. Both auth paths follow §11: a credential presented
+  and rejected fails, and is never downgraded to anonymous.
+- **Per-install credentials** so the audit log names which install pulled which
+  policy, and one install can be revoked without touching the others. Revocation
+  denies rather than merely being recorded, per §12 — which mattered, because
+  mutation testing showed the `revoked_at` filter is the *only* thing implementing
+  §12: `PolicyAssignment` has no such field and the SDK resolver has never heard of
+  revocation, so there is no backstop.
+
+Two ports, so the policy-authoring surface can bind a private interface while
+remote installs reach only `/v1/resolve` — §13 says policy authors are trusted
+administrators, and a deployment that widens that has left the threat model.
+
+Nothing in `sdk/`, `schema/` or `fixtures/` changed.
+
 ### Security
 
 A security review of all three SDKs found that several policy controls were not

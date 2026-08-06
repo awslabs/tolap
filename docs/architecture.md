@@ -337,6 +337,24 @@ sequenceDiagram
 
 The SDK ships with an in-memory policy store for local development and single-process deployments. In production, policies are typically managed in a centralized store -- a database, a dedicated policy service, or a distributed cache -- shared across all services that enforce TOLAP.
 
+> **This section described a design; it is now implemented.** [`server/`](../server/)
+> is a policy server built to this shape -- PostgreSQL store, the `/resolve`
+> endpoint from the API table below, schema validation, versioning with rollback,
+> an audit trail, and a UI in [`console/`](../console/). See
+> [`policy-server.md`](policy-server.md) for deployment, and read this section for
+> the reasoning behind it or to build your own.
+>
+> One correction the implementation forced: the "Policy Service API" section below
+> says the service "signs the effective policy before returning it." That is right
+> as far as it goes, but the three SDKs do not verify the same artifact -- Python and
+> .NET check the `SecurityContext` envelope and read `issuedAt`, while the
+> TypeScript wrapper verifies a **bare** `EffectivePolicy` via `validatePolicy` and
+> reads `resolvedAt`. Those are HMACs over two different byte strings. A server that
+> signs only one of them works with one SDK and silently fails the others. The
+> implementation returns both signatures in one artifact, which is sound because the
+> envelope projection strips `integrity` before hashing (canonical spec §2 rule 1),
+> plus both spellings of the same instant.
+
 ### Why Centralize
 
 In any multi-service environment, each Secure Tool Factory needs access to the same policy definitions and assignments. Without a centralized store:
