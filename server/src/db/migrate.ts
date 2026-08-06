@@ -38,13 +38,18 @@ export async function applySchema(pool: Pool): Promise<void> {
 
 // Run directly: `npm run migrate`.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  const { Pool } = await import("pg");
-  const url = process.env.DATABASE_URL;
-  if (!url) {
-    console.error("DATABASE_URL is required");
-    process.exit(1);
-  }
-  const pool = new Pool({ connectionString: url });
+  // Goes through the same pool builder as the server, so the migration reads its
+  // password from Secrets Manager when the deployment does. Duplicating a connection
+  // string here would be a second place for the credential to go stale, and the one
+  // most likely to be forgotten.
+  //
+  // Only the *database* configuration is loaded, not the whole thing: a migration
+  // needs no signing key and no Cognito pool, and demanding them would make
+  // `npm run migrate` fail on a machine that legitimately has neither.
+  const { loadDatabaseConfig } = await import("../config.ts");
+  const { buildPool } = await import("./pool.ts");
+
+  const { pool } = await buildPool(loadDatabaseConfig());
   try {
     await applySchema(pool);
     console.log("schema applied");

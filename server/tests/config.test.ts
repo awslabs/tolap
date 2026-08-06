@@ -33,7 +33,7 @@ const without = (key: string): NodeJS.ProcessEnv => {
 describe("loadConfig", () => {
   it("accepts a minimal valid environment", () => {
     const config = loadConfig({ ...base });
-    expect(config.databaseUrl).toBe("postgres:///tolap");
+    expect(config.database).toEqual({ kind: "url", url: "postgres:///tolap" });
     // A bare TOLAP_SIGNING_KEY still works and becomes the key `default`, so an
     // existing deployment upgrades without touching its configuration.
     expect(config.keyring.active).toEqual({ kid: "default", secret: KEY });
@@ -159,6 +159,35 @@ describe("loadConfig", () => {
 
   it("defaults the resolve host to HOST when only HOST is set", () => {
     expect(loadConfig({ ...base, HOST: "10.0.0.5" }).resolveHost).toBe("10.0.0.5");
+  });
+
+  it("prefers a Secrets Manager secret over a connection string", () => {
+    // A deployment that went to the trouble of providing a secret must never fall
+    // back silently to a password baked into an environment variable.
+    const config = loadConfig({
+      ...base,
+      DATABASE_SECRET_ID: "arn:aws:secretsmanager:us-east-1:1:secret:tolap/db",
+      DATABASE_HOST: "cluster.example.rds.amazonaws.com",
+      DATABASE_NAME: "tolap",
+    });
+    expect(config.database.kind).toBe("secret");
+    if (config.database.kind !== "secret") throw new Error("unreachable");
+    expect(config.database.secretId).toContain("tolap/db");
+    // verify-full by default: `pg` currently treats `require` as an alias for it but
+    // warns that a future major will make `require` encrypt without verifying.
+    expect(config.database.sslMode).toBe("verify-full");
+    expect(config.database.cacheTtlMs).toBe(300_000);
+  });
+
+  it("bounds the database secret cache", () => {
+    // The cache is also the delay before a rotated credential is picked up.
+    expect(() =>
+      loadConfig({
+        ...base,
+        DATABASE_SECRET_ID: "tolap/db",
+        DATABASE_SECRET_CACHE_SECONDS: "7200",
+      }),
+    ).toThrow(/DATABASE_SECRET_CACHE_SECONDS/);
   });
 
   it("accepts a multi-key rotation spec, first key active", () => {

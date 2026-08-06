@@ -8,7 +8,6 @@
  * deployment is still safe. See docs/policy-server.md.
  */
 
-import { Pool } from "pg";
 import { CognitoVerifier } from "./auth/cognito.ts";
 import {
   CognitoIdentitySource,
@@ -17,6 +16,7 @@ import {
   type IdentitySource,
 } from "./auth/identity-source.ts";
 import { loadConfig, type ServerConfig } from "./config.ts";
+import { buildPool } from "./db/pool.ts";
 import { PostgresPolicyStore } from "./db/store.ts";
 import { buildAdminApp } from "./routes/admin.ts";
 import { buildResolveApp } from "./routes/resolve.ts";
@@ -57,7 +57,7 @@ export async function start(
   config: ServerConfig = loadConfig(),
   identitySource: IdentitySource = buildIdentitySource(config),
 ): Promise<StartedServer> {
-  const pool = new Pool({ connectionString: config.databaseUrl });
+  const { pool } = await buildPool(config.database);
   const store = new PostgresPolicyStore(pool, identitySource);
 
   const verifier = new CognitoVerifier({
@@ -110,6 +110,11 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
     // Logged because both are silent-failure surfaces: a `none` identity source
     // makes group-scoped assignments resolve to nothing, and knowing which key is
     // active is the first question during a rotation.
+    // Logged because a `url` source means the password is a start-time snapshot: a
+    // rotation will not be picked up until the task restarts.
+    console.log(
+      `database credentials ${config.database.kind === "secret" ? "Secrets Manager (rotation-aware)" : "connection string (static)"}`,
+    );
     console.log(
       `identity source      ${config.identity.kind}` +
         (config.identity.kind === "none"

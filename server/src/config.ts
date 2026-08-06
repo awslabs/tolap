@@ -28,7 +28,16 @@ const DEFAULT_TTL_SECONDS = 900;
 const MAX_TTL_SECONDS = 3600;
 
 export interface ServerConfig {
-  readonly databaseUrl: string;
+  /**
+   * How to reach the database.
+   *
+   * Two forms, and the distinction is about rotation rather than convenience. A
+   * `url` carries the password inline, which is fine locally and wrong in a
+   * deployment: it is a snapshot that goes stale the moment the secret rotates. A
+   * `secret` names a Secrets Manager secret the server reads per connection, so a
+   * rotation is picked up without a restart.
+   */
+  readonly database: DatabaseConfig;
   /** Every key that may still appear on an unexpired artifact. */
   readonly keyring: Keyring;
   readonly ttlSeconds: number;
@@ -47,6 +56,27 @@ export interface ServerConfig {
 }
 
 /**
+ * Database connection configuration.
+ *
+ * `secret` is the deployed form: the password is fetched from Secrets Manager when a
+ * connection is opened, so a rotated credential is picked up by the next connection.
+ * `url` is for local development, where the password is in the connection string.
+ */
+export type DatabaseConfig =
+  | { readonly kind: "url"; readonly url: string }
+  | {
+      readonly kind: "secret";
+      /** Secret id or ARN holding {username, password}. */
+      readonly secretId: string;
+      readonly host: string;
+      readonly port: number;
+      readonly database: string;
+      readonly sslMode: string;
+      readonly sslRootCert?: string;
+      readonly cacheTtlMs: number;
+    };
+
+/**
  * How the server learns a user's groups and roles.
  *
  * `none` is spelled out rather than being the silent default, because a deployment
@@ -57,6 +87,46 @@ export type IdentityConfig =
   | { readonly kind: "cognito"; readonly userPoolId: string; readonly rolePrefix?: string; readonly cacheTtlSeconds: number }
   | { readonly kind: "static"; readonly spec: string }
   | { readonly kind: "none" };
+
+/**
+ * Read the database configuration.
+ *
+ * `DATABASE_SECRET_ID` wins when set, because a deployment that has gone to the
+ * trouble of providing a secret should never silently fall back to a password baked
+ * into an environment variable.
+ */
+export function loadDatabaseConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): DatabaseConfig {
+  const secretId = env.DATABASE_SECRET_ID;
+  if (secretId !== undefined && secretId.trim() !== "") {
+    const cacheTtlSeconds = integer(env, "DATABASE_SECRET_CACHE_SECONDS", 300);
+    if (cacheTtlSeconds < 0 || cacheTtlSeconds > 3600) {
+      throw new Error(
+        `DATABASE_SECRET_CACHE_SECONDS must be between 0 and 3600, got ${cacheTtlSeconds}.`,
+      );
+    }
+    return {
+      kind: "secret",
+      secretId,
+      // The host may come from the secret itself (RDS-managed secrets include it),
+      // so it is optional here and resolved at connect time.
+      host: env.DATABASE_HOST ?? "",
+      port: integer(env, "DATABASE_PORT", 5432),
+      database: env.DATABASE_NAME ?? "tolap",
+      // verify-full rather than require: current `pg` treats `require` as an alias
+      // for verify-full but warns that a future major will make it encrypt without
+      // verifying. Naming the strict mode means the upgrade cannot weaken it.
+      sslMode: env.DATABASE_SSL_MODE ?? "verify-full",
+      ...(env.DATABASE_SSL_ROOT_CERT !== undefined
+        ? { sslRootCert: env.DATABASE_SSL_ROOT_CERT }
+        : {}),
+      cacheTtlMs: cacheTtlSeconds * 1000,
+    };
+  }
+
+  return { kind: "url", url: required(env, "DATABASE_URL") };
+}
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name];
@@ -175,7 +245,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   }
 
   return {
-    databaseUrl: required(env, "DATABASE_URL"),
+    database: loadDatabaseConfig(env),
     keyring,
     ttlSeconds,
     port,

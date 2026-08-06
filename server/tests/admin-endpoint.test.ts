@@ -8,6 +8,8 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import type { AdminPrincipal } from "../src/auth/cognito.ts";
 import { AdminAuthError } from "../src/auth/cognito.ts";
@@ -96,6 +98,9 @@ describe("admin API", () => {
         { method: "GET", url: "/v1/resolve/preview", role: "auditor" },
         { method: "GET", url: "/v1/installs", role: "auditor" },
         { method: "GET", url: "/v1/catalog", role: "auditor" },
+        // Was missing from this table while being guarded in the source, so nothing
+        // proved it. A route can only be trusted here if it is listed here.
+        { method: "GET", url: "/v1/catalog/x", role: "auditor" },
         { method: "GET", url: "/v1/audit", role: "auditor" },
         { method: "PUT", url: "/v1/policies/analyst", role: "admin" },
         { method: "DELETE", url: "/v1/policies/analyst", role: "admin" },
@@ -119,6 +124,47 @@ describe("admin API", () => {
         { method: "POST", url: "/v1/catalog/import/sql", role: "admin" },
         { method: "DELETE", url: "/v1/catalog/x", role: "admin" },
       ] as const;
+
+      it("covers every route the source registers", () => {
+        // The table below is only a guarantee if it is complete. `GET
+        // /v1/catalog/:id` was guarded in the source but absent here, so nothing
+        // asserted it -- a route added without a matrix entry looks tested and is
+        // not. This reads the source and fails when the two drift apart.
+        const source = readFileSync(
+          path.resolve(__dirname, "../src/routes/admin.ts"),
+          "utf8",
+        );
+
+        const registered = new Set<string>();
+        const pattern =
+          /app\.(get|post|put|delete)(?:<[^>]*>)?\(\s*\n?\s*"([^"]+)"/g;
+        let match: RegExpExecArray | null;
+        while ((match = pattern.exec(source)) !== null) {
+          const [, verb, routePath] = match as unknown as [string, string, string];
+          // /health is deliberately unauthenticated: an ALB health check cannot
+          // carry a bearer token.
+          if (routePath === "/health") continue;
+          registered.add(`${verb.toUpperCase()} ${routePath}`);
+        }
+
+        // Normalize the concrete ids the matrix uses back to the source's params.
+        const covered = new Set(
+          routes.map(({ method, url }) =>
+            `${method} ${url
+              .split("?")[0]!
+              .replace(/\/analyst\b/, "/:name")
+              .replace(/\/versions\/1\//, "/versions/:versionNo/")
+              .replace(/\/installs\/x$/, "/installs/:id")
+              .replace(/\/catalog\/x$/, "/catalog/:id")}`,
+          ),
+        );
+
+        const uncovered = [...registered].filter((r) => !covered.has(r)).sort();
+        expect(
+          uncovered,
+          `these routes have no authorization test: ${uncovered.join(", ")}`,
+        ).toEqual([]);
+      });
 
       it.each(routes)(
         "$method $url rejects an unauthenticated caller",
