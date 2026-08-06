@@ -149,6 +149,71 @@ jobs:
           done
           exit $fail
 
+      # -- Policy server --
+      #
+      # Runs after the SDK suites because it depends on their build output, and
+      # after Python/.NET are set up because its cross-SDK test shells out to both.
+      - name: Policy server install
+        working-directory: server
+        run: npm ci
+
+      # The server resolves @tolap/core AND @tolap/store through their dist/
+      # directories, so both must be built first. Verified by deleting them and
+      # watching tsc report TS2307 for both packages — the same fresh-clone
+      # ordering problem documented for store and mcp above, one layer further out.
+      # `core` is already built by the step above; `store` is not, because the SDK
+      # typecheck only ever type-checks it.
+      - name: Build @tolap/store (the server resolves it from dist)
+        working-directory: sdk/typescript/packages/store
+        run: npx tsc -p tsconfig.json
+
+      - name: Policy server typecheck
+        working-directory: server
+        run: npx tsc
+
+      # TOLAP_TEST_DB_DSN is set so the store, revocation and endpoint suites
+      # actually run. Without it they skip — which is correct for a laptop with no
+      # database, and useless in CI. The Postgres service container above is
+      # already running, so this is the one place those spec-compliance suites
+      # (sections 3 and 12) are guaranteed to execute.
+      - name: Policy server test
+        working-directory: server
+        env:
+          TOLAP_TEST_DB_DSN: ${{ env.TOLAP_TEST_DB_DSN }}
+        run: npx vitest run
+
+      # Guards against the suites silently skipping. Every DB-backed suite carries
+      # a guard test outside its own skip, but nothing asserts that CI supplied the
+      # DSN at all — and a run where all of them skipped would report success while
+      # testing none of the persistence guarantees. That is the exact defect class
+      # recorded under "Test-reporting defects" in the CHANGELOG.
+      - name: Policy server DB suites actually ran
+        working-directory: server
+        env:
+          TOLAP_TEST_DB_DSN: ${{ env.TOLAP_TEST_DB_DSN }}
+        run: |
+          if [ -z "$TOLAP_TEST_DB_DSN" ]; then
+            echo "TOLAP_TEST_DB_DSN is empty: the store, revocation and endpoint suites skipped"
+            exit 1
+          fi
+          npx vitest run --reporter=json --outputFile=/tmp/server-tests.json >/dev/null
+          python3 - <<'PY'
+          import json, sys
+          report = json.load(open("/tmp/server-tests.json"))
+          skipped = [
+              t["fullName"]
+              for suite in report["testResults"]
+              for t in suite["assertionResults"]
+              if t["status"] in ("pending", "skipped")
+          ]
+          required = ("null vs empty", "revocation", "GET /v1/resolve", "admin API")
+          missed = [s for s in skipped if any(r in s for r in required)]
+          if missed:
+              print("\n".join(missed))
+              sys.exit(f"{len(missed)} spec-compliance tests skipped in CI")
+          print(f"all spec-compliance suites ran ({len(skipped)} unrelated skips)")
+          PY
+
       # The cross-SDK signing conformance lives inside the suites above (each SDK's
       # signing-regression tests assert the shared known-answer fixture byte-for-byte,
       # so a divergence fails there). This step guards the fixtures themselves: a
