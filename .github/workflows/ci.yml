@@ -214,6 +214,25 @@ jobs:
           print(f"all spec-compliance suites ran ({len(skipped)} unrelated skips)")
           PY
 
+      # -- Console --
+      #
+      # Independent of the SDKs: the console talks to the server over HTTP and
+      # imports no @tolap package, so it needs no build ordering.
+      - name: Console install
+        working-directory: console
+        run: npm ci
+      - name: Console typecheck
+        working-directory: console
+        run: npx tsc --noEmit
+      - name: Console test
+        working-directory: console
+        run: npx vitest run
+      # `tsc -b && vite build`. A console that typechecks but cannot build is not
+      # shippable, and the build is where a bad import or asset reference surfaces.
+      - name: Console build
+        working-directory: console
+        run: npm run build
+
       # The cross-SDK signing conformance lives inside the suites above (each SDK's
       # signing-regression tests assert the shared known-answer fixture byte-for-byte,
       # so a divergence fails there). This step guards the fixtures themselves: a
