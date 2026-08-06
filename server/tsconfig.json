@@ -1,0 +1,18 @@
+{
+  "extends": "../sdk/typescript/tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "outDir": "dist",
+    "rootDir": "src",
+    "resolveJsonModule": true,
+    // The server runs its own sources directly under Node's type stripping
+    // (`node --experimental-strip-types`), so imports name the `.ts` file that
+    // actually exists at runtime. The SDK packages resolve through their built
+    // `dist` and are unaffected.
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "tests", "node_modules"]
+}
