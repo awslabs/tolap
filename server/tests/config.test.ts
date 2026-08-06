@@ -34,7 +34,10 @@ describe("loadConfig", () => {
   it("accepts a minimal valid environment", () => {
     const config = loadConfig({ ...base });
     expect(config.databaseUrl).toBe("postgres:///tolap");
-    expect(config.signingKey).toBe(KEY);
+    // A bare TOLAP_SIGNING_KEY still works and becomes the key `default`, so an
+    // existing deployment upgrades without touching its configuration.
+    expect(config.keyring.active).toEqual({ kid: "default", secret: KEY });
+    expect(config.keyring.size).toBe(1);
     expect(config.ttlSeconds).toBe(DEFAULT_TTL_SECONDS);
     expect(config.port).toBe(8080);
     expect(config.resolvePort).toBe(8081);
@@ -156,6 +159,70 @@ describe("loadConfig", () => {
 
   it("defaults the resolve host to HOST when only HOST is set", () => {
     expect(loadConfig({ ...base, HOST: "10.0.0.5" }).resolveHost).toBe("10.0.0.5");
+  });
+
+  it("accepts a multi-key rotation spec, first key active", () => {
+    const config = loadConfig({
+      ...base,
+      TOLAP_SIGNING_KEY: undefined,
+      TOLAP_SIGNING_KEYS: `2026-08:${"n".repeat(40)},2026-05:${"o".repeat(40)}`,
+    });
+    expect(config.keyring.active.kid).toBe("2026-08");
+    // The old key stays verifiable during the overlap, which is what lets installs
+    // update on their own schedule rather than on a flag day.
+    expect(config.keyring.find("2026-05")?.secret).toBe("o".repeat(40));
+    expect(config.keyring.size).toBe(2);
+  });
+
+  it("lets the active key be chosen explicitly", () => {
+    const config = loadConfig({
+      ...base,
+      TOLAP_SIGNING_KEY: undefined,
+      TOLAP_SIGNING_KEYS: `2026-08:${"n".repeat(40)},2026-05:${"o".repeat(40)}`,
+      TOLAP_ACTIVE_KID: "2026-05",
+    });
+    expect(config.keyring.active.kid).toBe("2026-05");
+  });
+
+  it("defaults the identity source to cognito when a pool is configured", () => {
+    // The important default. Falling back to "no membership" would make every
+    // group-scoped assignment resolve to nothing, silently.
+    const config = loadConfig({ ...base, COGNITO_USER_POOL_ID: "us-east-1_abc" });
+    expect(config.identity).toEqual({
+      kind: "cognito",
+      userPoolId: "us-east-1_abc",
+      cacheTtlSeconds: 300,
+    });
+  });
+
+  it("falls back to no identity source only when no pool is configured", () => {
+    expect(loadConfig({ ...base }).identity).toEqual({ kind: "none" });
+  });
+
+  it("accepts an explicit static identity source", () => {
+    const config = loadConfig({
+      ...base,
+      TOLAP_IDENTITY_SOURCE: "static",
+      TOLAP_STATIC_GROUPS: "alice=analysts",
+    });
+    expect(config.identity).toEqual({ kind: "static", spec: "alice=analysts" });
+  });
+
+  it("rejects an unknown identity source", () => {
+    expect(() =>
+      loadConfig({ ...base, TOLAP_IDENTITY_SOURCE: "ldap" }),
+    ).toThrow(/TOLAP_IDENTITY_SOURCE/);
+  });
+
+  it("bounds the identity cache", () => {
+    // A long cache delays a group-membership revocation taking effect.
+    expect(() =>
+      loadConfig({
+        ...base,
+        COGNITO_USER_POOL_ID: "p",
+        TOLAP_IDENTITY_CACHE_SECONDS: "7200",
+      }),
+    ).toThrow(/TOLAP_IDENTITY_CACHE_SECONDS/);
   });
 
   it("honors custom Cognito group names", () => {

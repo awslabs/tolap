@@ -17,6 +17,7 @@ import type { FastifyInstance } from "fastify";
 import type { PolicyAssignment, PolicyDefinition } from "@tolap/core";
 import { validateContext, validatePolicy } from "@tolap/core";
 import { PostgresPolicyStore } from "../src/db/store.ts";
+import { Keyring } from "../src/signing/keyring.ts";
 import { buildResolveApp } from "../src/routes/resolve.ts";
 import { issueCredential } from "../src/auth/install-credential.ts";
 import { ADMIN, HAVE_DB, staticIdentity, testDb, type TestDb } from "./helpers/db.ts";
@@ -101,7 +102,7 @@ describe("GET /v1/resolve", () => {
       await store.createInstall("install-1", "test install", issued.hash, ADMIN);
 
       await app?.close();
-      app = buildResolveApp({ store, signingKey: KEY, ttlSeconds: 900 });
+      app = buildResolveApp({ store, keyring: new Keyring([{ kid: "test-key", secret: KEY }], "test-key"), ttlSeconds: 900 });
     });
 
     const auth = () => ({ authorization: `Bearer ${secret}` });
@@ -123,7 +124,11 @@ describe("GET /v1/resolve", () => {
     });
 
     it("honors the configured TTL", async () => {
-      const shortLived = buildResolveApp({ store, signingKey: KEY, ttlSeconds: 60 });
+      const shortLived = buildResolveApp({
+        store,
+        keyring: new Keyring([{ kid: "test-key", secret: KEY }], "test-key"),
+        ttlSeconds: 60,
+      });
       try {
         const response = await shortLived.inject({
           method: "GET",

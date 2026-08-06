@@ -10,30 +10,42 @@
 
 import { Pool } from "pg";
 import { CognitoVerifier } from "./auth/cognito.ts";
+import {
+  CognitoIdentitySource,
+  NoIdentitySource,
+  StaticIdentitySource,
+  type IdentitySource,
+} from "./auth/identity-source.ts";
 import { loadConfig, type ServerConfig } from "./config.ts";
 import { PostgresPolicyStore } from "./db/store.ts";
 import { buildAdminApp } from "./routes/admin.ts";
 import { buildResolveApp } from "./routes/resolve.ts";
 
 /**
- * Group and role membership for policy resolution.
+ * Build the identity source the configuration asks for.
  *
- * Deliberately empty by default rather than guessed. A resolver that invented
- * group membership would silently widen or narrow what every group-scoped
- * assignment grants, and getting that wrong is an access-control bug rather than a
- * configuration inconvenience. Point this at the directory that owns the answer --
- * Cognito groups, an LDAP query, an internal service -- when wiring up a
- * deployment.
+ * Group and role membership decides whether a group-scoped assignment applies, so
+ * getting it wrong is an access-control bug rather than a configuration
+ * inconvenience. The `none` case is a deliberate, named choice rather than a
+ * default nobody notices -- and the server logs which one it chose at startup, so
+ * "why did that group grant do nothing" is answerable from the log.
  */
-export interface IdentitySource {
-  getGroups(userId: string): Promise<string[]>;
-  getRoles(userId: string): Promise<string[]>;
+function buildIdentitySource(config: ServerConfig): IdentitySource {
+  switch (config.identity.kind) {
+    case "cognito":
+      return new CognitoIdentitySource({
+        userPoolId: config.identity.userPoolId,
+        ...(config.identity.rolePrefix !== undefined
+          ? { rolePrefix: config.identity.rolePrefix }
+          : {}),
+        cacheTtlSeconds: config.identity.cacheTtlSeconds,
+      });
+    case "static":
+      return StaticIdentitySource.parse(config.identity.spec);
+    case "none":
+      return new NoIdentitySource();
+  }
 }
-
-const emptyIdentitySource: IdentitySource = {
-  getGroups: async () => [],
-  getRoles: async () => [],
-};
 
 export interface StartedServer {
   readonly adminUrl: string;
@@ -43,7 +55,7 @@ export interface StartedServer {
 
 export async function start(
   config: ServerConfig = loadConfig(),
-  identitySource: IdentitySource = emptyIdentitySource,
+  identitySource: IdentitySource = buildIdentitySource(config),
 ): Promise<StartedServer> {
   const pool = new Pool({ connectionString: config.databaseUrl });
   const store = new PostgresPolicyStore(pool, identitySource);
@@ -58,12 +70,12 @@ export async function start(
   const admin = buildAdminApp({
     store,
     verifier,
-    signingKey: config.signingKey,
+    keyring: config.keyring,
     ttlSeconds: config.ttlSeconds,
   });
   const resolve = buildResolveApp({
     store,
-    signingKey: config.signingKey,
+    keyring: config.keyring,
     ttlSeconds: config.ttlSeconds,
   });
 
@@ -95,6 +107,21 @@ if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
     const server = await start(config);
     console.log(`admin API + console  ${server.adminUrl}`);
     console.log(`resolve API          ${server.resolveUrl}`);
+    // Logged because both are silent-failure surfaces: a `none` identity source
+    // makes group-scoped assignments resolve to nothing, and knowing which key is
+    // active is the first question during a rotation.
+    console.log(
+      `identity source      ${config.identity.kind}` +
+        (config.identity.kind === "none"
+          ? "  (group- and role-scoped assignments will NOT resolve)"
+          : ""),
+    );
+    console.log(
+      `signing keys         active=${config.keyring.active.kid}` +
+        (config.keyring.size > 1
+          ? `  also verifying: ${config.keyring.kids.filter((k) => k !== config.keyring.active.kid).join(", ")}`
+          : ""),
+    );
 
     for (const signal of ["SIGINT", "SIGTERM"] as const) {
       process.once(signal, () => {

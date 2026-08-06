@@ -12,6 +12,7 @@ import type { FastifyInstance } from "fastify";
 import type { AdminPrincipal } from "../src/auth/cognito.ts";
 import { AdminAuthError } from "../src/auth/cognito.ts";
 import { PostgresPolicyStore } from "../src/db/store.ts";
+import { Keyring } from "../src/signing/keyring.ts";
 import { buildAdminApp } from "../src/routes/admin.ts";
 import { HAVE_DB, staticIdentity, testDb, type TestDb } from "./helpers/db.ts";
 
@@ -70,7 +71,7 @@ describe("admin API", () => {
       await db.reset();
       store = new PostgresPolicyStore(db.pool, staticIdentity());
       await app?.close();
-      app = buildAdminApp({ store, verifier, signingKey: KEY, ttlSeconds: 900 });
+      app = buildAdminApp({ store, verifier, keyring: new Keyring([{ kid: "test-key", secret: KEY }], "test-key"), ttlSeconds: 900 });
     });
 
     const put = (policy: unknown = POLICY, headers = asAdmin) =>

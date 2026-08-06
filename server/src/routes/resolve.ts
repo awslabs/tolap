@@ -14,12 +14,15 @@ import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import Fastify from "fastify";
 import { parseSourceIdentity } from "@tolap/core";
 import { AuthorizationError, requireInstall } from "../auth/guards.ts";
+import { IdentityLookupError } from "../auth/identity-source.ts";
+import type { Keyring } from "../signing/keyring.ts";
 import type { PostgresPolicyStore } from "../db/store.ts";
 import { buildSignedArtifact } from "../signing/artifact.ts";
 
 export interface ResolveDeps {
   readonly store: PostgresPolicyStore;
-  readonly signingKey: string;
+  /** Signs with the active key and stamps its kid. */
+  readonly keyring: Keyring;
   readonly ttlSeconds: number;
 }
 
@@ -85,7 +88,7 @@ export const resolveRoutes =
 
       const artifact = buildSignedArtifact(
         policy,
-        deps.signingKey,
+        deps.keyring.active,
         deps.ttlSeconds * 1000,
       );
 
@@ -122,6 +125,16 @@ export function buildResolveApp(deps: ResolveDeps): FastifyInstance {
   const app = Fastify({ logger: false });
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof IdentityLookupError) {
+      // The server could not learn the user's group membership. Returning a policy
+      // anyway would silently drop every group-scoped grant -- a denial that looks
+      // like a working request, which is the hardest kind to debug. 503 says
+      // "ask again", and the cause is logged.
+      app.log.error(error);
+      return reply
+        .code(503)
+        .send({ error: "identity lookup unavailable; policy not resolved" });
+    }
     if (error instanceof AuthorizationError) {
       // Every resolve-side authorization failure is a flat 401 with an
       // identical body: whether an install exists, whether it was revoked, and

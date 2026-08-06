@@ -56,6 +56,30 @@ language. [`server/`](server/) and [`console/`](console/) are that component.
   §12: `PolicyAssignment` has no such field and the SDK resolver has never heard of
   revocation, so there is no backstop.
 
+- **Group and role membership from Cognito.** An assignment attached to a group only
+  resolves if the server can learn what a user belongs to. `/v1/resolve` is called by
+  an *install* on behalf of a user named in the query string, so there is no user
+  token to read `cognito:groups` from — the server asks the pool with
+  `AdminListGroupsForUser` (one read-only IAM permission), cached 5 minutes, paginated
+  because a truncated group list reads as "not a member" and denies granted access.
+  A lookup failure returns **503, not a policy**: an empty group list would look
+  exactly like "in no groups", every group-scoped grant would silently vanish, and
+  because merge is most-restrictive-wins the result would be an invisible denial.
+  `static` and `none` sources are also available; `none` must be chosen explicitly and
+  is named in the startup log, because landing on it by accident produces grants that
+  do nothing with no error anywhere.
+- **Signing-key rotation with an overlap window.** This looked like it required a
+  cross-SDK change, since no SDK has a `kid` or a key-resolution hook. It does not:
+  the security-context envelope has **no JSON Schema**, so an extra top-level key is
+  legal and every SDK ignores members it does not model. Verified against all three —
+  an artifact carrying `kid` verifies in TypeScript, Python and .NET. `kid` sits
+  outside the signed payload (§2 fixes the projection), so it cannot alter the signed
+  bytes, which is both why it is safe to add and why it is only a hint: it selects
+  which key to try, and a forged one selects a key under which the signature fails.
+  Configure `TOLAP_SIGNING_KEYS="new:…,old:…"`, distribute both, flip
+  `TOLAP_ACTIVE_KID`, drop the old key after one TTL. A single `TOLAP_SIGNING_KEY`
+  still works and becomes the key `default`, so existing deployments need no change.
+
 Two ports, so the policy-authoring surface can bind a private interface while
 remote installs reach only `/v1/resolve` — §13 says policy authors are trusted
 administrators, and a deployment that widens that has left the threat model.

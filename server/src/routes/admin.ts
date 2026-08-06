@@ -14,6 +14,7 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastif
 import Fastify from "fastify";
 import { parseSourceIdentity, type PolicyAssignment, type PolicyDefinition } from "@tolap/core";
 import { AdminAuthError, type AdminPrincipal } from "../auth/cognito.ts";
+import { IdentityLookupError } from "../auth/identity-source.ts";
 import {
   AuthorizationError,
   requireAdmin,
@@ -21,7 +22,7 @@ import {
 } from "../auth/guards.ts";
 import { issueCredential } from "../auth/install-credential.ts";
 import type { Actor, PostgresPolicyStore } from "../db/store.ts";
-import { buildSignedArtifact } from "../signing/artifact.ts";
+import type { Keyring } from "../signing/keyring.ts";
 import {
   SchemaValidationError,
   validateSchema,
@@ -33,7 +34,7 @@ import { importSqlDdl } from "../catalog/import-sql.ts";
 export interface AdminDeps {
   readonly store: PostgresPolicyStore;
   readonly verifier: TokenVerifier;
-  readonly signingKey: string;
+  readonly keyring: Keyring;
   readonly ttlSeconds: number;
 }
 
@@ -468,6 +469,15 @@ export function buildAdminApp(deps: AdminDeps): FastifyInstance {
     }
     if (error instanceof AdminAuthError) {
       return reply.code(401).send({ error: error.message });
+    }
+    if (error instanceof IdentityLookupError) {
+      // Same reasoning as the resolve port: a preview computed without knowing the
+      // user's groups would show narrower access than they really have, and an
+      // administrator would take that at face value.
+      app.log.error(error);
+      return reply
+        .code(503)
+        .send({ error: "identity lookup unavailable; policy not resolved" });
     }
     if (error instanceof SchemaValidationError) {
       return reply

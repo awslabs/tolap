@@ -50,6 +50,7 @@ import {
   signContext,
   type EffectivePolicy,
 } from "@tolap/core";
+import type { SigningKey } from "./keyring.ts";
 
 /**
  * The wire shape of a resolved, signed policy.
@@ -71,6 +72,19 @@ export interface SignedArtifact {
   readonly signature: string;
   /** Signing algorithm, e.g. `hmac-sha256`. */
   readonly algorithm: string;
+  /**
+   * Which key signed this, so a consumer holding several can pick one during a
+   * rotation overlap.
+   *
+   * **Outside the signed payload, and therefore only a hint.** The canonical
+   * projection is fixed to `{version,userId,tenantId,issuedAt,expiresAt,policies[]}`
+   * (spec section 2), so this key cannot alter the signed bytes -- which is exactly
+   * why it can be added without any SDK change, and exactly why it must never be
+   * trusted. A forged `kid` selects a key under which the signature fails; that is
+   * a denial. A consumer must not respond to an unknown `kid` by trying every key
+   * it holds, which would turn this field into an oracle.
+   */
+  readonly kid: string;
 }
 
 /**
@@ -79,14 +93,19 @@ export interface SignedArtifact {
  * @param policy   A resolved `EffectivePolicy`. Mutated: both `signPolicy` and
  *                 `buildSecurityContext` write through in the SDK, so callers
  *                 should pass a policy they own rather than a cached one.
- * @param key      The HMAC signing key. Never leaves the server.
+ * @param key      The signing key. Never leaves the server. A `SigningKey`
+ *                 contributes its `kid` to the artifact; a bare string is treated
+ *                 as the key `default`, which keeps single-key deployments
+ *                 byte-identical apart from the added hint.
  * @param ttlMs    Artifact lifetime in milliseconds.
  */
 export function buildSignedArtifact(
   policy: EffectivePolicy,
-  key: string,
+  key: string | SigningKey,
   ttlMs: number,
 ): SignedArtifact {
+  const { kid, secret } =
+    typeof key === "string" ? { kid: "default", secret: key } : key;
   const context = buildSecurityContext(
     policy.userId,
     policy.tenantId,
@@ -102,7 +121,7 @@ export function buildSignedArtifact(
   //
   // This single call produces the envelope signature *and* the policy's
   // integrity block, which is why both verification paths are satisfied.
-  signContext(context, key);
+  signContext(context, secret);
 
   if (!context.signature || !context.algorithm) {
     // Unreachable via signContext, which always sets both. Asserted rather than
@@ -131,6 +150,7 @@ export function buildSignedArtifact(
     expiresAt: context.expiresAt,
     signature: context.signature,
     algorithm: context.algorithm,
+    kid,
   };
 }
 

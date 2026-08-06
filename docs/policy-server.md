@@ -17,7 +17,8 @@ three times over, once per language.
 | Store policy definitions and assignments | Hold data-source credentials |
 | Resolve and **sign** a policy per user per source | Enforce policy (the SDK wrapper does that, at the tool) |
 | Validate policy against the v1.0 JSON Schema | Decide whether a policy is *wise* — see [Getting policy wrong](#getting-policy-wrong) |
-| Version, publish, roll back, and audit | Rotate signing keys (see [Not in v1](#not-in-v1)) |
+| Version, publish, roll back, and audit | Store data-source schemas as truth (the catalog is authoring-only) |
+| Rotate signing keys with an overlap window | Sign asymmetrically (see [Not in v1](#not-in-v1)) |
 
 The server never connects to a governed data source. That is deliberate and it is
 the same property the SDKs have: nothing on the enforcement path takes a secret as
@@ -160,13 +161,23 @@ assignments.
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `DATABASE_URL` | yes | PostgreSQL connection string |
-| `TOLAP_SIGNING_KEY` | yes | ≥32 chars. **No default** — see below |
+| `TOLAP_SIGNING_KEY` | yes\* | A single secret, ≥32 chars. **No default** — see below |
+| `TOLAP_SIGNING_KEYS` | yes\* | `kid:secret` pairs for rotation, first active. Replaces the above |
+| `TOLAP_ACTIVE_KID` | no | Sign with this key instead of the first |
 | `TOLAP_TTL_SECONDS` | no | Artifact lifetime, default 900, hard max 3600 |
 | `COGNITO_ISSUER` | yes | `https://cognito-idp.<region>.amazonaws.com/<poolId>` |
 | `COGNITO_AUDIENCE` | yes | App client id |
+| `COGNITO_USER_POOL_ID` | see below | Enables group lookup for policy resolution |
+| `TOLAP_IDENTITY_SOURCE` | no | `cognito` \| `static` \| `none`. Defaults to `cognito` when a pool id is set |
+| `TOLAP_ROLE_PREFIX` | no | Cognito groups with this prefix resolve as TOLAP *roles* |
+| `TOLAP_IDENTITY_CACHE_SECONDS` | no | Default 300, max 3600 |
+| `TOLAP_STATIC_GROUPS` | with `static` | `alice=analysts,clinicians;bob=analysts` |
 | `TOLAP_ADMIN_GROUP` | no | Default `tolap-admin` |
 | `TOLAP_AUDITOR_GROUP` | no | Default `tolap-auditor` |
-| `PORT` / `RESOLVE_PORT` | no | Default 8080 / 8081 |
+| `PORT` / `RESOLVE_PORT` | no | Default 8080 / 8081. Must differ |
+| `HOST` / `RESOLVE_HOST` | no | Default `127.0.0.1` |
+
+\* One of the two signing forms is required.
 
 **The signing key has no development default and the server refuses to start
 without one.** A default would be shared by every deployment that forgot to set
@@ -177,6 +188,116 @@ source. Load it from Secrets Manager or SSM Parameter Store; never commit it.
 lifetime — TOLAP has no `jti` and no single-use enforcement (§13), so expiry is the
 *only* bound on a captured artifact. A day-long TTL is a day-long replay window,
 which is why this is a hard ceiling rather than advice.
+
+## Group and role membership
+
+An assignment can be attached to a **group** or a **role** rather than a person.
+Those only resolve if the server can learn what a user belongs to — otherwise the
+grant sits in the database contributing nothing, and the access an administrator
+believes they gave does not exist.
+
+`/v1/resolve` is called by an *install* on behalf of a user named in the query
+string, so there is no user token to read `cognito:groups` from. The server asks the
+pool directly with `AdminListGroupsForUser`:
+
+```bash
+COGNITO_USER_POOL_ID=us-east-1_abc123   # enables it; this is the default when set
+TOLAP_ROLE_PREFIX=role:                 # optional: `role:clinician` becomes the role `clinician`
+```
+
+The task role needs exactly one permission, and it is read-only:
+
+```json
+{ "Effect": "Allow",
+  "Action": "cognito-idp:AdminListGroupsForUser",
+  "Resource": "arn:aws:cognito-idp:us-east-1:<account>:userpool/us-east-1_abc123" }
+```
+
+Cognito has one flat group namespace; TOLAP distinguishes `group` from `role`
+assignees. `TOLAP_ROLE_PREFIX` splits them. Leave it unset and everything is a group.
+
+Lookups are cached for `TOLAP_IDENTITY_CACHE_SECONDS` (default 300). That cache is
+also the delay on a membership *removal* taking effect, which is why it is capped at
+an hour.
+
+**A lookup failure returns 503, it does not return a policy.** This is the important
+part. If a Cognito outage produced an empty group list, resolution would succeed and
+hand back a narrower policy with every group-scoped grant silently missing. Because
+merge is most-restrictive-wins the result is denial rather than disclosure — safe,
+but invisible: nothing in the response, the policy, or the audit log would say the
+server had guessed. A visible denial beats an invisible one.
+
+Alternatives if your groups do not live in Cognito:
+
+| `TOLAP_IDENTITY_SOURCE` | Behavior |
+| --- | --- |
+| `cognito` | Query the user pool (default when `COGNITO_USER_POOL_ID` is set) |
+| `static` | Read `TOLAP_STATIC_GROUPS`. For development, or groups managed elsewhere |
+| `none` | Nobody is in any group. **Group- and role-scoped assignments will not resolve** |
+
+`none` has to be chosen explicitly, and the server prints the active source at
+startup, because a deployment that lands on it by accident gets grants that do
+nothing and no error anywhere.
+
+## Rotating the signing key
+
+Rotation works, and it needed no SDK change — which was not obvious, because none of
+the three SDKs has a `kid` concept or a key-resolution hook; every signing API takes
+a bare `secretKey: string`.
+
+The opening is that **the security-context envelope has no JSON Schema**, so an extra
+top-level key is legal, and all three SDKs ignore members they do not model. The
+artifact therefore carries `kid` alongside the signature. Verified against the real
+SDKs rather than assumed: an artifact with `kid` verifies in TypeScript
+(`validateContext` and `validatePolicy`), deserializes and verifies in Python, and
+verifies in .NET.
+
+`kid` sits *outside* the signed payload — which the canonical projection fixes to
+`{version,userId,tenantId,issuedAt,expiresAt,policies[]}` (§2) — so it cannot change
+the signed bytes. That is exactly why it is safe to add, and exactly why it must
+never be trusted:
+
+> **`kid` is a hint, not an authority.** It is unsigned, so anyone can rewrite it.
+> That is harmless because it only selects *which key to try*, and a wrong `kid`
+> leads to a key under which the signature fails. What a consumer must never do is
+> fall back to trying every key it holds when a `kid` is unknown — that turns the
+> field into an oracle for which keys a server has.
+
+To rotate:
+
+```bash
+# 1. Add the new key. The old one stays first, so it stays active.
+TOLAP_SIGNING_KEYS="2026-05:<old secret>,2026-08:<new secret>"
+
+# 2. Distribute both to consumers as a kid -> key map, and let them update.
+
+# 3. Flip the active key. New artifacts are signed with it; artifacts already
+#    issued under the old one keep verifying.
+TOLAP_SIGNING_KEYS="2026-05:<old secret>,2026-08:<new secret>"
+TOLAP_ACTIVE_KID=2026-08
+
+# 4. After one TTL (at most an hour), every old artifact has expired. Drop the key.
+TOLAP_SIGNING_KEYS="2026-08:<new secret>"
+```
+
+The overlap is what removes the flag day: both keys verify throughout, so installs
+update on their own schedule. The server logs the active `kid` and the others it
+still verifies at startup.
+
+A single `TOLAP_SIGNING_KEY` still works and becomes the key `default`, so an
+existing deployment upgrades without any configuration change — its artifacts gain
+`"kid":"default"` and are otherwise byte-identical.
+
+Consumer side, for a Python install:
+
+```python
+KEYS = {"2026-08": new_secret, "2026-05": old_secret}
+artifact = json.loads(base64.b64decode(blob))
+secret = KEYS.get(artifact["kid"])
+if secret is None:
+    raise ValueError("unknown signing key")   # do NOT try the others
+context = deserialize_context(blob, secret)
+```
 
 ## The artifact `/v1/resolve` returns
 
@@ -274,11 +395,25 @@ cd server
 npm install
 DATABASE_URL=postgres:///tolap npm run migrate
 DATABASE_URL=postgres:///tolap \
-TOLAP_SIGNING_KEY="$(openssl rand -base64 32)" \
+TOLAP_SIGNING_KEYS="2026-08:$(openssl rand -base64 32)" \
 COGNITO_ISSUER=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_xxx \
 COGNITO_AUDIENCE=your-client-id \
+COGNITO_USER_POOL_ID=us-east-1_xxx \
   npm run dev
 ```
+
+Startup prints the two things that fail silently if they are wrong — which identity
+source is active, and which key is signing:
+
+```
+admin API + console  http://127.0.0.1:8080
+resolve API          http://127.0.0.1:8081
+identity source      cognito
+signing keys         active=2026-08
+```
+
+Without `COGNITO_USER_POOL_ID` that third line reads
+`none  (group- and role-scoped assignments will NOT resolve)`.
 
 Tests:
 
@@ -297,13 +432,13 @@ CHANGELOG's "Test-reporting defects".
 
 Each of these is left out for a reason, not an oversight:
 
-- **Signing-key rotation / `kid`.** No SDK has a key-id concept or a
-  key-resolution hook anywhere. Adding one is a cross-SDK change to all three
-  signing paths, not a server feature. Today, rotating means re-keying the server
-  and its consumers together.
 - **`ed25519`.** In the schema's algorithm enum but unimplemented in all three
   SDKs — Python raises, .NET throws, and both then fail closed to a validation
   failure rather than an exception.
+- **Asymmetric signing.** HMAC means every verifier holds a key that can also
+  *sign*. Asymmetric keys would let installs verify without being able to forge,
+  which is the right shape for a large deployment — but it depends on `ed25519`
+  above, so it waits on the SDKs.
 - **Replay prevention.** §13 says single-use enforcement "requires server-side
   state the SDK deliberately does not assume." Short TTLs are the v1 answer; a
   `jti` store is the obvious follow-on and this server is the right place for it.
