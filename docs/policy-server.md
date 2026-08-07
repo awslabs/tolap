@@ -389,6 +389,57 @@ The catalog is authoring convenience **only**. Enforcement reads the signed poli
 and never the catalog — a catalog that could influence an access decision would be
 a new trust dependency, and a stale one would silently change what a policy means.
 
+### What the console's rule editors guard
+
+Every rule in the policy model is editable in the console, each control backed by the
+imported catalog. They are worth describing individually, because most of them exist to
+make one specific quiet failure loud — and in every case the failure is *silent* rather
+than an error an author would notice.
+
+- **Masked fields.** Mask types are listed most- to least-restrictive, which is also the
+  spec's merge order (least-revealing wins), so the trade-off is visible while choosing
+  rather than looked up afterwards. `partial` is marked as revealing real characters and
+  `hash` as **not a confidentiality control** — an unsalted truncated digest is
+  brute-forceable for SSNs, dates of birth and small enumerations, so it is a pseudonym
+  and a join key, not protection.
+
+  `partial` also takes `showFirst` / `showLast` / `maskChar`, and `hash` takes
+  `algorithm`. Without those controls "reveal the last four of an SSN" is not expressible
+  at all: `partial` with no parameters reveals nothing and degrades to a full mask. That
+  degradation is safe, but it is not what the author asked for.
+
+- **Row filters.** These are the *only* way TOLAP selects records — there is no record-id
+  concept anywhere in the policy model, so "which rows may this user see" is always a
+  predicate over a field. All 16 operators are offered, grouped by the value shape they
+  take, and changing operator drops the value that no longer applies (a stale `value`
+  alongside `values` is not what `in` means, and the schema rejects it).
+
+  A field name outside the catalog is flagged with its consequence spelled out: filters
+  fail closed, so a record missing the referenced field is dropped, and a typo therefore
+  denies **every** record rather than none. The author experiences that as "the agent
+  returns nothing", which does not point at the policy.
+
+- **Endpoints and methods.** The OpenAPI importer has already rewritten `/patients/{id}`
+  to `/patients/*`, so picking from the list yields a pattern that matches at enforcement
+  time instead of a literal `{id}` that never matches anything. Methods are per-policy
+  because that is what the schema models; the methods each endpoint actually offers are
+  shown beside it, so granting a verb the API does not expose is visible.
+
+  Absent `allowedMethods` means the schema default (read-only) while `[]` **denies every
+  request** — two opposite policies that both render as "nothing ticked" in a checkbox
+  grid, so the two states are distinguished explicitly.
+
+- **Tags** (`kb` sources). The asymmetry is stated inline because getting it backwards
+  produces a policy that reads as restrictive and returns everything: `deniedTags` takes
+  precedence over `allowedTags`, and a document needs only **one** allowed tag to pass. An
+  allow-list is narrower than it looks; a deny-list is absolute.
+
+Two rules hold across all of them. A value the catalog does not contain is **flagged, not
+rejected** — the catalog is an aid, and one that could refuse a value would become an
+authority on what a policy may say, so a stale manifest would start blocking legitimate
+policies. And nothing is flagged before a source is imported, since warning on every value
+with nothing to compare against trains the author to ignore the warning that matters.
+
 ## Storage notes worth knowing
 
 Policy bodies are stored as opaque `jsonb` and never decomposed into columns,

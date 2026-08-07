@@ -244,7 +244,10 @@ The Quick Start examples above use the built-in `InMemoryPolicyStore` -- great f
 > server with a PostgreSQL store, a `GET /v1/resolve` endpoint that returns a signed
 > policy every one of the three SDKs can verify, schema validation, immutable policy
 > versions with publish and rollback, an audit trail, and Cognito-authenticated
-> admin access. [`console/`](console/) is its UI. Start with
+> admin access. [`console/`](console/) is its UI: it authors every rule in the policy
+> model from a catalog imported from your OpenAPI document or SQL DDL, so a policy names
+> columns and endpoints that exist -- `hiddenFields: ["ssn"]` protects nothing when the
+> column is `ssn_number`, and nothing in TOLAP can detect that. Start with
 > [`docs/policy-server.md`](docs/policy-server.md) if you would rather run one than
 > build one.
 >

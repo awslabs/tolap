@@ -80,11 +80,76 @@ language. [`server/`](server/) and [`console/`](console/) are that component.
   `TOLAP_ACTIVE_KID`, drop the old key after one TTL. A single `TOLAP_SIGNING_KEY`
   still works and becomes the key `default`, so existing deployments need no change.
 
+- **Every policy rule is editable in the console**, each control backed by the imported
+  catalog. Previously only field and object lists were reachable from the UI, so masking,
+  row filters, endpoint rules, methods, tags and read-only fields could be authored only
+  by hand-editing JSON — and the manifests the importers produce were used for little.
+  Each editor exists to make one silent failure loud, which is the only kind this domain
+  produces: mask types are ordered most- to least-restrictive (the spec's merge order)
+  with `hash` marked as *not* a confidentiality control; a row filter naming a field
+  outside the catalog is flagged with its consequence, since filters fail closed and a
+  typo therefore denies **every** record rather than none; absent `allowedMethods` (the
+  read-only default) is distinguished from `[]` (denies everything), two opposite policies
+  that both look like "nothing ticked"; and the tag editor states that deny beats allow
+  and that one allowed tag suffices, because getting that backwards yields a policy that
+  reads as restrictive and returns everything. Values the catalog does not contain are
+  flagged, never rejected — a catalog that could refuse a value would become an authority
+  on what a policy may say, and a stale one would block legitimate policies.
+  `partial` masking gained `showFirst`/`showLast`/`maskChar` and `hash` gained
+  `algorithm`; without them "reveal the last four of an SSN" was not expressible, because
+  `partial` with no parameters reveals nothing and degrades to a full mask.
+  `server/tests/console-policy-shapes.test.ts` validates every shape these editors can
+  emit against the real schema — the console builds policy JSON by hand and the server
+  validates on save, so nothing else connected the two before an author lost their work at
+  the save button. It immediately caught an invented `parameters` key.
+
 Two ports, so the policy-authoring surface can bind a private interface while
 remote installs reach only `/v1/resolve` — §13 says policy authors are trusted
 administrators, and a deployment that widens that has left the threat model.
 
 Nothing in `sdk/`, `schema/` or `fixtures/` changed.
+
+### Fixed — found in the deployed stack, not by a scanner
+
+Three defects in the new components, all found by exercising the running system rather
+than by any test or tool. Recorded because the *way* each was found is the point.
+
+- **CloudFront rewrote API errors into successful HTML.** The distribution carried the
+  conventional single-page-app fallback — rewrite 403 and 404 to `/index.html` with a
+  `200`. But `CustomErrorResponses` is **distribution-wide, not per-behavior**, so it
+  rewrote errors from the admin API too: a request the API rejected came back as
+  `200 text/html` served from S3 and cached for five minutes. An authorization failure
+  reached the console looking like a success, with `response.json()` failing on markup as
+  the only symptom and the cache making it look intermittent.
+
+  Every scanner passed the configuration — it is a valid and extremely common CloudFront
+  setup, and nothing in Semgrep, Trivy or `cdk-nag` models "this distribution also fronts
+  an API, so an error-page rewrite is a correctness problem." The existing infrastructure
+  test asserted the *broken* behaviour ("serves index.html for console deep links"). Found
+  by sending real authenticated requests to the deployed endpoint and reading the response
+  headers. The fallback is removed rather than narrowed: the console keeps view state in
+  React and is served only from `/`, so there were no deep links to rescue.
+
+- **The console rendered a blank page under `vite dev`.** The generated CSP was injected in
+  development as well as in the build, and `script-src 'self'` forbids inline script — the
+  React plugin's HMR preamble *is* an inline script. The browser blocked it, React never
+  mounted, and the only diagnostic was `@vitejs/plugin-react can't detect preamble`. The
+  policy is now build-only; the shipped artifact is unchanged.
+
+- **A row filter could not accept a second value.** The `in` / `notIn` / `between` editor
+  stripped blank lines on every keystroke while deriving its text from the stored values,
+  so pressing Enter deleted the newline immediately. Raw text is now local state, and only
+  the cleaned list is stored.
+
+- **"Not in catalog" fired on names that work.** Every picker compared the authored name to
+  the catalog exactly, but enforcement compares **case-insensitively** — `matchForms`
+  lower-cases both the rule and the record key (canonical spec §4), the endpoint glob
+  dialect is case-insensitive (§3.1), and tags are lower-cased on both sides (connector
+  spec §7). So `hiddenFields: ["SSN_Number"]` really does hide `ssn_number`, and warning
+  about it is worse than staying quiet: a warning that fires on correct input teaches the
+  author to dismiss the one that matters. Found while verifying the documentation's claims
+  against the enforcement code rather than against the components. The comparison now lives
+  in one exported helper shared by all five pickers.
 
 ### Security
 
