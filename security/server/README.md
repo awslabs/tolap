@@ -71,6 +71,26 @@ stating next to the scan results:
 - **Single tenant by design.** Any authenticated administrator sees every policy — see
   [`../../docs/policy-server.md`](../../docs/policy-server.md#single-tenant-by-design).
 
+### Cleared rather than annotated: JSON Pointer resolution in the OpenAPI importer
+
+Semgrep flags `prototype-pollution-loop` on the `$ref` resolver, where a segment of a
+caller-supplied JSON Pointer indexes into the uploaded document.
+
+It was not exploitable, and both halves of that were checked rather than assumed:
+`JSON.parse` keeps a literal `"__proto__"` as an ordinary own key instead of setting the
+prototype, so a request body cannot produce an object with inherited members; and the
+`isRecord` guard rejected the prototype itself. Nothing is written in the loop either, so
+"pollution" was never the right name — the concern is the read walking out of the document
+and into the runtime.
+
+Changed anyway. The safety rested on the shape of a type guard and on the parser upstream,
+neither of which is visible at that call site, so it would not survive a caller that hands
+the resolver a hand-built object — a YAML loader that honours `__proto__`, or a test
+fixture. Resolution now goes through own enumerable keys only. The regression test pins the
+case that actually distinguishes the two (a schema reachable by inheritance), and is
+mutation-verified: the earlier version of that test passed against both implementations,
+which is worth recording as its own lesson.
+
 ### Found by hand, not by a scanner: the SPA fallback masked API errors
 
 Worth recording because it is the class of bug this scan set does not cover. The

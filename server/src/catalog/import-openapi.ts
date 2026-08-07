@@ -29,6 +29,32 @@ type Json = Record<string, unknown>;
 const isRecord = (value: unknown): value is Json =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/**
+ * One step of a JSON Pointer walk, confined to keys the document itself declares.
+ *
+ * A JSON Pointer is a caller-supplied path walked over an uploaded document, so
+ * `#/__proto__` or `#/constructor/prototype` is a request to leave that document and
+ * read the runtime's object graph. `Object.entries` yields own enumerable keys only, so
+ * a pointer reaches nothing the spec did not declare — inherited members included.
+ *
+ * Two things this is **not**. It is not a fix for prototype pollution: nothing is
+ * written here, so the concern was only ever the read. And it was not exploitable
+ * through the HTTP route before — `JSON.parse` keeps a literal `"__proto__"` as an
+ * ordinary own key rather than setting the prototype, so a request body cannot produce
+ * an object with inherited members, and `isRecord` rejected the prototype itself anyway.
+ * Both verified rather than assumed.
+ *
+ * It is kept because the safety was incidental: it rested on the shape of the type guard
+ * and on the parser upstream, neither stated here, and a future caller handing `deref` a
+ * hand-built object — a YAML loader that does honour `__proto__`, a fixture — would get a
+ * different answer. This makes the rule local and legible, and clears the Semgrep finding
+ * for dynamic member access on a caller-supplied key, which is worth clearing rather than
+ * annotating in a repository whose subject is access control.
+ */
+function ownChild(node: Json, key: string): unknown {
+  return new Map(Object.entries(node)).get(key);
+}
+
 /** Follow a local `$ref` such as `#/components/schemas/Patient`. */
 function deref(root: Json, node: unknown, seen = new Set<string>()): unknown {
   if (!isRecord(node)) return node;
@@ -47,7 +73,9 @@ function deref(root: Json, node: unknown, seen = new Set<string>()): unknown {
   for (const segment of ref.slice(2).split("/")) {
     if (!isRecord(current)) return undefined;
     // JSON Pointer escapes, so a key containing "/" or "~" resolves correctly.
-    current = current[segment.replace(/~1/g, "/").replace(/~0/g, "~")];
+    const key = segment.replace(/~1/g, "/").replace(/~0/g, "~");
+    current = ownChild(current, key);
+    if (current === undefined) return undefined;
   }
   return deref(root, current, seen);
 }

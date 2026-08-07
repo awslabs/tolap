@@ -349,6 +349,121 @@ describe("importOpenApi", () => {
     expect(manifest.endpoints[0].responseFields).toEqual([]);
   });
 
+  it("resolves a $ref only against keys the document declares", () => {
+    // A JSON Pointer is a caller-supplied path walked over an uploaded document, so
+    // `#/__proto__` or `#/constructor/prototype` asks to leave that document and read
+    // the runtime's object graph.
+    //
+    // Honest about what this covers: through the HTTP route it was never exploitable,
+    // because `JSON.parse` keeps a literal `"__proto__"` as an ordinary own key instead
+    // of setting the prototype. The inherited-member case below is therefore reachable
+    // only by a caller that hands `deref` a hand-built object -- a YAML loader, or a
+    // fixture like this one. That is exactly why it is pinned: the previous safety was a
+    // side effect of the type guard and of the parser upstream, and a test that only
+    // fed it JSON could not tell the difference.
+    const pointers = ["#/__proto__", "#/constructor/prototype", "#/toString"];
+    for (const ref of pointers) {
+      const spec = {
+        paths: {
+          "/x": {
+            get: {
+              responses: {
+                "200": { content: { "application/json": { schema: { $ref: ref } } } },
+              },
+            },
+          },
+        },
+      };
+      expect(
+        importOpenApi("api:internal:x", spec).endpoints[0]!.responseFields,
+        ref,
+      ).toEqual([]);
+    }
+
+    // The case that actually distinguishes own-keys-only from a plain index: a schema
+    // reachable by inheritance, which index access would happily follow.
+    const leaky = Object.create({
+      Inherited: { type: "object", properties: { leaked: { type: "string" } } },
+    }) as Record<string, unknown>;
+    leaky.Declared = { type: "object", properties: { fine: { type: "string" } } };
+
+    const withInherited = {
+      paths: {
+        "/x": {
+          get: {
+            responses: {
+              "200": {
+                content: {
+                  "application/json": { schema: { $ref: "#/schemas/Inherited" } },
+                },
+              },
+            },
+          },
+        },
+      },
+      schemas: leaky,
+    };
+    expect(
+      importOpenApi("api:internal:x", withInherited).endpoints[0]!.responseFields,
+    ).toEqual([]);
+
+    // ...while the sibling the document really declares still resolves.
+    const withDeclared = {
+      ...withInherited,
+      paths: {
+        "/x": {
+          get: {
+            responses: {
+              "200": {
+                content: {
+                  "application/json": { schema: { $ref: "#/schemas/Declared" } },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    expect(
+      importOpenApi("api:internal:x", withDeclared).endpoints[0]!.responseFields,
+    ).toEqual(["fine"]);
+
+    expect(Object.keys(Object.prototype)).toEqual([]);
+  });
+
+  it("still resolves a legitimate local $ref", () => {
+    // The guard above must not have cost the feature it protects.
+    const spec = {
+      paths: {
+        "/x": {
+          get: {
+            responses: {
+              "200": {
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/Patient" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          Patient: {
+            type: "object",
+            properties: { id: { type: "string" }, ssn: { type: "string" } },
+          },
+        },
+      },
+    };
+    expect(importOpenApi("api:internal:x", spec).endpoints[0]!.responseFields).toEqual([
+      "id",
+      "ssn",
+    ]);
+  });
+
   it("survives a self-referential schema", () => {
     const recursive = {
       paths: {
