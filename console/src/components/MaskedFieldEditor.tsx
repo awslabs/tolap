@@ -16,7 +16,7 @@
 
 import { useId } from "react";
 import type { MaskingRule, SourceManifest } from "../api.ts";
-import { fieldOptions } from "./FieldPicker.tsx";
+import { fieldOptions, isUnknownToCatalog } from "./FieldPicker.tsx";
 
 /**
  * The five mask types, ordered most- to least-restrictive.
@@ -180,7 +180,6 @@ export function MaskedFieldEditor({
   onChange,
 }: MaskedFieldEditorProps) {
   const options = fieldOptions(manifest);
-  const known = new Set(options);
   // Per-instance, so a second editor on one page cannot capture this one's datalist.
   const listId = `${useId()}-masked-fields`;
 
@@ -231,11 +230,7 @@ export function MaskedFieldEditor({
         <ul className="rule-editor__list">
           {rules.map((rule, index) => {
             const selected = MASK_TYPES.find((t) => t.value === rule.maskType);
-            const unknownField =
-              manifest !== undefined &&
-              rule.field !== "" &&
-              !known.has(rule.field) &&
-              !rule.field.includes("*");
+            const unknownField = isUnknownToCatalog(rule.field, manifest, options);
 
             return (
               <li key={index} className="rule-editor__row">

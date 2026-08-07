@@ -136,15 +136,32 @@ describe("TagPicker", () => {
     render(
       <TagPicker
         label="Denied tags"
+        selected={["confidential"]}
+        manifest={MANIFEST}
+        semantics="deny"
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/not in catalog/i)).toBeDefined();
+    // Flagged, not removed: the catalog is an aid, not an authority.
+    expect(screen.getByText("confidential")).toBeDefined();
+  });
+
+  it("does not flag a tag that differs only in case", () => {
+    // Tags compare case-insensitively at enforcement -- the SDKs lower-case both sides,
+    // so `deniedTags: ["PHI"]` really does drop a record tagged `phi` (connector spec
+    // section 7). Flagging this would warn about a rule that works, and a warning that
+    // fires on correct input is worse than none.
+    render(
+      <TagPicker
+        label="Denied tags"
         selected={["PHI"]}
         manifest={MANIFEST}
         semantics="deny"
         onChange={vi.fn()}
       />,
     );
-    // Tag matching is exact, so a case difference denies nothing.
-    expect(screen.getByText(/not in catalog/i)).toBeDefined();
-    expect(screen.getByText("PHI")).toBeDefined();
+    expect(screen.queryByText(/not in catalog/i)).toBeNull();
   });
 
   it("does not flag anything before a catalog is loaded", () => {

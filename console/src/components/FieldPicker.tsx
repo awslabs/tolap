@@ -59,6 +59,29 @@ function isPattern(value: string): boolean {
   return value.includes("*") || value.includes("?");
 }
 
+/**
+ * Is this name absent from the catalog, in the sense that matters at enforcement time?
+ *
+ * Case-insensitive, because that is how the SDKs compare: `matchForms` lower-cases both
+ * the rule name and the record key, so `hiddenFields: ["SSN_Number"]` does hide a column
+ * named `ssn_number`. Comparing exactly would flag a rule that works — and a warning that
+ * fires on correct input is worse than no warning, because it teaches the author to
+ * dismiss the one that matters.
+ *
+ * A glob is never flagged: a pattern is not expected to equal any single catalog entry.
+ * Neither is anything at all before a source is imported — there is nothing to compare
+ * against, and warning on every value would make the control useless.
+ */
+export function isUnknownToCatalog(
+  value: string,
+  manifest: SourceManifest | undefined,
+  options: readonly string[],
+): boolean {
+  if (manifest === undefined || value === "" || isPattern(value)) return false;
+  const lowered = value.toLowerCase();
+  return !options.some((option) => option.toLowerCase() === lowered);
+}
+
 export function FieldPicker({
   label,
   selected,
@@ -112,12 +135,12 @@ export function FieldPicker({
       ) : (
         <ul className="field-picker__selected">
           {selected.map((value) => {
-            const known = options.includes(value);
+            const unknown = isUnknownToCatalog(value, manifest, options);
             const pattern = isPattern(value);
             return (
               <li key={value} className="field-picker__chip">
                 <code>{value}</code>
-                {!known && !pattern && manifest ? (
+                {unknown ? (
                   <span
                     className="field-picker__warning"
                     title="Not present in this source's catalog. It may be a typo, or the catalog may be out of date."

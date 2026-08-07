@@ -98,6 +98,19 @@ describe("RowFilterEditor", () => {
     expect(screen.queryByText(/drops every record/i)).toBeNull();
   });
 
+  it("does not warn on a field that differs only in case", () => {
+    // Case-insensitive at enforcement, so this filter selects on the real column and a
+    // warning here would be false.
+    render(
+      <RowFilterEditor
+        filters={[{ field: "Region", operator: "equals", value: "west" }]}
+        manifest={MANIFEST}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/drops every record/i)).toBeNull();
+  });
+
   it("does not warn before a catalog is loaded", () => {
     render(
       <RowFilterEditor

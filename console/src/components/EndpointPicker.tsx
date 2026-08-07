@@ -77,7 +77,12 @@ export function EndpointPicker({
       ) : (
         <ul className="field-picker__selected">
           {selected.map((path) => {
-            const known = options.find((option) => option.path === path);
+            // Case-insensitive: the enforcement glob dialect is (canonical spec 3.1),
+            // so `/API/v1/patients` really does match the imported `/api/v1/patients`
+            // and flagging it would warn about a rule that works.
+            const known = options.find(
+              (option) => option.path.toLowerCase() === path.toLowerCase(),
+            );
             const isPattern = path.includes("*");
             return (
               <li key={path} className="field-picker__chip">

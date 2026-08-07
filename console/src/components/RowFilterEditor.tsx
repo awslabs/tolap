@@ -14,7 +14,7 @@
 
 import { useEffect, useId, useState } from "react";
 import type { RowFilter, SourceManifest } from "../api.ts";
-import { fieldOptions } from "./FieldPicker.tsx";
+import { fieldOptions, isUnknownToCatalog } from "./FieldPicker.tsx";
 
 /** Operators, grouped by the shape of value they take. */
 const SINGLE_VALUE = [
@@ -118,7 +118,6 @@ export function RowFilterEditor({
   onChange,
 }: RowFilterEditorProps) {
   const options = fieldOptions(manifest);
-  const known = new Set(options);
   // Per-instance, so a second editor on one page cannot capture this one's datalist.
   const listId = `${useId()}-row-filter-fields`;
 
@@ -155,11 +154,7 @@ export function RowFilterEditor({
           <ul className="rule-editor__list">
             {filters.map((filter, index) => {
               const shape = operatorShape(filter.operator);
-              const unknownField =
-                manifest !== undefined &&
-                filter.field !== "" &&
-                !known.has(filter.field) &&
-                !filter.field.includes("*");
+              const unknownField = isUnknownToCatalog(filter.field, manifest, options);
 
               return (
                 <li key={index} className="rule-editor__row">

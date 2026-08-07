@@ -110,6 +110,20 @@ describe("EndpointPicker", () => {
     expect(screen.queryByText(/not in catalog/i)).toBeNull();
   });
 
+  it("does not flag a path that differs only in case", () => {
+    // The enforcement glob dialect is case-insensitive (canonical spec 3.1), so this
+    // allow-list entry does match the imported endpoint.
+    render(
+      <EndpointPicker
+        label="Allowed endpoints"
+        selected={["/API/v1/Patients"]}
+        manifest={MANIFEST}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/not in catalog/i)).toBeNull();
+  });
+
   it("does not flag anything before an OpenAPI import", () => {
     render(
       <EndpointPicker

@@ -141,6 +141,22 @@ describe("FieldPicker", () => {
     expect(screen.getByText("pattern")).toBeDefined();
   });
 
+  it("does not flag a name that differs only in case", () => {
+    // Field matching is case-insensitive at enforcement (canonical spec section 4:
+    // `matchForms` lower-cases both the rule and the record key), so `SSN_Number` does
+    // hide the `ssn_number` column. A warning that fires on a rule that works is worse
+    // than none -- it teaches the author to dismiss the warning that matters.
+    render(
+      <FieldPicker
+        label="Hidden fields"
+        selected={["SSN_Number", "PATIENTS.Region"]}
+        manifest={MANIFEST}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/not in catalog/i)).toBeNull();
+  });
+
   it("does not flag anything when no catalog is loaded", () => {
     // Without a manifest there is nothing to compare against, and warning on every
     // value would train the author to ignore the warning.

@@ -37,7 +37,10 @@ export function TagPicker({
   const [draft, setDraft] = useState("");
   const options = useMemo(() => tagOptions(manifest), [manifest]);
   const available = options.filter((option) => !selected.includes(option));
-  const known = new Set(options);
+  // Case-insensitive, because that is how tags compare at enforcement time: the SDKs
+  // lower-case both sides, so `deniedTags: ["PHI"]` does drop a record tagged `phi`
+  // (connector spec section 7). Comparing exactly here would flag a tag that works.
+  const known = new Set(options.map((option) => option.toLowerCase()));
 
   const add = (value: string) => {
     const trimmed = value.trim();
@@ -69,7 +72,7 @@ export function TagPicker({
           {selected.map((tag) => (
             <li key={tag} className="field-picker__chip">
               <code>{tag}</code>
-              {manifest && !known.has(tag) ? (
+              {manifest && !known.has(tag.toLowerCase()) ? (
                 <span
                   className="field-picker__warning"
                   title="No document in this source's catalog carries this tag. It may be a typo, or the manifest may be out of date."

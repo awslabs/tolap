@@ -79,6 +79,18 @@ describe("MaskedFieldEditor", () => {
     expect(screen.queryByText(/masks nothing/i)).toBeNull();
   });
 
+  it("does not flag a field that differs only in case", () => {
+    // Case-insensitive at enforcement, so this rule masks the real column.
+    render(
+      <MaskedFieldEditor
+        rules={[{ field: "SSN_Number", maskType: "redact" }]}
+        manifest={MANIFEST}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/masks nothing/i)).toBeNull();
+  });
+
   it("does not flag anything before a catalog is loaded", () => {
     // Warning on every value with nothing to compare against would train the author to
     // ignore the warning that matters.
