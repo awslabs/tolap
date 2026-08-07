@@ -71,6 +71,29 @@ stating next to the scan results:
 - **Single tenant by design.** Any authenticated administrator sees every policy — see
   [`../../docs/policy-server.md`](../../docs/policy-server.md#single-tenant-by-design).
 
+### Found by hand, not by a scanner: the SPA fallback masked API errors
+
+Worth recording because it is the class of bug this scan set does not cover. The
+distribution carried the conventional single-page-app fallback — rewrite 403 and 404 to
+`/index.html` with a `200` — to keep console deep links working.
+
+`CustomErrorResponses` is **distribution-wide, not per-behavior**. It therefore rewrote
+errors from the admin API too. Observed against the deployed stack: a request the API
+rejected came back as `200 text/html` served from S3, cached for five minutes. An
+authorization failure reached the console looking like a success, and the only visible
+symptom was `response.json()` failing on markup — no status code to act on, no error to
+log, and a five-minute cache making it look intermittent.
+
+Every scanner passed the configuration: it is a valid, extremely common CloudFront
+setup. Nothing in Semgrep, Trivy or `cdk-nag` models "this distribution also fronts an
+API, so an error-page rewrite is a correctness and security problem." It was found by
+sending real authenticated requests to the deployed endpoint and reading the response
+headers, which is why that step is in the verification routine and not optional.
+
+The fallback is now removed rather than narrowed — the console keeps view state in React
+and is served only from `/`, so there were no deep links to rescue in the first place.
+`infra/test/infra.test.ts` asserts no distribution-wide error responses exist.
+
 ## Reproducing
 
 ```bash

@@ -317,22 +317,18 @@ export class EdgeStack extends Stack {
         "/health": apiBehavior(adminOrigin),
       },
       defaultRootObject: "index.html",
-      // The console keeps view state client-side, so a deep link must return
-      // index.html rather than S3's 403/404.
-      errorResponses: [
-        {
-          httpStatus: 403,
-          responseHttpStatus: 200,
-          responsePagePath: "/index.html",
-          ttl: Duration.minutes(5),
-        },
-        {
-          httpStatus: 404,
-          responseHttpStatus: 200,
-          responsePagePath: "/index.html",
-          ttl: Duration.minutes(5),
-        },
-      ],
+      // No SPA fallback. `errorResponses` is distribution-wide, not per-behavior, so
+      // rewriting 403/404 to `index.html` with a 200 rewrote them for the *API* too: a
+      // POST to /v1/policies that the admin service rejected came back as
+      // `200 text/html`, cached for five minutes. That is worse than a broken deep link
+      // -- an authorization failure arrives at the console looking like a success, and
+      // `response.json()` fails on markup instead of surfacing the real status.
+      //
+      // Nothing is lost here: the console keeps all view state in React (tabs, not
+      // routes) and is only ever served from `/`, so there are no deep links to
+      // rescue. If path-based routing is added later, this must come back as a
+      // CloudFront Function on the default behavior only, never as a distribution-wide
+      // error response.
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       webAclId: webAcl.attrArn,

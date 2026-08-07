@@ -545,14 +545,24 @@ describe("the edge is the only public surface", () => {
     });
   });
 
-  it("serves index.html for console deep links", () => {
-    templates.edge.hasResourceProperties("AWS::CloudFront::Distribution", {
-      DistributionConfig: Match.objectLike({
-        CustomErrorResponses: Match.arrayWith([
-          Match.objectLike({ ErrorCode: 403, ResponsePagePath: "/index.html" }),
-        ]),
-      }),
-    });
+  it("does not rewrite API errors into the console page", () => {
+    // `CustomErrorResponses` is distribution-wide, not per-behavior. With an SPA
+    // fallback configured, a 403 from the *admin API* was rewritten to `/index.html`
+    // with a 200 and cached for five minutes -- observed against the deployed stack as
+    // `POST /v1/policies` returning `200 text/html` from S3. An authorization failure
+    // then reaches the console looking like a success.
+    //
+    // The console needs no fallback: it keeps view state in React and is served only
+    // from `/`. If routes are added, the rescue belongs in a CloudFront Function on the
+    // default behavior, never here.
+    const distributions = templates.edge.findResources(
+      "AWS::CloudFront::Distribution",
+    );
+    for (const distribution of Object.values(distributions)) {
+      expect(
+        distribution.Properties?.DistributionConfig?.CustomErrorResponses,
+      ).toBeUndefined();
+    }
   });
 
   it("registers its URL as an OAuth callback, scoped to the one pool", () => {
