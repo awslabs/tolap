@@ -224,6 +224,18 @@ export class EdgeStack extends Stack {
             frameOption: cloudfront.HeadersFrameOption.DENY,
             override: true,
           },
+          // `frame-ancestors` cannot be delivered in a `<meta>` element -- browsers
+          // ignore it there, which made the console's meta-tag version look like
+          // clickjacking protection while providing none. As a response header it is
+          // enforced. Set alongside X-Frame-Options because the two cover different
+          // browser generations.
+          contentSecurityPolicy: {
+            contentSecurityPolicy: "frame-ancestors 'none'",
+            // Always set. The origin sends no CSP header of its own -- the page's
+            // policy lives in a meta tag, which is not a header -- so there is nothing
+            // to preserve, and `false` would leave this depending on that staying true.
+            override: true,
+          },
           referrerPolicy: {
             referrerPolicy: cloudfront.HeadersReferrerPolicy.NO_REFERRER,
             override: true,

@@ -4,14 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
-      No external font, script, or style origins. The console renders policy that
-      governs regulated data, and a third-party origin here would be able to read
-      the page and the token in it.
+      The Content-Security-Policy is injected at build time by the `tolap-csp` plugin
+      in vite.config.ts, because it must name the configured Cognito origin: the PKCE
+      token exchange is a cross-origin fetch, and a hardcoded `connect-src 'self'`
+      blocked it. Generating it keeps the allowed origin scoped to the one pool this
+      build targets rather than to any Cognito domain.
     -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'"
-    />
     <meta name="referrer" content="no-referrer" />
     <title>TOLAP Policy Console</title>
   </head>

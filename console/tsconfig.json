@@ -18,7 +18,8 @@
     // Imports name the file that exists on disk. Vite resolves and rewrites them
     // at build time, so the extension never reaches a browser.
     "allowImportingTsExtensions": true,
-    "types": ["vitest/globals", "vite/client"]
+    // `node` for vite.config.ts, which reads process.env to build the CSP.
+    "types": ["vitest/globals", "vite/client", "node"]
   },
   "include": ["src", "vite.config.ts"]
 }
