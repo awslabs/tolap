@@ -38,7 +38,12 @@ export class DatabaseStack extends Stack {
       vpc: props.vpc,
       // Isolated subnets: the database has no route to the internet.
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      writer: rds.ClusterInstance.serverlessV2("writer"),
+      writer: rds.ClusterInstance.serverlessV2("writer", {
+        // Set here, not on the cluster: a cluster-level enablePerformanceInsights is
+        // silently ignored for Serverless v2 writers, so the flag looked applied while
+        // the template carried nothing.
+        enablePerformanceInsights: true,
+      }),
       serverlessV2MinCapacity: 0.5,
       serverlessV2MaxCapacity: 4,
       defaultDatabaseName: this.databaseName,
@@ -48,6 +53,10 @@ export class DatabaseStack extends Stack {
         secretName: "tolap/database",
       }),
       storageEncrypted: true,
+      // The audit log lives here -- who changed which policy, which install pulled it.
+      // Deletion protection is a second gate on top of RemovalPolicy.SNAPSHOT, because
+      // a snapshot is only useful if someone remembers it exists.
+      deletionProtection: true,
       backup: {
         retention: Duration.days(7),
         preferredWindow: "03:00-04:00",

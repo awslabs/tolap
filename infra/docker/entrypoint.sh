@@ -14,14 +14,6 @@
 
 set -eu
 
-require() {
-  eval "value=\${$1:-}"
-  if [ -z "$value" ]; then
-    echo "entrypoint: $1 is empty; refusing to start" >&2
-    exit 1
-  fi
-}
-
 # Either the deployed form (a secret the server reads) or the local one (a full
 # connection string). Requiring one of the two, rather than defaulting, keeps a
 # misconfigured task from starting and then failing every connection.
@@ -30,7 +22,14 @@ if [ -z "${DATABASE_SECRET_ID:-}" ] && [ -z "${DATABASE_URL:-}" ]; then
   exit 1
 fi
 
-require TOLAP_SIGNING_SECRET
+# Checked directly rather than through an indirect-expansion helper. The helper used
+# `eval` to dereference a variable name; with exactly one call site and a literal name
+# it was never reachable by external input, but a shell script with no `eval` at all is
+# a shorter thing to audit.
+if [ -z "${TOLAP_SIGNING_SECRET:-}" ]; then
+  echo "entrypoint: TOLAP_SIGNING_SECRET is empty; refusing to start" >&2
+  exit 1
+fi
 
 # The keyring form is `kid:secret`. `initial` is the kid the first deployment signs
 # with; rotating means adding a second pair and flipping TOLAP_ACTIVE_KID, which the

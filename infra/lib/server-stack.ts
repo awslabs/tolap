@@ -241,6 +241,11 @@ export class ServerStack extends Stack {
 
     const adminLb = new elbv2.ApplicationLoadBalancer(this, "AdminAlb", {
       vpc: props.vpc,
+      // Drop headers that are not valid HTTP. Without this, a header the ALB tolerates
+      // but the application parses differently is a request-smuggling primitive -- and
+      // this listener carries policy-authoring requests.
+      desyncMitigationMode: elbv2.DesyncMitigationMode.STRICTEST,
+      dropInvalidHeaderFields: true,
       // The whole point of the two-listener design. Reachable from the VPC and
       // anything peered to it; not from the internet.
       internetFacing: false,
@@ -271,6 +276,8 @@ export class ServerStack extends Stack {
     // anything in the VPC being publicly routable.
     const resolveLb = new elbv2.ApplicationLoadBalancer(this, "ResolveAlbInternal", {
       vpc: props.vpc,
+      desyncMitigationMode: elbv2.DesyncMitigationMode.STRICTEST,
+      dropInvalidHeaderFields: true,
       internetFacing: false,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
     });

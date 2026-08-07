@@ -1,5 +1,6 @@
-import { Stack, type StackProps } from "aws-cdk-lib";
+import { RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as logs from "aws-cdk-lib/aws-logs";
 import type { Construct } from "constructs";
 
 /**
@@ -46,6 +47,21 @@ export class NetworkStack extends Stack {
       // Interface endpoints below are addressed by DNS name.
       enableDnsHostnames: true,
       enableDnsSupport: true,
+      // Flow logs, because "which install called /v1/resolve" is answerable from the
+      // application audit log but "what else talked to the database subnet" is not.
+      // Retained a month: long enough to investigate, short enough not to become its
+      // own storage problem.
+      flowLogs: {
+        vpc: {
+          trafficType: ec2.FlowLogTrafficType.ALL,
+          destination: ec2.FlowLogDestination.toCloudWatchLogs(
+            new logs.LogGroup(this, "FlowLogs", {
+              retention: logs.RetentionDays.ONE_MONTH,
+              removalPolicy: RemovalPolicy.DESTROY,
+            }),
+          ),
+        },
+      },
     });
 
     // Keep secret retrieval and image pulls inside the VPC. Aside from removing a

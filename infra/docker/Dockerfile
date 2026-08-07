@@ -41,12 +41,14 @@ RUN npm ci --ignore-scripts \
  && npx tsc --build packages/core/tsconfig.json \
  && npx tsc --build packages/store/tsconfig.json
 
-WORKDIR /app
-COPY server/package.json server/package-lock.json ./server/
-RUN cd server && npm ci --omit=dev --ignore-scripts
+WORKDIR /app/server
+COPY server/package.json server/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts
 
-COPY server/src ./server/src
-COPY server/tsconfig.json ./server/
+COPY server/src ./src
+COPY server/tsconfig.json ./
+
+WORKDIR /app
 # The schemas are read at runtime by the validator, from ../../schema relative to
 # server/src. They are the normative artifact, so they are copied rather than
 # vendored into the server package.
@@ -60,4 +62,11 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 USER node
 
 EXPOSE 8080 8081
+
+# Mirrors the check in the ECS task definition, so the image is self-describing: run it
+# outside ECS and it still reports whether it is serving. Hits the admin listener on
+# loopback, which requires no credential (/health is the one unauthenticated route).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

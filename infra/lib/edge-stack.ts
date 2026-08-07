@@ -77,7 +77,33 @@ export class EdgeStack extends Stack {
   constructor(scope: Construct, id: string, props: EdgeStackProps) {
     super(scope, id, props);
 
+    // Access logs for both the distribution and the console bucket. The application
+    // audit log records policy changes and resolves; it does not record a request that
+    // WAF blocked or that never reached the origin, which is exactly what you want
+    // during an incident.
+    const logBucket = new s3.Bucket(this, "AccessLogs", {
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      // CloudFront writes logs with ACLs, which requires this ownership setting.
+      objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_PREFERRED,
+      // Versioned so a delete does not silently remove evidence. Deliberately NOT
+      // self-logging: a bucket that logs its own access recurses, writing a log line
+      // for every log line.
+      versioned: true,
+      lifecycleRules: [
+        { expiration: Duration.days(90) },
+        // Versioning plus a 90-day expiry would otherwise retain noncurrent versions
+        // forever.
+        { noncurrentVersionExpiration: Duration.days(90) },
+      ],
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+
     this.bucket = new s3.Bucket(this, "ConsoleBucket", {
+      serverAccessLogsBucket: logBucket,
+      serverAccessLogsPrefix: "console-bucket/",
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
@@ -310,6 +336,13 @@ export class EdgeStack extends Stack {
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       webAclId: webAcl.attrArn,
+      enableLogging: true,
+      logBucket,
+      logFilePrefix: "cloudfront/",
+      // Query strings carry userId/tenantId/sourceConnectionId on resolve calls, which
+      // is what makes a log line attributable to a request. They carry no credential --
+      // that is in the Authorization header, which CloudFront does not log.
+      logIncludesCookies: false,
       comment: "TOLAP policy server and console",
     });
 
