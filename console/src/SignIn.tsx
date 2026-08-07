@@ -15,7 +15,7 @@
  * because the whole console is testable without a pool.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { setToken } from "./api.ts";
 
 /** Cognito settings, injected at build time. */
@@ -115,16 +115,40 @@ export interface SignInProps {
 }
 
 export function SignIn({ onSignedIn, message }: SignInProps) {
-  const config = oidcConfig();
+  // Memoized because it is a dependency of the exchange effect below. Calling
+  // oidcConfig() in the render body returns a NEW object every render, which made the
+  // effect re-run on every state change -- and the second run found the verifier
+  // already consumed. The values come from build-time env, so there is nothing to
+  // recompute.
+  const config = useMemo(oidcConfig, []);
   const [manual, setManual] = useState("");
   const [error, setError] = useState<string | undefined>();
   const [exchanging, setExchanging] = useState(false);
+  /**
+   * Whether the code exchange has been started.
+   *
+   * A ref, not state: it must be set synchronously, before any await, so a second
+   * effect invocation sees it. State would not update until the next render, which is
+   * exactly the window that caused the bug.
+   *
+   * An OAuth authorization code is **single-use**. Exchanging it twice fails at
+   * Cognito, and the local verifier is consumed on the first attempt -- so the second
+   * attempt reported "No PKCE verifier" and the user was told to start over, from a
+   * page that had in fact just signed them in successfully.
+   */
+  const exchangeStarted = useRef(false);
 
   useEffect(() => {
     if (!config) return;
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code");
     if (!code) return;
+
+    // Guard before anything async. React 19's StrictMode double-invokes effects in
+    // development, and each setState below re-renders -- either would otherwise start
+    // a second exchange of a code that can only be used once.
+    if (exchangeStarted.current) return;
+    exchangeStarted.current = true;
 
     setExchanging(true);
     void completeLogin(config, code)
@@ -135,7 +159,12 @@ export function SignIn({ onSignedIn, message }: SignInProps) {
         window.history.replaceState({}, "", window.location.pathname);
         onSignedIn();
       })
-      .catch((caught: Error) => setError(caught.message))
+      .catch((caught: Error) => {
+        // Allow a retry: the code is spent, but the user needs to be able to press
+        // the button again rather than face a dead page.
+        exchangeStarted.current = false;
+        setError(caught.message);
+      })
       .finally(() => setExchanging(false));
   }, [config, onSignedIn]);
 

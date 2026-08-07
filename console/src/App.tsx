@@ -37,6 +37,14 @@ export function App() {
   const [tab, setTab] = useState<Tab>("policies");
   const [signedIn, setSignedIn] = useState(hasToken());
   const [error, setError] = useState<string | undefined>();
+  /**
+   * Whether a session has ended, as opposed to never having started.
+   *
+   * Without this the sign-in page told a first-time visitor "Your session ended",
+   * because it inferred that from `signedIn` being false -- which is also the initial
+   * state. Alarming and wrong.
+   */
+  const [sessionEnded, setSessionEnded] = useState(false);
 
   const loadMe = useCallback(async () => {
     try {
@@ -46,10 +54,19 @@ export function App() {
       if (caught instanceof ApiError && caught.isUnauthenticated) {
         setSignedIn(false);
         setMe(undefined);
+        setSessionEnded(true);
         return;
       }
       setError((caught as Error).message);
     }
+  }, []);
+
+  // Stable identity. Passed to SignIn, where it is a dependency of the code-exchange
+  // effect -- an inline arrow would be a new function every render and would restart
+  // an exchange of a single-use authorization code.
+  const handleSignedIn = useCallback(() => {
+    setSignedIn(true);
+    setSessionEnded(false);
   }, []);
 
   useEffect(() => {
@@ -58,6 +75,7 @@ export function App() {
     setUnauthenticatedHandler(() => {
       setSignedIn(false);
       setMe(undefined);
+      setSessionEnded(true);
     });
   }, []);
 
@@ -68,10 +86,12 @@ export function App() {
   if (!signedIn || !me) {
     return (
       <SignIn
-        onSignedIn={() => setSignedIn(true)}
+        onSignedIn={handleSignedIn}
         message={
           error ??
-          (signedIn ? undefined : "Your session ended. Sign in again to continue.")
+          (sessionEnded
+            ? "Your session ended. Sign in again to continue."
+            : undefined)
         }
       />
     );
