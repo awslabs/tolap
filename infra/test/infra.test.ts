@@ -17,8 +17,7 @@ import { NetworkStack } from "../lib/network-stack.ts";
 import { DatabaseStack } from "../lib/database-stack.ts";
 import { IdentityStack } from "../lib/identity-stack.ts";
 import { ServerStack } from "../lib/server-stack.ts";
-import { ConsoleStack } from "../lib/console-stack.ts";
-import { WafStack } from "../lib/waf-stack.ts";
+import { EdgeStack } from "../lib/edge-stack.ts";
 
 const env = { account: "123456789012", region: "us-east-1" };
 
@@ -29,16 +28,12 @@ function synth() {
     env,
     vpc: network.vpc,
   });
-  const consoleStack = new ConsoleStack(app, "TolapConsole", { env });
   const identity = new IdentityStack(app, "TolapIdentity", {
     env,
-    consoleUrls: ["https://example.cloudfront.net/"],
+    consoleUrls: ["http://localhost:5173/"],
   });
-  const waf = new WafStack(app, "TolapWaf", { env });
   const server = new ServerStack(app, "TolapServer", {
     env,
-    resolveWebAclArn: waf.resolveWebAclArn,
-    adminWebAclArn: waf.adminWebAclArn,
     vpc: network.vpc,
     cluster: database.cluster,
     databaseName: database.databaseName,
@@ -47,13 +42,22 @@ function synth() {
     adminGroupName: identity.adminGroupName,
     auditorGroupName: identity.auditorGroupName,
   });
+  const edge = new EdgeStack(app, "TolapEdge", {
+    env,
+    adminLoadBalancer: server.adminLoadBalancer,
+    resolveLoadBalancer: server.resolveLoadBalancer,
+    adminPort: server.adminPort,
+    resolvePort: server.resolvePort,
+    userPoolId: identity.userPool.userPoolId,
+    userPoolClientId: identity.userPoolClient.userPoolClientId,
+  });
+
   return {
     network: Template.fromStack(network),
     database: Template.fromStack(database),
     identity: Template.fromStack(identity),
     server: Template.fromStack(server),
-    console: Template.fromStack(consoleStack),
-    waf: Template.fromStack(waf),
+    edge: Template.fromStack(edge),
   };
 }
 
@@ -68,18 +72,6 @@ describe("the two-listener split", () => {
       "AWS::ElasticLoadBalancingV2::LoadBalancer",
       { Scheme: "internal" },
     );
-  });
-
-  it("exposes exactly one internet-facing load balancer", () => {
-    const balancers = templates.server.findResources(
-      "AWS::ElasticLoadBalancingV2::LoadBalancer",
-    );
-    const schemes = Object.values(balancers).map(
-      (r) => (r.Properties as { Scheme?: string }).Scheme,
-    );
-    expect(schemes).toHaveLength(2);
-    expect(schemes.filter((s) => s === "internet-facing")).toHaveLength(1);
-    expect(schemes.filter((s) => s === "internal")).toHaveLength(1);
   });
 
   it("routes the two listeners to different container ports", () => {
@@ -373,17 +365,69 @@ describe("database", () => {
   });
 });
 
-describe("console distribution", () => {
-  it("keeps the bucket private and redirects to HTTPS", () => {
-    templates.console.hasResourceProperties("AWS::S3::Bucket", {
-      PublicAccessBlockConfiguration: {
-        BlockPublicAcls: true,
-        BlockPublicPolicy: true,
-        IgnorePublicAcls: true,
-        RestrictPublicBuckets: true,
-      },
-    });
-    templates.console.hasResourceProperties("AWS::CloudFront::Distribution", {
+
+describe("the edge is the only public surface", () => {
+  it("keeps BOTH load balancers internal", () => {
+    // The property your constraint turns on: nothing in the VPC is internet-facing.
+    // The resolve balancer used to be public, which also published its
+    // unauthenticated /health.
+    const balancers = templates.server.findResources(
+      "AWS::ElasticLoadBalancingV2::LoadBalancer",
+    );
+    const schemes = Object.values(balancers).map(
+      (r) => (r.Properties as { Scheme?: string }).Scheme,
+    );
+    expect(schemes).toHaveLength(2);
+    expect(schemes.filter((s) => s === "internal")).toHaveLength(2);
+    expect(schemes).not.toContain("internet-facing");
+  });
+
+  it("reaches them over VPC origins, not public DNS", () => {
+    // A VPC origin is the private path from the edge into the subnets. Without it an
+    // internal ALB is unreachable from CloudFront and the design does not work.
+    const origins = templates.edge.findResources("AWS::CloudFront::VpcOrigin");
+    expect(Object.keys(origins)).toHaveLength(2);
+  });
+
+  it("points VPC origins at the ALB listener port, not the container port", () => {
+    // Caught a real 504. The origins were configured with 8080/8081 -- the ports the
+    // *task* listens on -- so CloudFront connected to a port the load balancer has no
+    // listener on and nothing answered. The listener accepts 80 and forwards to the
+    // container itself.
+    const origins = templates.edge.findResources("AWS::CloudFront::VpcOrigin");
+    expect(Object.keys(origins)).toHaveLength(2);
+    for (const origin of Object.values(origins)) {
+      const config = (
+        origin.Properties as {
+          VpcOriginEndpointConfig: { HTTPPort: number };
+        }
+      ).VpcOriginEndpointConfig;
+      expect(config.HTTPPort).toBe(80);
+    }
+
+    // And the ALB listeners really are on 80, so the two agree.
+    const listeners = templates.server.findResources(
+      "AWS::ElasticLoadBalancingV2::Listener",
+    );
+    for (const listener of Object.values(listeners)) {
+      expect((listener.Properties as { Port: number }).Port).toBe(80);
+    }
+  });
+
+  it("serves everything over HTTPS with an AWS-managed certificate", () => {
+    // No ACM certificate resource anywhere: *.cloudfront.net is covered by AWS, which
+    // is what removed the self-signed-certificate work entirely.
+    templates.edge.resourceCountIs("AWS::CertificateManager::Certificate", 0);
+    // No ViewerCertificate block at all: CloudFront then uses its own managed
+    // certificate for *.cloudfront.net. Its *absence* is the assertion -- there is
+    // nothing to renew and no DNS zone required, which is what deleted the
+    // self-signed-certificate work.
+    const config = Object.values(
+      templates.edge.findResources("AWS::CloudFront::Distribution"),
+    )[0]!.Properties as { DistributionConfig: Record<string, unknown> };
+    expect(config.DistributionConfig.ViewerCertificate).toBeUndefined();
+    // And viewers are still forced onto HTTPS.
+    templates.edge.hasResourceProperties("AWS::CloudFront::Distribution", {
       DistributionConfig: Match.objectLike({
         DefaultCacheBehavior: Match.objectLike({
           ViewerProtocolPolicy: "redirect-to-https",
@@ -392,10 +436,117 @@ describe("console distribution", () => {
     });
   });
 
-  it("serves index.html for deep links", () => {
-    // The console keeps view state client-side, so a refreshed deep link must not
-    // return S3's 403.
-    templates.console.hasResourceProperties("AWS::CloudFront::Distribution", {
+  it("never serves an API response from cache", () => {
+    // The failure this prevents: a cached /v1/resolve response is a signed artifact --
+    // a bearer credential for its whole TTL -- handed to whoever asks next.
+    // CACHING_DISABLED is AWS managed policy 4135ea2d-6df8-44a3-9df3-4b5a84be39ad.
+    const CACHING_DISABLED = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad";
+    const config = Object.values(
+      templates.edge.findResources("AWS::CloudFront::Distribution"),
+    )[0]!.Properties as {
+      DistributionConfig: {
+        CacheBehaviors: Array<{ PathPattern: string; CachePolicyId: string }>;
+      };
+    };
+
+    const apiPaths = config.DistributionConfig.CacheBehaviors.filter((b) =>
+      b.PathPattern.startsWith("/v1"),
+    );
+    expect(apiPaths.length).toBeGreaterThanOrEqual(2);
+    for (const behavior of apiPaths) {
+      expect(behavior.CachePolicyId).toBe(CACHING_DISABLED);
+    }
+  });
+
+  it("routes /v1/resolve separately from the admin API", () => {
+    // Distinct origins. A resolve request reaching the admin service would 401 in a
+    // way that looks like a credential problem rather than a routing one.
+    const config = Object.values(
+      templates.edge.findResources("AWS::CloudFront::Distribution"),
+    )[0]!.Properties as {
+      DistributionConfig: {
+        CacheBehaviors: Array<{ PathPattern: string; TargetOriginId: string }>;
+      };
+    };
+    const byPath = new Map(
+      config.DistributionConfig.CacheBehaviors.map((b) => [
+        b.PathPattern,
+        b.TargetOriginId,
+      ]),
+    );
+    expect(byPath.get("/v1/resolve")).toBeDefined();
+    expect(byPath.get("/v1/*")).toBeDefined();
+    expect(byPath.get("/v1/resolve")).not.toBe(byPath.get("/v1/*"));
+  });
+
+  it("carries the WAF at the edge, in CLOUDFRONT scope", () => {
+    // Better placement than the ALB: a blocked request never reaches the VPC. A
+    // REGIONAL scope here would not attach to a distribution at all.
+    templates.edge.hasResourceProperties("AWS::WAFv2::WebACL", {
+      Scope: "CLOUDFRONT",
+    });
+    // And it is actually associated -- an ACL attached to nothing inspects nothing.
+    templates.edge.hasResourceProperties("AWS::CloudFront::Distribution", {
+      DistributionConfig: Match.objectLike({ WebACLId: Match.anyValue() }),
+    });
+  });
+
+  it("keeps all four WAF rules with rate limiting first", () => {
+    const acl = Object.values(
+      templates.edge.findResources("AWS::WAFv2::WebACL"),
+    )[0]!.Properties as {
+      Rules: Array<{
+        Name: string;
+        Priority: number;
+        Action?: unknown;
+        OverrideAction?: unknown;
+        Statement: {
+          RateBasedStatement?: { Limit: number };
+          ManagedRuleGroupStatement?: { Name: string; ExcludedRules?: Array<{ Name: string }> };
+        };
+      }>;
+    };
+
+    const rate = acl.Rules.find((r) => r.Name === "RateLimitPerIp")!;
+    expect(rate.Action).toEqual({ Block: {} });
+    expect(Math.min(...acl.Rules.map((r) => r.Priority))).toBe(rate.Priority);
+
+    const managed = acl.Rules.filter(
+      (r) => r.Statement.ManagedRuleGroupStatement !== undefined,
+    );
+    expect(managed.map((r) => r.Statement.ManagedRuleGroupStatement!.Name)).toEqual(
+      expect.arrayContaining([
+        "AWSManagedRulesCommonRuleSet",
+        "AWSManagedRulesKnownBadInputsRuleSet",
+        "AWSManagedRulesSQLiRuleSet",
+      ]),
+    );
+    // Count mode would read as protection and block nothing.
+    for (const rule of managed) expect(rule.OverrideAction).toEqual({ None: {} });
+
+    // A real policy definition exceeds the 8KB body cap and would be blocked with an
+    // error the author cannot interpret.
+    const common = managed.find(
+      (r) => r.Statement.ManagedRuleGroupStatement!.Name === "AWSManagedRulesCommonRuleSet",
+    )!;
+    expect(
+      common.Statement.ManagedRuleGroupStatement!.ExcludedRules,
+    ).toEqual([{ Name: "SizeRestrictions_BODY" }]);
+  });
+
+  it("keeps the console bucket private behind origin access control", () => {
+    templates.edge.hasResourceProperties("AWS::S3::Bucket", {
+      PublicAccessBlockConfiguration: {
+        BlockPublicAcls: true,
+        BlockPublicPolicy: true,
+        IgnorePublicAcls: true,
+        RestrictPublicBuckets: true,
+      },
+    });
+  });
+
+  it("serves index.html for console deep links", () => {
+    templates.edge.hasResourceProperties("AWS::CloudFront::Distribution", {
       DistributionConfig: Match.objectLike({
         CustomErrorResponses: Match.arrayWith([
           Match.objectLike({ ErrorCode: 403, ResponsePagePath: "/index.html" }),
@@ -403,124 +554,14 @@ describe("console distribution", () => {
       }),
     });
   });
-});
 
-describe("WAF", () => {
-  it("creates a regional ACL for each load balancer", () => {
-    // REGIONAL, not CLOUDFRONT: a CLOUDFRONT-scoped ACL must live in us-east-1 and
-    // cannot attach to an ALB at all.
-    const acls = templates.waf.findResources("AWS::WAFv2::WebACL");
-    expect(Object.keys(acls)).toHaveLength(2);
-    for (const acl of Object.values(acls)) {
-      expect((acl.Properties as { Scope: string }).Scope).toBe("REGIONAL");
-    }
-  });
-
-  it("attaches an ACL to both load balancers", () => {
-    // An ACL that exists but is associated with nothing is the failure mode worth
-    // testing: it looks configured and inspects no traffic.
-    const associations = templates.server.findResources(
-      "AWS::WAFv2::WebACLAssociation",
-    );
-    expect(Object.keys(associations)).toHaveLength(2);
-  });
-
-  it("rate-limits by source IP as the first rule", () => {
-    // First so a flood is shed before the managed rule groups are evaluated against
-    // it. The limit bounds how fast a stolen install credential can harvest
-    // artifacts, which matters because each one is replayable for its whole TTL.
-    const acls = templates.waf.findResources("AWS::WAFv2::WebACL");
-    for (const acl of Object.values(acls)) {
-      const rules = (acl.Properties as {
-        Rules: Array<{ Name: string; Priority: number; Statement: Record<string, unknown>; Action?: unknown }>;
-      }).Rules;
-      const rateRule = rules.find((r) => r.Name === "RateLimitPerIp");
-      expect(rateRule).toBeDefined();
-      expect(rateRule!.Statement.RateBasedStatement).toBeDefined();
-      expect(rateRule!.Action).toEqual({ Block: {} });
-      // Lowest priority number wins evaluation order.
-      expect(Math.min(...rules.map((r) => r.Priority))).toBe(rateRule!.Priority);
-    }
-  });
-
-  it("holds the admin surface to a tighter limit than machine traffic", () => {
-    // The admin API is a handful of humans in a browser; anything near the
-    // agent-traffic ceiling is not one.
-    const acls = Object.values(templates.waf.findResources("AWS::WAFv2::WebACL"));
-    const limits = acls.map((acl) => {
-      const rules = (acl.Properties as {
-        Rules: Array<{ Name: string; Statement: { RateBasedStatement?: { Limit: number } } }>;
-      }).Rules;
-      return rules.find((r) => r.Name === "RateLimitPerIp")!.Statement
-        .RateBasedStatement!.Limit;
-    });
-    expect(Math.min(...limits)).toBeLessThan(Math.max(...limits));
-  });
-
-  it("enables the three managed rule sets in blocking mode", () => {
-    const acls = Object.values(templates.waf.findResources("AWS::WAFv2::WebACL"));
-    for (const acl of acls) {
-      const rules = (acl.Properties as {
-        Rules: Array<{
-          Name: string;
-          OverrideAction?: Record<string, unknown>;
-          Statement: { ManagedRuleGroupStatement?: { Name: string } };
-        }>;
-      }).Rules;
-      const managed = rules
-        .filter((r) => r.Statement.ManagedRuleGroupStatement !== undefined)
-        .map((r) => r.Statement.ManagedRuleGroupStatement!.Name);
-
-      expect(managed).toContain("AWSManagedRulesCommonRuleSet");
-      expect(managed).toContain("AWSManagedRulesKnownBadInputsRuleSet");
-      expect(managed).toContain("AWSManagedRulesSQLiRuleSet");
-
-      // `Count` would make every managed rule observe-only, which reads as protection
-      // and blocks nothing.
-      for (const rule of rules.filter(
-        (r) => r.Statement.ManagedRuleGroupStatement !== undefined,
-      )) {
-        expect(rule.OverrideAction).toEqual({ None: {} });
-      }
-    }
-  });
-
-  it("exempts the body-size rule so real policy writes are not blocked", () => {
-    // A policy definition legitimately carries hundreds of field names; the managed
-    // rule caps a body at 8KB and would reject it with a WAF block the author cannot
-    // interpret.
-    const acls = Object.values(templates.waf.findResources("AWS::WAFv2::WebACL"));
-    for (const acl of acls) {
-      const common = (acl.Properties as {
-        Rules: Array<{
-          Statement: {
-            ManagedRuleGroupStatement?: { Name: string; ExcludedRules?: Array<{ Name: string }> };
-          };
-        }>;
-      }).Rules.find(
-        (r) =>
-          r.Statement.ManagedRuleGroupStatement?.Name ===
-          "AWSManagedRulesCommonRuleSet",
-      );
-      expect(
-        common!.Statement.ManagedRuleGroupStatement!.ExcludedRules,
-      ).toEqual([{ Name: "SizeRestrictions_BODY" }]);
-    }
-  });
-
-  it("emits CloudWatch metrics for every rule", () => {
-    // A blocked request nobody can see is indistinguishable from a request that never
-    // arrived, which makes a false positive impossible to diagnose.
-    const acls = Object.values(templates.waf.findResources("AWS::WAFv2::WebACL"));
-    for (const acl of acls) {
-      const properties = acl.Properties as {
-        VisibilityConfig: { CloudWatchMetricsEnabled: boolean };
-        Rules: Array<{ VisibilityConfig: { CloudWatchMetricsEnabled: boolean } }>;
-      };
-      expect(properties.VisibilityConfig.CloudWatchMetricsEnabled).toBe(true);
-      for (const rule of properties.Rules) {
-        expect(rule.VisibilityConfig.CloudWatchMetricsEnabled).toBe(true);
-      }
-    }
+  it("registers its URL as an OAuth callback, scoped to the one pool", () => {
+    // Breaks the identity -> edge -> server -> identity cycle without leaving the
+    // callback as a manual step, which fails at sign-in with an opaque Cognito error.
+    const body = JSON.stringify(templates.edge.toJSON());
+    expect(body).toMatch(/UpdateUserPoolClient/);
+    // Not a wildcard: this must not be able to reconfigure other applications'
+    // clients in the same account.
+    expect(body).not.toMatch(/"cognito-idp:UpdateUserPoolClient"[^}]*"Resource":\s*"\*"/);
   });
 });

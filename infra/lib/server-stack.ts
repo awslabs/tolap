@@ -12,7 +12,6 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
 import type * as rds from "aws-cdk-lib/aws-rds";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
-import * as wafv2 from "aws-cdk-lib/aws-wafv2";
 import type * as cognito from "aws-cdk-lib/aws-cognito";
 import type { Construct } from "constructs";
 import path from "node:path";
@@ -31,32 +30,38 @@ export interface ServerStackProps extends StackProps {
   readonly auditorGroupName: string;
   /** Artifact lifetime. Capped at 3600 by the server itself. */
   readonly ttlSeconds?: number;
-  /** Web ACL for the resolve load balancer. */
-  readonly resolveWebAclArn?: string;
-  /** Web ACL for the admin load balancer. */
-  readonly adminWebAclArn?: string;
 }
 
 /**
- * The policy server on Fargate, behind two load balancers.
+ * The policy server on Fargate, behind two internal load balancers.
  *
- * The split is the point: the admin API is on an **internal** ALB, so the surface
- * that authors policy is reachable only from inside the VPC or a connected network,
- * while `/v1/resolve` is public because remote installs are remote.
- * `canonical-enforcement-spec.md` §13 says policy authors are trusted
- * administrators; keeping that surface off the internet is what makes the deployment
- * match the assumption.
+ * **Nothing here is internet-facing.** Both balancers are internal and CloudFront
+ * reaches them over VPC origins (see `EdgeStack`), so the only public surface is the
+ * edge -- which terminates TLS with an AWS-managed certificate and carries the WAF.
+ *
+ * The two balancers still exist separately, because the path split is what lets the
+ * edge route `/v1/resolve` to the machine-facing service and everything else to the
+ * admin service. `canonical-enforcement-spec.md` §13 assumes policy authors are
+ * trusted administrators, and keeping the authoring surface off any publicly routable
+ * address is what makes the deployment match that assumption.
+ *
+ * An earlier revision made the resolve balancer internet-facing so remote installs
+ * could reach it. That also published its unauthenticated `/health`, and a VPC origin
+ * gives the same reachability with nothing exposed.
  */
 export class ServerStack extends Stack {
   readonly signingSecret: secretsmanager.Secret;
-  readonly resolveUrl: string;
-  readonly adminUrl: string;
+  /** Both internal. CloudFront reaches them over VPC origins -- see EdgeStack. */
+  readonly adminLoadBalancer: elbv2.ApplicationLoadBalancer;
+  readonly resolveLoadBalancer: elbv2.ApplicationLoadBalancer;
+  readonly adminPort = 8080;
+  readonly resolvePort = 8081;
 
   constructor(scope: Construct, id: string, props: ServerStackProps) {
     super(scope, id, props);
 
-    const adminPort = 8080;
-    const resolvePort = 8081;
+    const adminPort = this.adminPort;
+    const resolvePort = this.resolvePort;
 
     // -- Signing key ---------------------------------------------------------
 
@@ -260,17 +265,21 @@ export class ServerStack extends Stack {
 
     // -- Resolve ALB (internet-facing) ---------------------------------------
 
-    const resolveLb = new elbv2.ApplicationLoadBalancer(this, "ResolveAlb", {
+    // Internal, like the admin balancer. Previously internet-facing, which is what
+    // exposed its unauthenticated /health to the internet. CloudFront now reaches it
+    // over a VPC origin, so remote installs get a public HTTPS endpoint without
+    // anything in the VPC being publicly routable.
+    const resolveLb = new elbv2.ApplicationLoadBalancer(this, "ResolveAlbInternal", {
       vpc: props.vpc,
-      internetFacing: true,
-      vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
+      internetFacing: false,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
     });
 
-    const resolveListener = resolveLb.addListener("ResolveListener", {
+    const resolveListener = resolveLb.addListener("ResolveListenerV2", {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
     });
-    resolveListener.addTargets("ResolveTarget", {
+    resolveListener.addTargets("ResolveTargetV2", {
       port: resolvePort,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [
@@ -284,45 +293,25 @@ export class ServerStack extends Stack {
       deregistrationDelay: Duration.seconds(15),
     });
 
-    // WAF is a bound on abuse, not an authentication control -- every route already
-    // requires a credential. Its job is to cap how much a *stolen* credential can
-    // extract, which matters because a signed artifact is replayable for its whole
-    // TTL (spec section 13) and /v1/resolve is what mints them.
-    if (props.adminWebAclArn !== undefined) {
-      new wafv2.CfnWebACLAssociation(this, "AdminWafAssociation", {
-        resourceArn: adminLb.loadBalancerArn,
-        webAclArn: props.adminWebAclArn,
-      });
-    }
-    if (props.resolveWebAclArn !== undefined) {
-      new wafv2.CfnWebACLAssociation(this, "ResolveWafAssociation", {
-        resourceArn: resolveLb.loadBalancerArn,
-        webAclArn: props.resolveWebAclArn,
-      });
-    }
-
-    this.adminUrl = `http://${adminLb.loadBalancerDnsName}`;
-    this.resolveUrl = `http://${resolveLb.loadBalancerDnsName}`;
+    // WAF is attached at the CloudFront edge instead of here (see EdgeStack). Better
+    // placement: a blocked request never reaches the VPC, and with both balancers
+    // internal there is no path that bypasses the edge.
+    this.adminLoadBalancer = adminLb;
+    this.resolveLoadBalancer = resolveLb;
 
     // -- Outputs -------------------------------------------------------------
 
-    new CfnOutput(this, "AdminApiUrl", {
-      value: this.adminUrl,
-      description:
-        "Admin API (internal ALB). Reachable from the VPC or a connected network only.",
+    new CfnOutput(this, "AdminAlbDnsName", {
+      value: adminLb.loadBalancerDnsName,
+      description: "Internal admin ALB. Public access is through CloudFront only.",
     });
-    new CfnOutput(this, "ResolveApiUrl", {
-      value: this.resolveUrl,
-      description: "GET /v1/resolve -- the endpoint remote installs call",
+    new CfnOutput(this, "ResolveAlbDnsName", {
+      value: resolveLb.loadBalancerDnsName,
+      description: "Internal resolve ALB. Public access is through CloudFront only.",
     });
     new CfnOutput(this, "SigningKeySecretArn", {
       value: this.signingSecret.secretArn,
       description: "Secrets Manager ARN of the artifact signing key",
-    });
-    new CfnOutput(this, "TlsReminder", {
-      value:
-        "Both listeners are HTTP. Attach an ACM certificate and an HTTPS listener before carrying real policy: a signed artifact is a bearer credential for its whole TTL.",
-      description: "Action required before production use",
     });
   }
 }
