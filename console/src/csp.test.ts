@@ -52,6 +52,33 @@ function builtPolicy(env: Record<string, string> = {}): string {
   }
 }
 
+/**
+ * The index.html a real `vite dev` server serves.
+ *
+ * Run in a child process: importing vite here would pull esbuild into the jsdom
+ * environment, which fails its own `TextEncoder` invariant check.
+ */
+function devServedHtml(): string {
+  const script = `
+    const { createServer } = await import("vite");
+    const server = await createServer({ configFile: ${JSON.stringify(
+      path.resolve(import.meta.dirname, "../vite.config.ts"),
+    )}, server: { port: 0, middlewareMode: false }, logLevel: "silent" });
+    const { readFileSync } = await import("node:fs");
+    const raw = readFileSync(${JSON.stringify(
+      path.resolve(import.meta.dirname, "../index.html"),
+    )}, "utf8");
+    process.stdout.write(await server.transformIndexHtml("/index.html", raw));
+    await server.close();
+  `;
+  return execFileSync("node", ["--input-type=module", "-e", script], {
+    cwd: path.resolve(import.meta.dirname, ".."),
+    env: { ...process.env, VITE_COGNITO_DOMAIN: DOMAIN },
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
 describe("generated Content-Security-Policy", () => {
   const policy = builtPolicy();
 
@@ -95,5 +122,23 @@ describe("generated Content-Security-Policy", () => {
     const unconfigured = builtPolicy({ VITE_COGNITO_DOMAIN: "" });
     expect(unconfigured).toContain("connect-src 'self'");
     expect(unconfigured).not.toContain("amazoncognito.com");
+  });
+
+  it("is not injected during dev, where it blocks React from mounting", () => {
+    // The regression this guards, found in a browser: `script-src 'self'` forbids inline
+    // script and the React plugin's HMR preamble *is* inline, so with the meta injected
+    // in dev the browser blocked it, React never mounted, and every page rendered blank
+    // with only "@vitejs/plugin-react can't detect preamble" in the console.
+    //
+    // Asserted by asking a real dev server for the page it would serve, rather than by
+    // inspecting config: what matters is the HTML the browser receives.
+    const html = devServedHtml();
+
+    // The meta tag specifically -- index.html also *mentions* the header in a comment.
+    expect(html).not.toMatch(/http-equiv="Content-Security-Policy"/);
+
+    // And the thing the policy was breaking is present, so this test would still fail if
+    // the preamble stopped being inline and the assertion above became vacuous.
+    expect(html).toContain("injectIntoGlobalHook");
   });
 });

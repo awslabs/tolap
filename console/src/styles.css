@@ -563,3 +563,118 @@ td button {
   word-break: break-all;
   white-space: pre-wrap;
 }
+
+/* -- Rule editors (masking, row filters, methods) -------------------------- */
+
+.rule-editor {
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.rule-editor__list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+}
+
+.rule-editor__row {
+  border-left: 2px solid var(--border);
+  margin-bottom: 10px;
+  padding-left: 10px;
+}
+
+.rule-editor__inputs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* The field name is the part most worth reading, so it gets the room. */
+.rule-editor__inputs input[type="text"] {
+  flex: 1 1 200px;
+}
+
+.rule-editor__inputs select {
+  flex: 0 1 auto;
+  width: auto;
+}
+
+.rule-editor__inputs textarea {
+  flex: 1 1 200px;
+}
+
+.rule-editor__inputs button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  flex: 0 0 auto;
+  padding: 4px 10px;
+}
+
+/* Explains a choice; must not compete with the control it describes. */
+.rule-editor__note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+/* A rule that will not do what the author intended. Same treatment as the
+   not-in-catalog chip, since it is the same class of mistake. */
+.rule-editor__warning {
+  background: var(--warn-bg);
+  border-radius: 4px;
+  color: var(--warn-fg);
+  font-size: 12px;
+  margin: 4px 0 0;
+  padding: 4px 8px;
+}
+
+.method-grid {
+  display: grid;
+  gap: 4px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  margin: 8px 0;
+}
+
+.method-grid__item {
+  align-items: center;
+  display: flex;
+  font-weight: 400;
+  gap: 6px;
+  margin: 0;
+}
+
+/* Mask parameters: a short row of small labelled controls under a rule. */
+.rule-editor__params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 6px 0 0;
+}
+
+.rule-editor__param {
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  font-weight: 400;
+  gap: 3px;
+  margin: 0;
+}
+
+/* Numbers and single characters need a box, not a column. */
+.rule-editor__param input,
+.rule-editor__param select {
+  color: var(--text);
+  padding: 4px 6px;
+  width: auto;
+}
+
+.rule-editor__param input[type="number"] {
+  width: 6em;
+}
+
+.rule-editor__param input[maxlength="1"] {
+  width: 3.5em;
+}

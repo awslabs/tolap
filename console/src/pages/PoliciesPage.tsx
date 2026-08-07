@@ -18,6 +18,10 @@ import {
   type ValidationError,
 } from "../api.ts";
 import { FieldPicker } from "../components/FieldPicker.tsx";
+import { EndpointPicker, MethodPicker } from "../components/EndpointPicker.tsx";
+import { MaskedFieldEditor } from "../components/MaskedFieldEditor.tsx";
+import { RowFilterEditor } from "../components/RowFilterEditor.tsx";
+import { TagPicker } from "../components/TagPicker.tsx";
 
 const BLANK: PolicyDefinition = {
   version: "1.0",
@@ -184,6 +188,53 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
         : current,
     );
   };
+
+  const patchEndpointRules = (
+    change: Partial<
+      NonNullable<NonNullable<PolicyDefinition["objectRules"]>["endpointRules"]>
+    >,
+  ) => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            objectRules: {
+              ...current.objectRules,
+              endpointRules: { ...current.objectRules?.endpointRules, ...change },
+            },
+          }
+        : current,
+    );
+  };
+
+  const patchTagRules = (
+    change: Partial<
+      NonNullable<NonNullable<PolicyDefinition["objectRules"]>["tagRules"]>
+    >,
+  ) => {
+    setDraft((current) =>
+      current
+        ? {
+            ...current,
+            objectRules: {
+              ...current.objectRules,
+              tagRules: { ...current.objectRules?.tagRules, ...change },
+            },
+          }
+        : current,
+    );
+  };
+
+  /**
+   * The selected source's category, which decides which sections are relevant.
+   *
+   * Taken from the manifest rather than guessed from the policy: the category is a
+   * segment of the source id (`db:`, `api:`, `kb:`, `storage:`) and the connector spec
+   * makes it the thing that decides which rules an enforcement wrapper even reads.
+   * Showing endpoint rules for a database source would invite authoring a rule that is
+   * silently ignored.
+   */
+  const category = manifest?.category;
 
   const act = async (label: string, action: () => Promise<unknown>) => {
     setStatus(undefined);
@@ -419,6 +470,18 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
                   pick real object and field names instead of typing them.
                 </p>
               ) : null}
+              {manifest ? (
+                <p className="hint">
+                  <span className="badge">{manifest.category}</span>{" "}
+                  {manifest.objects.length} object(s),{" "}
+                  {manifest.objects.reduce((n, o) => n + o.fields.length, 0)} field(s)
+                  {manifest.endpoints.length > 0
+                    ? `, ${manifest.endpoints.length} endpoint(s)`
+                    : ""}
+                  {manifest.tags.length > 0 ? `, ${manifest.tags.length} tag(s)` : ""}
+                  {". Sections below are filtered to this category."}
+                </p>
+              ) : null}
 
               <FieldPicker
                 label="Allowed objects"
@@ -462,7 +525,111 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
                   })
                 }
               />
+
+              <FieldPicker
+                label="Read-only fields"
+                manifest={manifest}
+                selected={draft.objectRules?.fieldRules?.readOnlyFields ?? []}
+                describedBy="readonly-fields-hint"
+                onChange={(next) =>
+                  patchFieldRules({
+                    readOnlyFields: next.length > 0 ? next : undefined,
+                  })
+                }
+              />
+              <p className="hint" id="readonly-fields-hint">
+                Readable but not writable. No effect on reads; a write whose payload
+                contains one of these is rejected outright.
+              </p>
             </fieldset>
+
+            <fieldset disabled={readOnly}>
+              <legend>Masking</legend>
+              <MaskedFieldEditor
+                rules={draft.objectRules?.fieldRules?.maskedFields ?? []}
+                manifest={manifest}
+                onChange={(next) =>
+                  patchFieldRules({
+                    maskedFields: next.length > 0 ? next : undefined,
+                  })
+                }
+              />
+            </fieldset>
+
+            <fieldset disabled={readOnly}>
+              <legend>Rows</legend>
+              <RowFilterEditor
+                filters={draft.objectRules?.rowFilters ?? []}
+                manifest={manifest}
+                onChange={(next) =>
+                  patchObjectRules({ rowFilters: next.length > 0 ? next : undefined })
+                }
+              />
+            </fieldset>
+
+            {/*
+              Category-gated sections. Endpoint rules do not constrain a SQL query and
+              tag rules do not constrain an API call -- the connector spec has each
+              wrapper read only the fields for its own category -- so authoring them
+              against the wrong source type produces rules that are silently ignored.
+              Shown when the selected source is that category, or when the policy
+              already carries such rules (so an existing policy is never un-editable).
+            */}
+            {category === "api" ||
+            draft.objectRules?.endpointRules !== undefined ? (
+              <fieldset disabled={readOnly}>
+                <legend>API endpoints</legend>
+                <EndpointPicker
+                  label="Allowed endpoints"
+                  manifest={manifest}
+                  selected={draft.objectRules?.endpointRules?.allowedEndpoints ?? []}
+                  onChange={(next) =>
+                    patchEndpointRules({
+                      allowedEndpoints: next.length > 0 ? next : undefined,
+                    })
+                  }
+                />
+                <EndpointPicker
+                  label="Hidden endpoints"
+                  manifest={manifest}
+                  selected={draft.objectRules?.endpointRules?.hiddenEndpoints ?? []}
+                  onChange={(next) =>
+                    patchEndpointRules({
+                      hiddenEndpoints: next.length > 0 ? next : undefined,
+                    })
+                  }
+                />
+                <MethodPicker
+                  manifest={manifest}
+                  selected={draft.objectRules?.endpointRules?.allowedMethods}
+                  onChange={(next) => patchEndpointRules({ allowedMethods: next })}
+                />
+              </fieldset>
+            ) : null}
+
+            {category === "kb" || draft.objectRules?.tagRules !== undefined ? (
+              <fieldset disabled={readOnly}>
+                <legend>Knowledge-base tags</legend>
+                <TagPicker
+                  label="Allowed tags"
+                  semantics="allow"
+                  manifest={manifest}
+                  selected={draft.objectRules?.tagRules?.allowedTags ?? []}
+                  onChange={(next) =>
+                    patchTagRules({ allowedTags: next.length > 0 ? next : undefined })
+                  }
+                />
+                <TagPicker
+                  label="Denied tags"
+                  semantics="deny"
+                  manifest={manifest}
+                  selected={draft.objectRules?.tagRules?.deniedTags ?? []}
+                  onChange={(next) =>
+                    patchTagRules({ deniedTags: next.length > 0 ? next : undefined })
+                  }
+                />
+              </fieldset>
+            ) : null}
 
             <fieldset disabled={readOnly}>
               <legend>Limits</legend>
@@ -489,6 +656,61 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
                 {/* Zero is meaningful, which a minimum of 1 would forbid expressing. */}
                 Empty means unlimited. <code>0</code> is valid and returns nothing.
               </p>
+
+              {category === "kb" || draft.limits?.minSimilarityScore !== undefined ? (
+                <>
+                  <label htmlFor="min-similarity">Minimum similarity score</label>
+                  <input
+                    id="min-similarity"
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={draft.limits?.minSimilarityScore ?? ""}
+                    placeholder="no threshold"
+                    onChange={(event) =>
+                      patch({
+                        limits: {
+                          ...draft.limits,
+                          minSimilarityScore:
+                            event.target.value === ""
+                              ? undefined
+                              : Number(event.target.value),
+                        },
+                      })
+                    }
+                  />
+                  <p className="hint">
+                    Vector-search floor, 0 to 1. Higher is more restrictive — it drops
+                    weaker matches.
+                  </p>
+                </>
+              ) : null}
+
+              {category === "storage" ||
+              draft.limits?.maxObjectSizeBytes !== undefined ? (
+                <>
+                  <label htmlFor="max-object-size">Max object size (bytes)</label>
+                  <input
+                    id="max-object-size"
+                    type="number"
+                    min={1}
+                    value={draft.limits?.maxObjectSizeBytes ?? ""}
+                    placeholder="unlimited"
+                    onChange={(event) =>
+                      patch({
+                        limits: {
+                          ...draft.limits,
+                          maxObjectSizeBytes:
+                            event.target.value === ""
+                              ? undefined
+                              : Number(event.target.value),
+                        },
+                      })
+                    }
+                  />
+                </>
+              ) : null}
             </fieldset>
 
             {errors.length > 0 ? (

@@ -13,6 +13,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { runDotnet } from "./helpers/dotnet.ts";
 import { validateContext, validatePolicy, type EffectivePolicy } from "@tolap/core";
 import { Keyring, KeyringError } from "../src/signing/keyring.ts";
 import { buildSignedArtifact, encodeArtifact } from "../src/signing/artifact.ts";
@@ -315,10 +316,9 @@ Console.WriteLine("kid=" + root.GetProperty("kid").GetString());`,
       );
       writeFileSync(path.join(dir, "artifact.json"), JSON.stringify(artifact));
 
-      const stdout = execFileSync(
-        "dotnet",
+      const stdout = runDotnet(
         ["run", "--framework", "net9.0", "--", path.join(dir, "artifact.json")],
-        { cwd: dir, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+        dir,
       );
       expect(stdout).toContain("valid=True");
       expect(stdout).toContain("kid=2026-08");

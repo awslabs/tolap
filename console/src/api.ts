@@ -124,7 +124,22 @@ export interface PolicyPermissions {
 export interface MaskingRule {
   field: string;
   maskType: "full" | "partial" | "hash" | "null" | "redact";
-  parameters?: Record<string, unknown>;
+  parameters?: MaskParameters;
+}
+
+/**
+ * Mask parameters, spelled out rather than left as an open record.
+ *
+ * The schema closes this object to exactly these four keys, so an open
+ * `Record<string, unknown>` would let the console build a rule that only fails at save
+ * time. Which key applies depends on the mask type: `showFirst`/`showLast` on `partial`,
+ * `maskChar` on `partial` and `full`, `algorithm` on `hash`.
+ */
+export interface MaskParameters {
+  showFirst?: number;
+  showLast?: number;
+  maskChar?: string;
+  algorithm?: "sha256" | "sha512" | "blake2b";
 }
 
 export interface RowFilter {

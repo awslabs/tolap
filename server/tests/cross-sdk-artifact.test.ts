@@ -26,6 +26,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { runDotnet } from "./helpers/dotnet.ts";
 import {
   validateContext,
   validatePolicy,
@@ -281,10 +282,9 @@ Console.WriteLine(JsonSerializer.Serialize(new {
       );
       writeFileSync(path.join(dir, "artifact.json"), JSON.stringify(artifact));
 
-      const stdout = execFileSync(
-        "dotnet",
+      const stdout = runDotnet(
         ["run", "--framework", "net9.0", "--", path.join(dir, "artifact.json")],
-        { cwd: dir, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"] },
+        dir,
       );
 
       // `dotnet run` prints build noise before program output; take the JSON line.

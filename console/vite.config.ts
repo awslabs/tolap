@@ -55,6 +55,13 @@ function cspPlugin(cognitoDomain: string | undefined): Plugin {
 
   return {
     name: "tolap-csp",
+    // Build only. `script-src 'self'` forbids inline script, and the React plugin's dev
+    // HMR preamble *is* an inline script -- with the meta injected during `vite dev` the
+    // browser blocks it, React never mounts, and every page renders blank with only
+    // "can't detect preamble" in the console. Dev is a localhost-only server with no
+    // token and no deployed origin, so the policy has nothing to protect there; the
+    // shipped artifact still carries it, which is what production loads.
+    apply: "build",
     transformIndexHtml() {
       return [
         {
