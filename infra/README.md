@@ -9,8 +9,23 @@ npx cdk bootstrap                 # once per account/region
 npm run deploy
 ```
 
-Outputs include the resolve endpoint URL, the console URL, and the ARNs of the two
+`cdk deploy` needs a container builder. If you use finch rather than docker, set
+`CDK_DOCKER=finch`.
+
+Outputs include one URL that serves the console and both APIs, and the ARNs of the two
 secrets you need — the seeded administrator's credentials and the signing key.
+
+The console is built and uploaded separately, because its bundle needs the Cognito
+domain and client id that this app outputs:
+
+```bash
+cd ../console
+VITE_COGNITO_DOMAIN=<CognitoDomain output> \
+VITE_COGNITO_CLIENT_ID=<UserPoolClientId output> \
+VITE_REDIRECT_URI=<Url output>/ npm run build
+aws s3 sync dist/ s3://<ConsoleBucketName output>/ --delete
+aws cloudfront create-invalidation --distribution-id <DistributionId output> --paths '/*'
+```
 
 ## What it creates
 
@@ -19,28 +34,44 @@ secrets you need — the seeded administrator's credentials and the signing key.
 | `TolapNetwork` | VPC, two AZs, private subnets with egress, VPC endpoints for Secrets Manager and ECR |
 | `TolapDatabase` | Aurora PostgreSQL Serverless v2 (0.5–4 ACU), private, encrypted, 7-day backups |
 | `TolapIdentity` | Cognito user pool, `tolap-admin` / `tolap-auditor` groups, app client with PKCE, **a seeded admin user whose credentials go to Secrets Manager** |
-| `TolapServer` | Fargate service, internal ALB for the admin API, internet-facing ALB for `/v1/resolve`, signing key in Secrets Manager, schema migration on deploy |
-| `TolapConsole` | S3 bucket plus CloudFront distribution serving the console |
+| `TolapServer` | Fargate service, two **internal** ALBs, signing key in Secrets Manager, schema migration on deploy |
+| `TolapEdge` | CloudFront: console from S3, both APIs over VPC origins, WAF at the edge |
 
 ## Topology
 
 ```
-   administrators ──► CloudFront (console) ──┐
-                                             ├──► internal ALB :8080  admin API
-   (VPN / Direct Connect / bastion) ─────────┘         (Cognito JWT)
-
-   remote installs ─────────────────────────────► public ALB :8081  /v1/resolve
-                                                       (install credential)
+                        ┌─────────── CloudFront (one distribution) ───────────┐
+   administrators ──────►  /            → S3 (console)                        │
+   remote installs ─────►  /v1/resolve  → VPC origin → internal ALB :80 →8081 │
+                        │  /v1/*        → VPC origin → internal ALB :80 →8080 │
+                        └──── AWS-managed TLS · WAF (CLOUDFRONT scope) ───────┘
 ```
 
-The admin ALB is **internal**: the policy-authoring surface is reachable only from
-inside the VPC or a connected network. `canonical-enforcement-spec.md` §13 states
-policy authors are trusted administrators, so keeping that surface off the internet
-matches the threat model the SDKs were designed against. `/v1/resolve` is public
-because remote installs are, by definition, remote.
+**Nothing in the VPC is internet-facing.** Both load balancers are internal, and
+CloudFront reaches them over **VPC origins** — a private path from the edge into the
+subnets. Verified: both ALB hostnames time out from the public internet, while the
+same endpoints answer through the distribution.
 
-The console is static files on CloudFront and calls the admin API directly, so the
-browser needs the same network reachability as any other admin client.
+That arrangement solves two problems at once:
+
+- **TLS is free and trusted.** `*.cloudfront.net` carries an AWS-managed certificate
+  that renews itself, so there is no certificate to generate, import, or rotate and no
+  DNS zone required. The alternative for an account with no domain is a private CA
+  (~$400/month) or a self-signed certificate no client can verify.
+- **No unauthenticated public endpoint.** Every `/v1/*` route requires a credential,
+  and `/health` — which an ALB health check cannot authenticate — is now only reachable
+  through the edge rather than on a public balancer.
+
+One distribution rather than two means the console calls the API **same-origin**, so
+there is no CORS policy to misconfigure on a policy-authoring API.
+
+Caching is **disabled** on the `/v1/*` behaviours, and asserted in a test. CloudFront
+is a cache in front of an API, and a cached `/v1/resolve` response is a signed
+artifact — a bearer credential for its whole TTL (§13) — handed to whoever asks next.
+
+`canonical-enforcement-spec.md` §13 states policy authors are trusted administrators.
+Keeping the authoring surface off any publicly routable address is what makes the
+deployment match that assumption.
 
 ## The seeded administrator
 
@@ -85,11 +116,21 @@ group-scoped policy assignments resolve: `/v1/resolve` is called by an install o
 behalf of a user, so there is no user token to read `cognito:groups` from and the
 server asks the pool.
 
+## Single tenant, by design
+
+One deployment serves **one tenant**, and any authenticated administrator sees every
+policy. Policy definitions carry no tenant id, so this is a property of the design
+rather than a gap to fix — deploy a second stack for a second tenant.
+
+Assignment `scope.tenantId` still exists and is honored at resolve time: it narrows
+*which assignments apply* to a principal. What it does not do is isolate the admin
+surface.
+
 ## Cost
 
 Aurora Serverless v2 idles at 0.5 ACU and one Fargate task runs continuously, so
-expect a small but non-zero standing bill, plus two ALBs and a NAT gateway. `npm run
-destroy` removes everything; the database has `RemovalPolicy.SNAPSHOT`, so a final
+expect a small but non-zero standing bill, plus two ALBs, a NAT gateway and a
+CloudFront distribution. `npm run destroy` removes everything; the database has `RemovalPolicy.SNAPSHOT`, so a final
 snapshot is retained and is billed until you delete it.
 
 ## A note on `npm audit`

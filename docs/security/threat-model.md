@@ -161,7 +161,7 @@ output, commit-pinned, plus live-service test transcripts under `security/aws/` 
 
 ---
 
-## 5. Defects found and fixed since revision 1
+## 6. Defects found and fixed since revision 1
 
 Recorded here because each one refines the threat model: all four were **fail-opens** — a control
 that appeared to be applied while enforcing nothing — and three were invisible to unit tests because

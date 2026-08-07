@@ -26,22 +26,42 @@ input, so this server has no data-source secret store to compromise. The source
 catalog exists so the console can offer dropdowns, and it is populated by upload or
 import — never by the server dialing a database.
 
-## Two ports, on purpose
+## Single tenant, by design
+
+One deployment serves **one tenant**, and any authenticated administrator sees every
+policy. Policy definitions carry no tenant id, so this is a deliberate property rather
+than a gap — run a second deployment for a second tenant.
+
+Assignment `scope.tenantId` still exists and is honored at resolve time: it narrows
+*which assignments apply* to a principal. What it does not do is isolate the admin
+surface, so do not read it as cross-tenant separation.
+
+## Two listeners, one public edge
+
+The server binds two ports, and in the reference deployment neither is publicly
+routable:
 
 ```
- administrators ──HTTPS──> :8080  admin API + console      (Cognito JWT)
- remote installs ─HTTPS──> :8081  GET /v1/resolve          (install credential)
+ administrators ─┐                        ┌─ :8080  admin API   (Cognito JWT)
+                 ├─ HTTPS ─ CloudFront ───┤
+ remote installs ┘   (managed TLS, WAF)   └─ :8081  /v1/resolve (install credential)
 ```
+
+Both load balancers are **internal**; CloudFront reaches them over VPC origins. See
+[`infra/README.md`](../infra/README.md) for the topology and why it is arranged that
+way — in short, it gets trusted TLS with no certificate to manage and leaves nothing
+in the VPC internet-facing.
 
 `docs/canonical-enforcement-spec.md` §13 states plainly that **policy authors are
 trusted administrators** and that a deliberately malicious policy is outside the
-threat model. A deployment that widens write access past that assumption has left
-the model the SDKs were designed against.
+threat model. A deployment that widens write access past that assumption has left the
+model the SDKs were designed against.
 
-Splitting the listeners lets you bind the authoring surface to a private subnet or
-a restricted security group while remote installs reach only the resolve port. It
-is defense in depth, not the control itself — the route guards are the control, and
-a single-interface deployment is still safe.
+Splitting the listeners is what lets the edge route `/v1/resolve` to the
+machine-facing service and everything else to the authoring surface, and it lets a
+non-CloudFront deployment bind them to different interfaces. It is defense in depth,
+not the control itself — the route guards are the control, and a single-interface
+deployment is still safe.
 
 ## Administrator authentication — Amazon Cognito
 
