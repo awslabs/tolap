@@ -181,6 +181,37 @@ describe("importSqlDdl", () => {
     expect(manifest.objects[0].fields).toEqual(["real_column"]);
   });
 
+  it("strips an unterminated block comment without rescanning", () => {
+    // CodeQL `js/polynomial-redos`, and it was real: the previous
+    // `/\/\*[\s\S]*?\*\//g` restarted a lazy scan to end-of-input at every `/*`, so
+    // `"a/*".repeat(n)` -- many openings, none closed -- cost ~1s at 150 KB and rose with
+    // the square. One Fargate task serves both the admin API and `/v1/resolve`, so
+    // stalling the event loop delays policy resolution for every install, not just the
+    // import.
+    //
+    // A time assertion, because the defect *is* the time: the old implementation returns
+    // the same answer, just far too slowly. The bound is loose enough not to flake on a
+    // loaded CI box and still ~1000x under the quadratic cost at this size.
+    const hostile = "CREATE TABLE t (real_column text);" + "a/*".repeat(200_000);
+
+    const started = performance.now();
+    const manifest = importSqlDdl("db:a:b", hostile);
+    const elapsed = performance.now() - started;
+
+    expect(manifest.objects[0]!.fields).toEqual(["real_column"]);
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it("treats an unterminated block comment as running to the end", () => {
+    // Which is what the SQL engines do, and it must not swallow earlier columns.
+    const manifest = importSqlDdl(
+      "db:a:b",
+      `CREATE TABLE t (kept text); /* CREATE TABLE hidden (secret text);`,
+    );
+    expect(manifest.objects.map((o) => o.name)).toEqual(["t"]);
+    expect(manifest.objects[0]!.fields).toEqual(["kept"]);
+  });
+
   it("reads several tables and sorts them", () => {
     const manifest = importSqlDdl(
       "db:a:b",

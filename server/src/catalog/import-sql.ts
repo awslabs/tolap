@@ -14,11 +14,40 @@
 
 import { ManifestError, parseManifest, type SourceManifest } from "./manifest.ts";
 
-/** Strip `-- line` and block comments so they cannot hide or fake a column. */
+/**
+ * Strip `-- line` and block comments so they cannot hide or fake a column.
+ *
+ * The block-comment pass is a hand-written scan rather than
+ * `/\/\*[\s\S]*?\*\//g`, which is quadratic on input the *author controls*: for
+ * `"a/*".repeat(n)` — many comment openings, none of them closed — the engine restarts a
+ * lazy scan to end-of-input at every `/*`. Measured at ~1s for 150 KB and rising with the
+ * square, so a body inside Fastify's 1 MB default could stall the event loop for tens of
+ * seconds. One Fargate task serves both the admin API and `/v1/resolve`, so that is not
+ * merely a slow import: it delays policy resolution for every install.
+ *
+ * `indexOf` makes it linear — each character is examined once — and an unterminated
+ * comment drops the remainder, which is what the SQL engines do too.
+ */
 function stripComments(sql: string): string {
-  return sql
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\n]*/g, " ");
+  let out = "";
+  let index = 0;
+
+  for (;;) {
+    const open = sql.indexOf("/*", index);
+    if (open === -1) {
+      out += sql.slice(index);
+      break;
+    }
+    out += sql.slice(index, open) + " ";
+
+    const close = sql.indexOf("*/", open + 2);
+    // Unterminated: everything after it is inside the comment.
+    if (close === -1) break;
+    index = close + 2;
+  }
+
+  // Linear already: the character class cannot backtrack across the newline.
+  return out.replace(/--[^\n]*/g, " ");
 }
 
 /** Unquote an identifier: `"users"`, `` `users` ``, `[users]`, or bare. */

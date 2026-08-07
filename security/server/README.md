@@ -71,6 +71,53 @@ stating next to the scan results:
 - **Single tenant by design.** Any authenticated administrator sees every policy — see
   [`../../docs/policy-server.md`](../../docs/policy-server.md#single-tenant-by-design).
 
+### CodeQL: a real ReDoS in the SQL importer
+
+The scan set here was Semgrep, Trivy and `npm audit` — all of which passed the SQL
+importer. **CodeQL did not**, and it was right: `js/polynomial-redos`, high severity, on
+the block-comment stripper.
+
+`/\/\*[\s\S]*?\*\//g` restarts a lazy scan to end-of-input at every `/*`, so an input made
+of many unclosed comment openings — `"a/*".repeat(n)` — costs quadratic time. Measured
+before the fix:
+
+| input | time |
+|---|---|
+| 150 KB | 964 ms |
+| 600 KB | ~15 s |
+
+Uploaded DDL is administrator-supplied, so this is not remote-unauthenticated, but the
+consequence is larger than a slow import: the same Fargate task serves `/v1/resolve`, so
+stalling the event loop delays policy resolution for **every install**. Fixed by scanning
+with `indexOf` (linear, and an unterminated comment drops the remainder — what the SQL
+engines do). 964 ms → 1 ms; 600 KB now takes 2 ms.
+
+Two things came out of this worth keeping:
+
+- **CodeQL is now run locally**, not only in CI. It was the only tool in the set that
+  models super-linear regex backtracking, and it found this on the pull request rather
+  than before it. `## Reproducing` below has the commands.
+- **The admin app now states its `bodyLimit`** (2 MB) instead of inheriting Fastify's
+  1 MB default, because that limit is what bounds importer work and therefore belongs
+  where it can be seen.
+
+The regression test asserts elapsed time, since the defect *is* the time — the vulnerable
+version returns the same answer. Mutation-verified: restoring the old regex fails it at
+15.5 s against a 2 s bound.
+
+### CodeQL: `js/missing-rate-limiting` on 24 admin routes — mitigated at the edge
+
+True of the code and mitigated by infrastructure CodeQL cannot see. Every `/v1/*` route is
+reachable only through CloudFront, whose WAF evaluates a rate-based rule **first**, before
+the managed groups, at 2000 requests per 5 minutes per IP (`infra/lib/edge-stack.ts`). The
+ALBs are internal, so there is no path to these routes that skips it.
+
+Not additionally fixed in-process. A per-route limiter would be a new dependency in the
+authenticated admin path duplicating a control that already exists one hop earlier, and
+per-IP is the wrong key for a distributed limiter anyway. If a future deployment fronts
+this server with something other than CloudFront, the WAF rule is the thing that must be
+replaced — which is the reason this is written down rather than suppressed.
+
 ### Cleared rather than annotated: JSON Pointer resolution in the OpenAPI importer
 
 Semgrep flags `prototype-pollution-loop` on the `$ref` resolver, where a segment of a
@@ -121,6 +168,19 @@ and is served only from `/`, so there were no deep links to rescue in the first 
 semgrep scan --config p/security-audit --config p/secrets --config p/owasp-top-ten \
   --exclude node_modules --exclude dist --exclude cdk.out --exclude coverage \
   server/ console/ infra/
+
+# CodeQL. Run this: it is the only tool here that models super-linear regex
+# backtracking, and it is what caught the ReDoS the others missed. The path filters are
+# not cosmetic -- without them cdk.out and coverage/ are scanned too, and every finding
+# appears three times with two of them pointing at stale build output.
+cat > /tmp/codeql-paths.yml <<'YAML'
+paths: [server/src, server/tools, console/src, infra/lib]
+paths-ignore: ["**/cdk.out", "**/coverage", "**/node_modules", "**/dist"]
+YAML
+codeql database create /tmp/tolap-db --language=javascript-typescript \
+  --source-root=. --overwrite --codescanning-config=/tmp/codeql-paths.yml
+codeql database analyze /tmp/tolap-db javascript-security-and-quality.qls \
+  --format=sarif-latest --output=/tmp/tolap.sarif --download
 
 # Dependencies — production posture is the meaningful one
 for d in server console infra; do (cd $d && npm audit --omit=dev); done

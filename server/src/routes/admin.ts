@@ -458,7 +458,21 @@ export const adminRoutes =
   };
 
 export function buildAdminApp(deps: AdminDeps): FastifyInstance {
-  const app = Fastify({ logger: false });
+  const app = Fastify({
+    logger: false,
+    // Stated rather than inherited. Fastify defaults to 1 MB, which is already the
+    // bound on how much work an uploaded OpenAPI document or SQL dump can ask the
+    // importers to do -- so it is a security parameter here and belongs where it can
+    // be seen and changed. 2 MB because a real `pg_dump --schema-only` of a wide
+    // schema exceeds 1 MB and being unable to import it is a worse failure than the
+    // extra megabyte.
+    //
+    // The importers are linear in input size, which is a property with a regression
+    // test (see the ReDoS test in tests/catalog.test.ts) rather than an assumption:
+    // a quadratic parser turns any limit into an event-loop stall, and this task also
+    // serves policy resolution.
+    bodyLimit: 2 * 1024 * 1024,
+  });
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof AuthorizationError) {
