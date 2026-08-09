@@ -18,6 +18,12 @@
  *    Every read path filters `revoked_at IS NULL`, and revocation is a tombstone
  *    only because the audit trail needs the history -- not because the row stays
  *    live.
+ *
+ * Every listing an HTTP route can reach is paginated (`page*` below) rather than
+ * returning the table. One Node process serves both this admin API and
+ * `/v1/resolve`, so a listing that materializes an unbounded result set stalls
+ * policy resolution for every install -- see `pagination.ts` for the reasoning and
+ * the chosen bounds.
  */
 
 import type {
@@ -34,6 +40,18 @@ import type {
 import type { Pool } from "pg";
 import type { InstallRecord } from "../auth/guards.ts";
 import type { SourceManifest } from "../catalog/manifest.ts";
+import {
+  cursorInteger,
+  cursorTimestamp,
+  cursorUuid,
+  decodeCursor,
+  encodeCursor,
+  normalizeLimit,
+  timestampCursorSql,
+  toPage,
+  type Page,
+  type PageRequest,
+} from "./pagination.ts";
 
 /** Who performed a write, for the audit log. */
 export interface Actor {
@@ -51,6 +69,21 @@ export interface PolicyVersion {
   readonly note: string | null;
   readonly createdBy: string;
   readonly createdAt: Date;
+}
+
+/**
+ * What the admin API may say about a registered install.
+ *
+ * Named rather than inlined so the absence of `credentialHash` is a stated shape
+ * one place, not a property of one query's projection. The credential is stored
+ * only as a hash and must not appear in a listing an auditor can read.
+ */
+export interface InstallSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly createdAt: Date;
+  readonly revokedAt: Date | null;
+  readonly lastSeenAt: Date | null;
 }
 
 export interface AuditEntry {
@@ -161,21 +194,67 @@ export class PostgresPolicyStore implements PolicyStore {
     );
   }
 
-  async listAudit(limit = 200): Promise<AuditEntry[]> {
+  /**
+   * One page of the audit log, newest first.
+   *
+   * Ordered by `(at DESC, id DESC)` because `at` alone is not unique -- several
+   * rows land in the same instant on any write that records more than one event --
+   * and a keyset comparison on a non-unique key either skips or repeats the tied
+   * rows. `idx_audit_at` covers the ordering; the `id` tiebreak comes free from the
+   * primary key.
+   *
+   * Keyset rather than OFFSET, and here the reason is stronger than performance:
+   * this table is append-only and written to constantly, so every insert during a
+   * paged walk would shift an OFFSET window and silently drop an entry. Losing an
+   * audit entry from a compliance export is not a cosmetic defect.
+   */
+  async pageAudit(request: PageRequest = {}): Promise<Page<AuditEntry>> {
+    const limit = normalizeLimit(request.limit);
+    const cursor = decodeCursor(request.cursor, 2);
+    const at = timestampCursorSql("at");
+
+    // limit + 1: the extra row is how "there is a next page" is known, rather than
+    // inferred from a full page (which hands out a cursor to an empty page).
     const { rows } = await this.pool.query(
-      `SELECT at, actor, actor_kind, action, target_kind, target_id, detail
-       FROM tolap_audit ORDER BY at DESC, id DESC LIMIT $1`,
-      [Math.min(Math.max(limit, 1), 1000)],
+      `SELECT at, actor, actor_kind, action, target_kind, target_id, detail,
+              ${at} AS cursor_at, id::text AS cursor_id
+       FROM tolap_audit
+       WHERE $1::timestamptz IS NULL
+          OR (at, id) < ($1::timestamptz, $2::bigint)
+       ORDER BY at DESC, id DESC
+       LIMIT $3`,
+      cursor
+        ? [cursorTimestamp(cursor[0]!), cursorInteger(cursor[1]!), limit + 1]
+        : [null, null, limit + 1],
     );
-    return rows.map((r) => ({
-      at: r.at,
-      actor: r.actor,
-      actorKind: r.actor_kind,
-      action: r.action,
-      targetKind: r.target_kind,
-      targetId: r.target_id,
-      detail: r.detail,
-    }));
+
+    return toPage(
+      rows,
+      limit,
+      (r) => ({
+        at: r.at,
+        actor: r.actor,
+        actorKind: r.actor_kind,
+        action: r.action,
+        targetKind: r.target_kind,
+        targetId: r.target_id,
+        detail: r.detail,
+      }),
+      (r) => encodeCursor([r.cursor_at, r.cursor_id]),
+    );
+  }
+
+  /**
+   * The newest `limit` audit entries, without a cursor.
+   *
+   * A convenience over {@link pageAudit} for in-process callers that want the tail
+   * of the log; the HTTP route uses the paged form so a caller can reach older
+   * entries. Bounded by the same ceiling -- a helper that could materialize the
+   * whole table would reintroduce exactly the failure pagination is here to
+   * prevent.
+   */
+  async listAudit(limit = 200): Promise<AuditEntry[]> {
+    return (await this.pageAudit({ limit })).items;
   }
 
   // -- Definitions ---------------------------------------------------------
@@ -233,11 +312,54 @@ export class PostgresPolicyStore implements PolicyStore {
     return rows.length ? (rows[0].policy_json as PolicyDefinition) : undefined;
   }
 
+  /**
+   * Every definition, unpaginated. Satisfies the SDK's `PolicyStore` interface,
+   * whose signature has no room for a bound.
+   *
+   * Not reachable from HTTP: `GET /v1/policies` goes through
+   * {@link pageDefinitions}. Kept because the interface requires it and an
+   * in-process caller that genuinely wants all policies (a bulk export) should not
+   * have to loop -- but adding a route that calls this would put an unbounded read
+   * back on the request path that also serves policy resolution.
+   */
   async listDefinitions(): Promise<PolicyDefinition[]> {
     const { rows } = await this.pool.query(
       "SELECT policy_json FROM tolap_policies ORDER BY name",
     );
     return rows.map((r) => r.policy_json as PolicyDefinition);
+  }
+
+  /**
+   * One page of definitions, ordered by name.
+   *
+   * `name` is the primary key, so it is unique and the keyset comparison needs no
+   * tiebreaker. The comparison uses the same collation as the `ORDER BY`, which is
+   * what makes "everything after this name" and "the next rows in order" the same
+   * set -- a cursor compared under a different collation would skip rows.
+   *
+   * `policy_json` is selected and returned exactly as stored. Nothing on this path
+   * inspects, rebuilds or normalizes the body: section 3 makes `[]` and `null`
+   * opposites for an allow-list, so a page that "tidied" an empty array would turn
+   * deny-everything into unrestricted.
+   */
+  async pageDefinitions(request: PageRequest = {}): Promise<Page<PolicyDefinition>> {
+    const limit = normalizeLimit(request.limit);
+    const cursor = decodeCursor(request.cursor, 1);
+
+    const { rows } = await this.pool.query(
+      `SELECT name, policy_json FROM tolap_policies
+       WHERE $1::text IS NULL OR name > $1::text
+       ORDER BY name
+       LIMIT $2`,
+      [cursor ? cursor[0] : null, limit + 1],
+    );
+
+    return toPage(
+      rows,
+      limit,
+      (r) => r.policy_json as PolicyDefinition,
+      (r) => encodeCursor([r.name]),
+    );
   }
 
   async deleteDefinition(name: string): Promise<boolean> {
@@ -414,21 +536,55 @@ export class PostgresPolicyStore implements PolicyStore {
     return newVersion;
   }
 
-  async listVersions(name: string): Promise<PolicyVersion[]> {
+  /**
+   * One page of a policy's version history, newest first.
+   *
+   * Bounded even though this is scoped to a single policy. The table is
+   * append-only and every publish, rollback and saved draft adds a row carrying a
+   * full policy body, so an actively edited policy's history is one of the largest
+   * payloads this API can produce -- unbounded by anything except how often someone
+   * pressed save.
+   *
+   * `(name, version_no)` is the primary key, so within one name `version_no` is
+   * unique and needs no tiebreaker. `idx_policy_versions_name` matches the
+   * ordering.
+   */
+  async pageVersions(
+    name: string,
+    request: PageRequest = {},
+  ): Promise<Page<PolicyVersion>> {
+    const limit = normalizeLimit(request.limit);
+    const cursor = decodeCursor(request.cursor, 1);
+
     const { rows } = await this.pool.query(
       `SELECT name, version_no, policy_json, state, note, created_by, created_at
-       FROM tolap_policy_versions WHERE name = $1 ORDER BY version_no DESC`,
-      [name],
+       FROM tolap_policy_versions
+       WHERE name = $1
+         AND ($2::int IS NULL OR version_no < $2::int)
+       ORDER BY version_no DESC
+       LIMIT $3`,
+      [name, cursor ? cursorInteger(cursor[0]!) : null, limit + 1],
     );
-    return rows.map((r) => ({
-      name: r.name,
-      versionNo: r.version_no,
-      policy: r.policy_json as PolicyDefinition,
-      state: r.state,
-      note: r.note,
-      createdBy: r.created_by,
-      createdAt: r.created_at,
-    }));
+
+    return toPage(
+      rows,
+      limit,
+      (r) => ({
+        name: r.name,
+        versionNo: r.version_no,
+        policy: r.policy_json as PolicyDefinition,
+        state: r.state,
+        note: r.note,
+        createdBy: r.created_by,
+        createdAt: r.created_at,
+      }),
+      (r) => encodeCursor([String(r.version_no)]),
+    );
+  }
+
+  /** The newest page of versions. See {@link pageVersions} for the bound. */
+  async listVersions(name: string, limit?: number): Promise<PolicyVersion[]> {
+    return (await this.pageVersions(name, { ...(limit !== undefined ? { limit } : {}) })).items;
   }
 
   // -- Assignments ---------------------------------------------------------
@@ -483,6 +639,15 @@ export class PostgresPolicyStore implements PolicyStore {
     );
   }
 
+  /**
+   * Every live assignment, unpaginated. Required by the SDK's `PolicyStore`
+   * interface, which has no parameter for a bound.
+   *
+   * Not reachable from HTTP -- `GET /v1/assignments` uses
+   * {@link pageAssignments}. Assignments are the table most likely to grow without
+   * anyone watching (one row per grant, per assignee, per scope), so this is the
+   * one to keep off the request path.
+   */
   async listAssignments(
     assigneeIdentifier?: string,
   ): Promise<PolicyAssignment[]> {
@@ -494,6 +659,55 @@ export class PostgresPolicyStore implements PolicyStore {
       [assigneeIdentifier ?? null],
     );
     return (rows as AssignmentRow[]).map(toAssignment);
+  }
+
+  /**
+   * One page of live assignments, newest grant first.
+   *
+   * `revoked_at IS NULL` is on this path as it is on every other read path. Spec
+   * section 12 requires a revoked assignment to stop resolving, and a listing that
+   * showed revoked rows as live would make an administrator believe access exists
+   * that does not -- or, worse, re-grant around it.
+   *
+   * Keyset on `(granted_at, id)`: `granted_at` is not unique (a bulk grant script
+   * writes many rows in one instant) and `id` is the primary key, so the pair is.
+   * One honest caveat: `granted_at` is *rewritten* when an existing grant is
+   * updated in place (see `putAssignmentAs`), so a row edited mid-walk can move
+   * ahead of the cursor and be missed on this pass. That is a property of the
+   * ordering, not of keyset -- an OFFSET walk would shift every later row instead,
+   * which is worse -- and the row is not lost, it appears on the next walk.
+   */
+  async pageAssignments(
+    assigneeIdentifier: string | undefined,
+    request: PageRequest = {},
+  ): Promise<Page<PolicyAssignment>> {
+    const limit = normalizeLimit(request.limit);
+    const cursor = decodeCursor(request.cursor, 2);
+    const grantedAt = timestampCursorSql("granted_at");
+
+    const { rows } = await this.pool.query(
+      `SELECT *, ${grantedAt} AS cursor_granted_at, id::text AS cursor_id
+       FROM tolap_assignments
+       WHERE revoked_at IS NULL
+         AND ($1::text IS NULL OR assignee_id = $1)
+         AND ($2::timestamptz IS NULL
+              OR (granted_at, id) < ($2::timestamptz, $3::uuid))
+       ORDER BY granted_at DESC, id DESC
+       LIMIT $4`,
+      [
+        assigneeIdentifier ?? null,
+        cursor ? cursorTimestamp(cursor[0]!) : null,
+        cursor ? cursorUuid(cursor[1]!) : null,
+        limit + 1,
+      ],
+    );
+
+    return toPage(
+      rows as Array<AssignmentRow & { cursor_granted_at: string; cursor_id: string }>,
+      limit,
+      toAssignment,
+      (r) => encodeCursor([r.cursor_granted_at, r.cursor_id]),
+    );
   }
 
   async deleteAssignment(
@@ -659,6 +873,37 @@ export class PostgresPolicyStore implements PolicyStore {
     return rows.length ? (rows[0].manifest_json as SourceManifest) : undefined;
   }
 
+  /**
+   * One page of source manifests, ordered by connection id (the primary key, so
+   * unique -- no tiebreaker needed).
+   *
+   * The row count here is small; the *payload* is not. A manifest holds every
+   * object, field, endpoint and tag of a data source, and an imported `pg_dump` of
+   * a wide schema is megabytes on its own. Twenty of those serialized into one
+   * response is the memory cliff this bound exists for, which is why the ceiling is
+   * a row count on this endpoint too rather than being skipped as unnecessary.
+   */
+  async pageSources(request: PageRequest = {}): Promise<Page<SourceManifest>> {
+    const limit = normalizeLimit(request.limit);
+    const cursor = decodeCursor(request.cursor, 1);
+
+    const { rows } = await this.pool.query(
+      `SELECT source_connection_id, manifest_json FROM tolap_sources
+       WHERE $1::text IS NULL OR source_connection_id > $1::text
+       ORDER BY source_connection_id
+       LIMIT $2`,
+      [cursor ? cursor[0] : null, limit + 1],
+    );
+
+    return toPage(
+      rows,
+      limit,
+      (r) => r.manifest_json as SourceManifest,
+      (r) => encodeCursor([r.source_connection_id]),
+    );
+  }
+
+  /** Every source manifest. In-process callers only; the route pages. */
   async listSources(): Promise<SourceManifest[]> {
     const { rows } = await this.pool.query(
       "SELECT manifest_json FROM tolap_sources ORDER BY source_connection_id",
@@ -719,26 +964,53 @@ export class PostgresPolicyStore implements PolicyStore {
     return revoked;
   }
 
-  async listInstalls(): Promise<
-    Array<{
-      id: string;
-      name: string;
-      createdAt: Date;
-      revokedAt: Date | null;
-      lastSeenAt: Date | null;
-    }>
-  > {
+  /**
+   * One page of registered installs, newest first.
+   *
+   * Never selects `credential_hash`. The column is deliberately absent from the
+   * projection rather than dropped in the mapping below, so a later `SELECT *`
+   * refactor cannot leak it into a response an auditor can read -- the listing is
+   * asserted not to contain it.
+   *
+   * Keyset on `(created_at, id)`: `created_at` defaults to `now()` and a seeding
+   * script registers several installs in one transaction, all sharing an instant,
+   * so the `id` primary key is the tiebreaker that makes the key unique.
+   */
+  async pageInstalls(request: PageRequest = {}): Promise<Page<InstallSummary>> {
+    const limit = normalizeLimit(request.limit);
+    const cursor = decodeCursor(request.cursor, 2);
+    const createdAt = timestampCursorSql("created_at");
+
     const { rows } = await this.pool.query(
-      `SELECT id, name, created_at, revoked_at, last_seen_at
-       FROM tolap_installs ORDER BY created_at DESC`,
+      `SELECT id, name, created_at, revoked_at, last_seen_at,
+              ${createdAt} AS cursor_created_at
+       FROM tolap_installs
+       WHERE $1::timestamptz IS NULL
+          OR (created_at, id) < ($1::timestamptz, $2::text)
+       ORDER BY created_at DESC, id DESC
+       LIMIT $3`,
+      cursor
+        ? [cursorTimestamp(cursor[0]!), cursor[1], limit + 1]
+        : [null, null, limit + 1],
     );
-    return rows.map((r) => ({
-      id: r.id,
-      name: r.name,
-      createdAt: r.created_at,
-      revokedAt: r.revoked_at,
-      lastSeenAt: r.last_seen_at,
-    }));
+
+    return toPage(
+      rows,
+      limit,
+      (r) => ({
+        id: r.id,
+        name: r.name,
+        createdAt: r.created_at,
+        revokedAt: r.revoked_at,
+        lastSeenAt: r.last_seen_at,
+      }),
+      (r) => encodeCursor([r.cursor_created_at, r.id]),
+    );
+  }
+
+  /** The newest page of installs. See {@link pageInstalls} for the bound. */
+  async listInstalls(limit?: number): Promise<InstallSummary[]> {
+    return (await this.pageInstalls({ ...(limit !== undefined ? { limit } : {}) })).items;
   }
 
   async touchInstall(id: string): Promise<void> {

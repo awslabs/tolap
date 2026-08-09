@@ -109,6 +109,58 @@ administrators, and a deployment that widens that has left the threat model.
 
 Nothing in `sdk/`, `schema/` or `fixtures/` changed.
 
+### Added — bounded, keyset pagination on every admin list endpoint
+
+`GET /v1/policies`, `/v1/assignments`, `/v1/catalog`, `/v1/installs`,
+`/v1/policies/:name/versions` and `/v1/audit` now return one bounded page plus a
+`nextCursor`. Previously the first five returned every row, and `/v1/audit`
+accepted any integer — `?limit=100000000` read the whole log into one response.
+
+This is an availability control, not a nicety. The admin API and `/v1/resolve` are
+two Fastify instances in **one** Node process on one Fargate task, so a listing
+that materializes and serializes a whole table does not merely make that request
+slow: it stalls the event loop and the pool that every install's policy resolution
+depends on, and an install that cannot resolve gets **no** access rather than no
+restrictions. The `TaskMemoryHigh` alarm at 85% exists because these listings were
+unbounded.
+
+Three decisions, each with a defensible opposite:
+
+- **An out-of-range `limit` is refused with `400`, never clamped.** Clamping always
+  returns something, but it returns fewer rows than asked for *with no signal that
+  it did* — and on the audit log a reviewer who requests 100000 entries and
+  silently receives 500 concludes there were only 500 events. Default 200 (what
+  `/v1/audit` already used, so no existing caller changes behavior), ceiling 500
+  (the largest page any first-party caller asks for today). The same rule on every
+  endpoint, so a caller never has to remember which ones lie.
+- **Keyset, not `OFFSET`.** `OFFSET n` walks and discards n rows, and any insert
+  between two requests shifts every later row — which silently skips or repeats
+  entries. On an append-only audit log written to constantly, skipping is losing
+  evidence. Every table paged here has a stable unique key (a primary key, or a
+  timestamp with the primary key as tiebreaker), so there is no fallback to explain.
+- **Cursors carry microseconds.** Postgres keeps microsecond precision and a JS
+  `Date` keeps milliseconds, so a cursor round-tripped through the driver's value
+  would truncate — and two rows written inside one millisecond would land on the
+  wrong side of the comparison, one of them dropped. The cursor is rendered in SQL
+  with `to_char(… 'US')` and base64url-encoded, because a `+` in a cursor decodes as
+  a space and the next page starts from the wrong row.
+
+`server/tests/pagination.test.ts` asserts the default, the ceiling, each rejected
+value, and a full walk with no gaps and no duplicates per endpoint — always with
+more rows than one page, since a pagination test that fits in a single page proves
+only that `LIMIT` accepts a number. The tied-timestamp fixtures write every row
+with an *identical* timestamp so the primary-key tiebreak carries the whole
+ordering, which is the case a keyset walk gets wrong when its key is not unique.
+Mutation-checked: removing the `id` tiebreak, truncating the cursor to
+milliseconds, clamping instead of rejecting, and deriving "there is more" from a
+full page each fail the suite.
+
+Paging does not touch a policy body — `policy_json` is selected and returned as
+stored, because §3 makes `[]` and `null` opposites for an allow-list and a listing
+that "tidied" an empty array would convert deny-everything into unrestricted.
+`store-null-vs-empty.test.ts` is unchanged and still passes; the new suite adds a
+case proving the paged path is not an exception to it.
+
 ### Fixed — found in the deployed stack, not by a scanner
 
 Three defects in the new components, all found by exercising the running system rather

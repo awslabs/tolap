@@ -485,6 +485,76 @@ authority on what a policy may say, so a stale manifest would start blocking leg
 policies. And nothing is flagged before a source is imported, since warning on every value
 with nothing to compare against trains the author to ignore the warning that matters.
 
+## Listing anything: bounded pages, keyset cursors
+
+Every list endpoint returns one bounded page, never the table:
+
+```
+GET /v1/policies?limit=200&cursor=…
+GET /v1/assignments?limit=200&cursor=…      # also takes ?assignee=
+GET /v1/catalog?limit=200&cursor=…
+GET /v1/installs?limit=200&cursor=…
+GET /v1/policies/:name/versions?limit=200&cursor=…
+GET /v1/audit?limit=200&cursor=…
+```
+
+The response shape is the same on all six — the route's own key plus `nextCursor`,
+so a client writes the paging loop once:
+
+```json
+{ "entries": [ … ], "nextCursor": "eyJ…" }
+```
+
+`nextCursor` is **present and `null`** on the last page rather than omitted. An
+absent field would make "no more pages" indistinguishable from "this endpoint does
+not paginate", and a caller loops until it is `null`.
+
+Passing neither parameter returns the first page at the default size, so an
+unpaginated caller still works — it just sees the first or newest *N* rows rather
+than everything.
+
+**Why any of this.** One Node process serves both this admin API and `/v1/resolve`
+(see "Two listeners" above). A listing that materializes and serializes a whole
+table does not merely make that one request slow — it stalls the event loop and the
+connection pool that every install's policy resolution depends on, and failing to
+resolve does not fail open: the install gets *no* access. The `TaskMemoryHigh` alarm
+at 85% is there because these listings used to be unbounded. The bound is an
+availability control.
+
+**An out-of-range `limit` is a `400`, never a clamp.** Default 200, hard ceiling
+500. Clamping is tempting because it always returns something, but it returns fewer
+rows than were asked for *with no signal that it did* — and on the audit log a
+reviewer who requests 100000 entries and silently receives 500 concludes there were
+only 500 events. Anything that is not a plain integer in `1..500` is refused, so
+`?limit=1e9`, `?limit=-1`, `?limit=abc` and `?limit=100000000` all get a `400`
+naming the range. Same rule on all six endpoints, so a caller never has to remember
+which ones tell the truth.
+
+**Cursors are keyset, not `OFFSET`, and opaque.** `OFFSET n` makes the database walk
+and discard n rows, and any insert or delete between two requests shifts every later
+row — silently skipping or repeating entries. On an append-only audit log that is
+written to constantly, skipping is losing evidence from a compliance export. Every
+table paged here has a stable unique sort key: a primary key, or a timestamp with the
+primary key as the tiebreaker (`at` and `granted_at` are *not* unique — one write can
+record several events in the same instant, and a keyset comparison on a non-unique
+key skips or repeats the tied rows).
+
+Two details to preserve if you change this:
+
+- **The cursor keeps microseconds.** Postgres stores microsecond precision; a JS
+  `Date` keeps milliseconds. Rendering the cursor from the driver's value would
+  truncate it, and two rows written inside one millisecond would then land on the
+  wrong side of the comparison — one of them skipped or returned twice. The
+  timestamp is rendered in SQL with `to_char(… 'US')`.
+- **base64url, not base64.** A `+` in a cursor decodes as a space in a query string,
+  and the next page starts from the wrong row.
+
+One honest caveat: `granted_at` on an assignment is *rewritten* when an existing
+grant is updated in place, so a row edited mid-walk can move ahead of the cursor and
+be missed on that pass. That is a property of ordering by a mutable column, not of
+keyset — an `OFFSET` walk would shift every later row instead — and the row appears
+on the next walk.
+
 ## Storage notes worth knowing
 
 Policy bodies are stored as opaque `jsonb` and never decomposed into columns,

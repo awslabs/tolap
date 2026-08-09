@@ -8,6 +8,12 @@
  *
  * This listener is separate from the resolve one so an operator can bind it to a
  * private interface. That is defense in depth; the guards below are the control.
+ *
+ * Every list route is paginated and bounded. Not for tidiness: this listener
+ * shares one Node process and one connection pool with `/v1/resolve`, so a listing
+ * that serializes a whole table delays policy resolution for every install, and an
+ * install that cannot resolve gets no access at all. `db/pagination.ts` states the
+ * bounds and why an over-large `limit` is refused rather than quietly clamped.
  */
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
@@ -22,6 +28,13 @@ import {
 } from "../auth/guards.ts";
 import { issueCredential } from "../auth/install-credential.ts";
 import type { Actor, PostgresPolicyStore } from "../db/store.ts";
+import {
+  PaginationError,
+  parseLimit,
+  type Page,
+  type PageQuery,
+  type PageRequest,
+} from "../db/pagination.ts";
 import type { Keyring } from "../signing/keyring.ts";
 import {
   SchemaValidationError,
@@ -52,6 +65,34 @@ const actorOf = (principal: AdminPrincipal): Actor => ({
   kind: "admin",
 });
 
+/**
+ * Read `?limit=` and `?cursor=` off a request.
+ *
+ * Throws `PaginationError`, which the error handler turns into a 400. Deliberately
+ * not "fall back to the default on nonsense": a caller who asked for 100000000
+ * rows and received 200 with no error would read that as the table being small.
+ */
+const pageOf = (query: PageQuery): PageRequest => {
+  const limit = parseLimit(query.limit);
+  return {
+    ...(limit !== undefined ? { limit } : {}),
+    ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+  };
+};
+
+/**
+ * Wrap a page in the response envelope every list route shares.
+ *
+ * One shape across endpoints so a client writes the paging loop once: the items
+ * under the route's own key, and `nextCursor` always present -- `null` on the last
+ * page rather than omitted, so "no more pages" is a value the caller can test
+ * instead of a missing key that also means "this endpoint does not paginate".
+ */
+const paged = <T>(key: string, page: Page<T>): Record<string, unknown> => ({
+  [key]: page.items,
+  nextCursor: page.nextCursor,
+});
+
 export const adminRoutes =
   (deps: AdminDeps): FastifyPluginAsync =>
   async (app) => {
@@ -79,9 +120,11 @@ export const adminRoutes =
 
     // -- Policies ----------------------------------------------------------
 
-    app.get("/v1/policies", async (request) => {
+    app.get<{ Querystring: PageQuery }>("/v1/policies", async (request) => {
       await auth(request, "auditor");
-      return { policies: await store.listDefinitions() };
+      // A caller that passes neither parameter still gets a usable first page, so
+      // the console keeps working unchanged -- it just stops being the whole table.
+      return paged("policies", await store.pageDefinitions(pageOf(request.query)));
     });
 
     app.get<{ Params: { name: string } }>(
@@ -148,11 +191,17 @@ export const adminRoutes =
 
     // -- Versions ----------------------------------------------------------
 
-    app.get<{ Params: { name: string } }>(
+    app.get<{ Params: { name: string }; Querystring: PageQuery }>(
       "/v1/policies/:name/versions",
       async (request) => {
         await auth(request, "auditor");
-        return { versions: await store.listVersions(request.params.name) };
+        // Bounded even though it is scoped to one policy: each row carries a full
+        // policy body, so a long-lived policy's history is one of the biggest
+        // payloads this API can build.
+        return paged(
+          "versions",
+          await store.pageVersions(request.params.name, pageOf(request.query)),
+        );
       },
     );
 
@@ -225,13 +274,17 @@ export const adminRoutes =
 
     // -- Assignments -------------------------------------------------------
 
-    app.get<{ Querystring: { assignee?: string } }>(
+    app.get<{ Querystring: PageQuery & { assignee?: string } }>(
       "/v1/assignments",
       async (request) => {
         await auth(request, "auditor");
-        return {
-          assignments: await store.listAssignments(request.query.assignee),
-        };
+        return paged(
+          "assignments",
+          await store.pageAssignments(
+            request.query.assignee,
+            pageOf(request.query),
+          ),
+        );
       },
     );
 
@@ -308,9 +361,9 @@ export const adminRoutes =
 
     // -- Installs ----------------------------------------------------------
 
-    app.get("/v1/installs", async (request) => {
+    app.get<{ Querystring: PageQuery }>("/v1/installs", async (request) => {
       await auth(request, "auditor");
-      return { installs: await store.listInstalls() };
+      return paged("installs", await store.pageInstalls(pageOf(request.query)));
     });
 
     app.post<{ Body: { id?: string; name?: string } }>(
@@ -367,9 +420,11 @@ export const adminRoutes =
 
     // -- Source catalog ----------------------------------------------------
 
-    app.get("/v1/catalog", async (request) => {
+    app.get<{ Querystring: PageQuery }>("/v1/catalog", async (request) => {
       await auth(request, "auditor");
-      return { sources: await store.listSources() };
+      // Few rows, large rows: one manifest can be megabytes, so the bound here is
+      // about response size rather than row count.
+      return paged("sources", await store.pageSources(pageOf(request.query)));
     });
 
     app.get<{ Params: { id: string } }>("/v1/catalog/:id", async (request, reply) => {
@@ -452,13 +507,15 @@ export const adminRoutes =
 
     // -- Audit -------------------------------------------------------------
 
-    app.get<{ Querystring: { limit?: string } }>("/v1/audit", async (request) => {
+    app.get<{ Querystring: PageQuery }>("/v1/audit", async (request) => {
       // Readable by an auditor: reading the audit log is the auditor's job.
       await auth(request, "auditor");
-      const limit = Number(request.query.limit ?? 200);
-      return {
-        entries: await store.listAudit(Number.isInteger(limit) ? limit : 200),
-      };
+      // This route previously accepted any integer, so `?limit=100000000` read the
+      // whole log into one response. The parse now refuses anything that is not a
+      // plain integer inside the ceiling instead of coercing it -- a reviewer who
+      // asks for more entries than exist must not be told, by silence, that there
+      // were only 500 events.
+      return paged("entries", await store.pageAudit(pageOf(request.query)));
     });
 
     app.get("/health", async () => ({ status: "ok" }));
@@ -499,6 +556,12 @@ export function buildAdminApp(deps: AdminDeps): FastifyInstance {
       return reply
         .code(503)
         .send({ error: "identity lookup unavailable; policy not resolved" });
+    }
+    if (error instanceof PaginationError) {
+      // 400, not 422: a bad `?limit=` or `?cursor=` is a malformed request line,
+      // not a document that failed schema validation, and the console renders the
+      // two differently.
+      return reply.code(error.status).send({ error: error.message });
     }
     if (error instanceof SchemaValidationError) {
       return reply

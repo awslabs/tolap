@@ -239,13 +239,42 @@ export interface ResolvePreview {
   contributingPolicies: string[];
 }
 
+/**
+ * Every list endpoint's paging field.
+ *
+ * The server bounds each listing (one Node process serves both the admin API and
+ * `/v1/resolve`, so an unbounded read stalls policy resolution for every install)
+ * and returns `nextCursor: null` on the last page. Passing no cursor asks for the
+ * first page, which is what every call below does today -- so these pages show the
+ * newest or first N rows, not necessarily all of them.
+ *
+ * Optional here rather than required because the pages do not read it yet; wiring a
+ * "load more" control is the follow-up, and typing it as required would only make
+ * the compiler complain about mocks.
+ */
+export interface PageInfo {
+  nextCursor?: string | null;
+}
+
+/** Serialize the paging arguments, omitting the ones left unset. */
+function pageQuery(page?: { limit?: number; cursor?: string }): string {
+  const parts: string[] = [];
+  if (page?.limit !== undefined) parts.push(`limit=${page.limit}`);
+  if (page?.cursor !== undefined)
+    parts.push(`cursor=${encodeURIComponent(page.cursor)}`);
+  return parts.length > 0 ? parts.join("&") : "";
+}
+
 // -- Endpoints -------------------------------------------------------------
 
 export const api = {
   me: () => request<Me>("GET", "/v1/me"),
 
-  listPolicies: () =>
-    request<{ policies: PolicyDefinition[] }>("GET", "/v1/policies"),
+  listPolicies: (page?: { limit?: number; cursor?: string }) =>
+    request<{ policies: PolicyDefinition[] } & PageInfo>(
+      "GET",
+      `/v1/policies${pageQuery(page) ? `?${pageQuery(page)}` : ""}`,
+    ),
   getPolicy: (name: string) =>
     request<PolicyDefinition>("GET", `/v1/policies/${encodeURIComponent(name)}`),
   putPolicy: (policy: PolicyDefinition) =>
@@ -263,10 +292,12 @@ export const api = {
       policy,
     ),
 
-  listVersions: (name: string) =>
-    request<{ versions: PolicyVersion[] }>(
+  listVersions: (name: string, page?: { limit?: number; cursor?: string }) =>
+    request<{ versions: PolicyVersion[] } & PageInfo>(
       "GET",
-      `/v1/policies/${encodeURIComponent(name)}/versions`,
+      `/v1/policies/${encodeURIComponent(name)}/versions${
+        pageQuery(page) ? `?${pageQuery(page)}` : ""
+      }`,
     ),
   saveDraft: (policy: PolicyDefinition, note?: string) =>
     request<{ name: string; versionNo: number }>(
@@ -285,11 +316,19 @@ export const api = {
       `/v1/policies/${encodeURIComponent(name)}/versions/${versionNo}/rollback`,
     ),
 
-  listAssignments: (assignee?: string) =>
-    request<{ assignments: PolicyAssignment[] }>(
+  listAssignments: (
+    assignee?: string,
+    page?: { limit?: number; cursor?: string },
+  ) => {
+    const query = [
+      ...(assignee ? [`assignee=${encodeURIComponent(assignee)}`] : []),
+      ...(pageQuery(page) ? [pageQuery(page)] : []),
+    ].join("&");
+    return request<{ assignments: PolicyAssignment[] } & PageInfo>(
       "GET",
-      `/v1/assignments${assignee ? `?assignee=${encodeURIComponent(assignee)}` : ""}`,
-    ),
+      `/v1/assignments${query ? `?${query}` : ""}`,
+    );
+  },
   createAssignment: (assignment: PolicyAssignment) =>
     request<PolicyAssignment>("POST", "/v1/assignments", assignment),
   revokeAssignment: (policyName: string, assignee: string) =>
@@ -304,8 +343,11 @@ export const api = {
       `/v1/resolve/preview?userId=${encodeURIComponent(userId)}&tenantId=${encodeURIComponent(tenantId)}&sourceConnectionId=${encodeURIComponent(sourceConnectionId)}`,
     ),
 
-  listSources: () =>
-    request<{ sources: SourceManifest[] }>("GET", "/v1/catalog"),
+  listSources: (page?: { limit?: number; cursor?: string }) =>
+    request<{ sources: SourceManifest[] } & PageInfo>(
+      "GET",
+      `/v1/catalog${pageQuery(page) ? `?${pageQuery(page)}` : ""}`,
+    ),
   putSource: (manifest: unknown) =>
     request<SourceManifest>("PUT", "/v1/catalog", manifest),
   importOpenApi: (sourceConnectionId: string, spec: unknown) =>
@@ -321,7 +363,11 @@ export const api = {
   deleteSource: (id: string) =>
     request<void>("DELETE", `/v1/catalog/${encodeURIComponent(id)}`),
 
-  listInstalls: () => request<{ installs: Install[] }>("GET", "/v1/installs"),
+  listInstalls: (page?: { limit?: number; cursor?: string }) =>
+    request<{ installs: Install[] } & PageInfo>(
+      "GET",
+      `/v1/installs${pageQuery(page) ? `?${pageQuery(page)}` : ""}`,
+    ),
   createInstall: (id: string, name: string) =>
     request<{ id: string; name: string; credential: string; notice: string }>(
       "POST",
@@ -331,6 +377,12 @@ export const api = {
   revokeInstall: (id: string) =>
     request<void>("DELETE", `/v1/installs/${encodeURIComponent(id)}`),
 
-  listAudit: (limit = 200) =>
-    request<{ entries: AuditEntry[] }>("GET", `/v1/audit?limit=${limit}`),
+  // 500 is the server's ceiling, so this asks for the largest page it will grant.
+  // A larger number is now a 400 rather than a silently truncated response -- if
+  // the audit view needs more than one page it must follow `nextCursor`.
+  listAudit: (limit = 200, cursor?: string) =>
+    request<{ entries: AuditEntry[] } & PageInfo>(
+      "GET",
+      `/v1/audit?${pageQuery({ limit, ...(cursor !== undefined ? { cursor } : {}) })}`,
+    ),
 };
