@@ -168,6 +168,20 @@ and is served only from `/`, so there were no deep links to rescue in the first 
 
 ## Reproducing
 
+One command runs the whole set:
+
+```bash
+./security/scan.sh            # everything
+./security/scan.sh codeql     # one tool
+```
+
+That script exists because the scan set being a habit rather than a list is what let the
+ReDoS through: three of the four tools passed it, and the fourth was not being run. Adding
+a tool means adding it to `security/scan.sh`, where the next person runs it too. It exits
+non-zero on findings, so it works in a pre-push hook.
+
+The individual commands, for reference or for running one by hand:
+
 ```bash
 # SAST
 semgrep scan --config p/security-audit --config p/secrets --config p/owasp-top-ten \
