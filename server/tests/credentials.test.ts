@@ -18,6 +18,7 @@ import {
   onAuthFailureInvalidate,
   secretPasswordProvider,
 } from "../src/db/credentials.ts";
+import { buildPool } from "../src/db/pool.ts";
 
 const SECRET = {
   username: "tolap_admin",
@@ -241,5 +242,78 @@ describe("onAuthFailureInvalidate", () => {
     pool.emit({ code: "57P01" }); // admin shutdown
     await instance.read();
     expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("connection pool bounds", () => {
+  /**
+   * The pool is now multiplied by the task count.
+   *
+   * The service runs two tasks and autoscales to six, and every task opens its own pool.
+   * So `pg`'s default of 10 clients is really "up to 10 per task" -- and Aurora Serverless
+   * v2 at the 0.5 ACU floor this cluster starts from allows on the order of 90. Getting
+   * this wrong trades a latency problem for connection exhaustion, which fails worse: a
+   * task that cannot get a connection cannot resolve policy at all.
+   *
+   * `infra/test/infra.test.ts` asserts the other half -- that maxCapacity times this value
+   * stays inside that budget.
+   */
+  const withEnv = async <T>(
+    value: string | undefined,
+    run: () => Promise<T> | T,
+  ): Promise<T> => {
+    const previous = process.env.DATABASE_POOL_MAX;
+    if (value === undefined) delete process.env.DATABASE_POOL_MAX;
+    else process.env.DATABASE_POOL_MAX = value;
+    try {
+      return await run();
+    } finally {
+      if (previous === undefined) delete process.env.DATABASE_POOL_MAX;
+      else process.env.DATABASE_POOL_MAX = previous;
+    }
+  };
+
+  it("bounds the pool and fails fast when it is saturated", async () => {
+    const { pool } = await withEnv(undefined, () =>
+      buildPool({ kind: "url", url: "postgres://u:p@127.0.0.1:5432/db" }),
+    );
+    try {
+      const options = (pool as unknown as { options: Record<string, unknown> }).options;
+      expect(options.max).toBe(10);
+      // `pg` defaults to NO connection timeout, so a request arriving with the pool
+      // saturated waits forever: it holds a socket and a Fastify handler and never
+      // returns, which is how a busy service becomes an unresponsive one. Failing in
+      // seconds gives the caller something it can retry and lets the 5xx alarm see it.
+      expect(options.connectionTimeoutMillis).toBe(5_000);
+      // Return connections between requests rather than a scaled-out fleet sitting on its
+      // whole allocation at idle.
+      expect(options.idleTimeoutMillis).toBe(30_000);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("honours an explicit pool ceiling", async () => {
+    const { pool } = await withEnv("4", () =>
+      buildPool({ kind: "url", url: "postgres://u:p@127.0.0.1:5432/db" }),
+    );
+    try {
+      expect((pool as unknown as { options: { max: number } }).options.max).toBe(4);
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it("refuses a nonsensical pool ceiling rather than falling back", async () => {
+    // A silent fallback to 10 on a typo is how a deployment that meant to lower its
+    // footprint keeps the old one, and only finds out when Aurora starts refusing
+    // connections under load.
+    for (const bad of ["0", "-1", "abc", "2.5"]) {
+      await expect(
+        withEnv(bad, () =>
+          buildPool({ kind: "url", url: "postgres://u:p@127.0.0.1:5432/db" }),
+        ),
+      ).rejects.toThrow(/DATABASE_POOL_MAX/);
+    }
   });
 });

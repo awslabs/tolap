@@ -197,6 +197,7 @@ assignments.
 | `PORT` / `RESOLVE_PORT` | no | Default 8080 / 8081. Must differ |
 | `HOST` / `RESOLVE_HOST` | no | Default `127.0.0.1` |
 | `LOG_LEVEL` | no | Default `info`. One of `fatal`/`error`/`warn`/`info`/`debug`/`trace`/`silent`. An unrecognized value is rejected rather than defaulted |
+| `DATABASE_POOL_MAX` | no | Default 10, **per task**. Multiplied by the task count against one database — see [Capacity](#capacity-and-the-limit-that-bounds-it) |
 
 \* One of the two signing forms is required.
 
@@ -565,6 +566,35 @@ Two details worth knowing before changing any of them:
   `NoRunningTasks` uses `BREACHING` (nothing left to report it). `NoRunningTasks` reads an
   `ECS/ContainerInsights` metric and so depends on Container Insights, which the cluster
   enables.
+
+### Capacity, and the limit that bounds it
+
+The service runs **two tasks** and autoscales to **six** on CPU (target 60%). One task
+made every deploy and every task replacement a resolve outage, and it left admin-side work
+nowhere to go — which is why a slow parser became a policy-resolution problem.
+
+The ceiling is set by the **database**, not by cost. Every task opens its own connection
+pool, so the real connection count is `maxCapacity × DATABASE_POOL_MAX` — 6 × 10 = 60 by
+default, against the ~90 that Aurora Serverless v2 allows at the 0.5 ACU floor this
+cluster starts from. Raising either number alone trades a latency problem for connection
+exhaustion, which fails *worse*: a task that cannot get a connection cannot resolve policy
+at all, so the symptom is a denial rather than a delay. Raise Aurora's minimum ACU and
+`maxCapacity` together, or lower `DATABASE_POOL_MAX`. An infra test asserts the product
+stays in budget so this cannot drift silently.
+
+`DATABASE_POOL_MAX` also carries a 5-second connection timeout, because `pg` defaults to
+**no** timeout: a request arriving with the pool saturated would otherwise wait forever,
+holding a socket and a handler and never returning. Failing fast gives the caller
+something it can retry and lets the 5xx alarm see it.
+
+Scale-out is fast (60s cooldown) and scale-in is slow (5 min), because scaling in during a
+lull only to scale back out moments later leaves the service short at the start of a spike.
+Scaling is on CPU rather than request count: the failure this deployment actually saw was a
+parser pinning a core, where request count looked normal while latency collapsed.
+
+What is *not* fixed by this: both listeners still share one Node process per task, so admin
+work and resolve work still compete within a task. Splitting them into separate services
+would remove that coupling.
 
 ### Where alarms go
 

@@ -576,6 +576,92 @@ describe("the edge is the only public surface", () => {
   });
 });
 
+describe("scaling past one task", () => {
+  const service = () =>
+    Object.values(templates.server.findResources("AWS::ECS::Service"))[0]!
+      .Properties as Record<string, unknown>;
+
+  const scalableTarget = () =>
+    Object.values(
+      templates.server.findResources("AWS::ApplicationAutoScaling::ScalableTarget"),
+    )[0]!.Properties as Record<string, unknown>;
+
+  it("runs more than one task", () => {
+    // One task made every deploy and every task replacement a resolve outage, and it
+    // coupled the two listeners hard: an expensive import delayed policy resolution for
+    // every install because there was nowhere else for that traffic to go.
+    expect(Number(service().DesiredCount)).toBeGreaterThan(1);
+  });
+
+  it("keeps the worst-case connection count inside Aurora's budget", () => {
+    // The invariant most likely to break silently, because the two halves live in
+    // different places: every task opens its own pool, so maxCapacity * DATABASE_POOL_MAX
+    // is the real connection count. Aurora Serverless v2 at the 0.5 ACU floor this cluster
+    // starts from allows on the order of 90.
+    //
+    // Getting this wrong trades a latency problem for connection exhaustion, which fails
+    // WORSE: a task that cannot get a connection cannot resolve policy at all, so the
+    // symptom is a denial rather than a delay. Raising either number requires raising
+    // Aurora's floor or lowering the other -- which is exactly what this test is here to
+    // force someone to notice.
+    const definitions = templates.server.findResources("AWS::ECS::TaskDefinition");
+    const environment = (
+      Object.values(definitions)[0]!.Properties as {
+        ContainerDefinitions: Array<{
+          Environment?: Array<{ Name: string; Value: unknown }>;
+        }>;
+      }
+    ).ContainerDefinitions[0]!.Environment;
+
+    const poolMax = Number(
+      (environment ?? []).find((entry) => entry.Name === "DATABASE_POOL_MAX")?.Value,
+    );
+    const maxTasks = Number(scalableTarget().MaxCapacity);
+
+    expect(poolMax, "DATABASE_POOL_MAX not set in the task definition").toBeGreaterThan(0);
+    expect(maxTasks * poolMax).toBeLessThanOrEqual(80);
+  });
+
+  it("bounds autoscaling at both ends", () => {
+    const target = scalableTarget();
+    // A floor below 2 would let a scale-in event recreate the single-task outage.
+    expect(Number(target.MinCapacity)).toBeGreaterThanOrEqual(2);
+    expect(Number(target.MaxCapacity)).toBeGreaterThan(Number(target.MinCapacity));
+  });
+
+  it("scales on CPU, and scales in more slowly than it scales out", () => {
+    // CPU rather than request count: the failure this deployment actually saw was a parser
+    // pinning a core, where request count was normal while latency collapsed.
+    //
+    // Asymmetric cooldowns because scaling in during a lull only to scale back out moments
+    // later is how a service ends up with no capacity at the start of a spike.
+    const policies = Object.values(
+      templates.server.findResources("AWS::ApplicationAutoScaling::ScalingPolicy"),
+    ).map((policy) => policy.Properties as Record<string, unknown>);
+
+    const cpu = policies.find((policy) => {
+      const config = policy.TargetTrackingScalingPolicyConfiguration as
+        | { PredefinedMetricSpecification?: { PredefinedMetricType?: string } }
+        | undefined;
+      return (
+        config?.PredefinedMetricSpecification?.PredefinedMetricType ===
+        "ECSServiceAverageCPUUtilization"
+      );
+    });
+
+    expect(cpu, "no CPU scaling policy").toBeDefined();
+    const config = cpu!.TargetTrackingScalingPolicyConfiguration as {
+      TargetValue: number;
+      ScaleOutCooldown: number;
+      ScaleInCooldown: number;
+    };
+    // Below the point where latency has already collapsed, so it scales before the p99
+    // alarm fires rather than after.
+    expect(config.TargetValue).toBeLessThan(80);
+    expect(config.ScaleInCooldown).toBeGreaterThan(config.ScaleOutCooldown);
+  });
+});
+
 describe("observability", () => {
   /** Every alarm in the server stack, with its properties. */
   const alarms = () =>

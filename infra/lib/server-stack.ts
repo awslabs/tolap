@@ -47,6 +47,18 @@ export interface ServerStackProps extends StackProps {
    * stack output says out loud rather than leaving to be discovered during an incident.
    */
   readonly alarmEmail?: string;
+  /** Steady-state task count. Defaults to 2; one task makes every deploy an outage. */
+  readonly desiredCount?: number;
+  readonly minCapacity?: number;
+  /**
+   * Autoscaling ceiling. Defaults to 6.
+   *
+   * Bounded by the database, not by cost: each task opens its own pool, so this multiplied
+   * by `DATABASE_POOL_MAX` must stay inside Aurora's connection budget at its minimum ACU.
+   */
+  readonly maxCapacity?: number;
+  /** Connections per task. `maxCapacity * this` must fit Aurora's budget. Default 10. */
+  readonly databasePoolMax?: number;
 }
 
 /**
@@ -173,6 +185,11 @@ export class ServerStack extends Stack {
         // readable from the task definition. The request log deliberately omits the
         // Authorization header and the resolve query string -- see server/src/logging.ts.
         LOG_LEVEL: props.logLevel ?? "info",
+        // Stated because it is now multiplied by the task count. maxCapacity (6) times
+        // this must stay inside Aurora's connection budget at its minimum ACU -- raising
+        // either one alone is how a scale-out event becomes connection exhaustion, which
+        // denies policy resolution rather than merely slowing it.
+        DATABASE_POOL_MAX: String(props.databasePoolMax ?? 10),
         DATABASE_NAME: props.databaseName,
         // The server reads the database credential from Secrets Manager **itself**,
         // per connection, rather than receiving the password as an injected
@@ -228,7 +245,12 @@ export class ServerStack extends Stack {
     const service = new ecs.FargateService(this, "Service", {
       cluster,
       taskDefinition,
-      desiredCount: 1,
+      // Two, not one. A single task made every deploy and every task replacement a
+      // resolve outage, and it coupled the two listeners hard: an expensive import
+      // delayed policy resolution for every install because there was nowhere else for
+      // that traffic to go. Two is also the smallest number that proves the service is
+      // actually stateless, which is easy to believe and easy to be wrong about.
+      desiredCount: props.desiredCount ?? 2,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       // Rolling deploys with a circuit breaker: a task that cannot reach the
       // database or fails its health check rolls back rather than leaving the
@@ -237,6 +259,35 @@ export class ServerStack extends Stack {
       minHealthyPercent: 100,
       maxHealthyPercent: 200,
       enableExecuteCommand: false,
+    });
+
+    // -- Autoscaling ---------------------------------------------------------
+
+    // Bounded at both ends, and the upper bound is not arbitrary: every task opens its
+    // own connection pool (`pg` defaults to 10 clients), so N tasks is up to 10N
+    // connections. Aurora Serverless v2 at the 0.5 ACU floor this cluster starts from
+    // allows on the order of 90, so an unbounded scale-out trades a latency problem for
+    // connection exhaustion -- which fails *worse*, because a task that cannot get a
+    // connection cannot resolve policy at all.
+    //
+    // maxCapacity 6 keeps the worst case (60) inside that budget with room for
+    // migrations and an operator's psql session. Raising it means raising Aurora's floor
+    // or lowering DATABASE_POOL_MAX, together, not separately.
+    const scaling = service.autoScaleTaskCount({
+      minCapacity: props.minCapacity ?? 2,
+      maxCapacity: props.maxCapacity ?? 6,
+    });
+
+    // CPU rather than request count. The failure this deployment actually saw was a
+    // parser pinning a core -- request count was normal while latency collapsed -- and
+    // CPU is what moves in that case. 60% leaves headroom to scale *before* the p99
+    // alarm fires rather than after.
+    scaling.scaleOnCpuUtilization("CpuScaling", {
+      targetUtilizationPercent: 60,
+      // Out fast, in slow. Scaling in aggressively during a lull only to scale back out
+      // moments later is how a service ends up with no capacity at the start of a spike.
+      scaleOutCooldown: Duration.seconds(60),
+      scaleInCooldown: Duration.minutes(5),
     });
 
     // Direction matters here. `cluster.connections.allowDefaultPortFrom(service)`

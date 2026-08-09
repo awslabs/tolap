@@ -67,7 +67,12 @@ stating next to the scan results:
 - **A signed artifact is replayable for its full TTL.** TOLAP has no `jti` and no
   single-use enforcement (canonical-enforcement-spec §13); expiry is the only bound,
   which is why the server caps TTL at one hour.
-- **One Fargate task, no autoscaling.** A single point of failure for policy resolution.
+- **Both listeners share one process.** The admin API and `/v1/resolve` are two Fastify
+  instances in a single Node process, so admin-side CPU cost still delays policy
+  resolution — that coupling is what made the SQL importer ReDoS a resolve problem rather
+  than an import problem. The service now runs two tasks and autoscales to six, so there
+  is somewhere else for resolve traffic to go, but splitting the two listeners into
+  separate services would remove the coupling entirely.
 - **Single tenant by design.** Any authenticated administrator sees every policy — see
   [`../../docs/policy-server.md`](../../docs/policy-server.md#single-tenant-by-design).
 

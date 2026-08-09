@@ -36,12 +36,44 @@ export interface BuiltPool {
  * Async because the secret-backed form must read the secret once up front to learn
  * the username and, when not configured, the host.
  */
+/**
+ * Per-task connection limits, bounded because the pool is now multiplied by task count.
+ *
+ * The service runs more than one task and autoscales, and every task opens its own pool.
+ * `pg` defaults to 10 clients, so N tasks is up to 10N connections against one Aurora
+ * cluster -- and Serverless v2 at the 0.5 ACU floor this cluster starts from allows on
+ * the order of 90. An unbounded pool therefore trades a latency problem for connection
+ * exhaustion, which fails worse: a task that cannot get a connection cannot resolve
+ * policy at all, so the symptom is a denial rather than a delay.
+ *
+ * `connectionTimeoutMillis` matters as much as the ceiling. `pg` defaults to no timeout,
+ * so a request that arrives with the pool saturated waits **forever** -- it consumes a
+ * socket and a Fastify handler and never returns, which is how a busy service becomes an
+ * unresponsive one. Failing in 5 seconds gives the caller an error it can retry and lets
+ * the 5xx alarm see it.
+ */
+function poolLimits(): { max: number; connectionTimeoutMillis: number; idleTimeoutMillis: number } {
+  const max = Number(process.env.DATABASE_POOL_MAX ?? 10);
+  if (!Number.isInteger(max) || max < 1) {
+    throw new Error(
+      `DATABASE_POOL_MAX must be a positive integer, got ${JSON.stringify(process.env.DATABASE_POOL_MAX)}`,
+    );
+  }
+  return {
+    max,
+    connectionTimeoutMillis: 5_000,
+    // Return connections to Aurora rather than holding the full pool open at idle, so a
+    // scaled-out fleet is not sitting on its whole allocation between requests.
+    idleTimeoutMillis: 30_000,
+  };
+}
+
 export async function buildPool(config: DatabaseConfig): Promise<BuiltPool> {
   if (config.kind === "url") {
     // Local development: the password is in the string and there is no rotation to
     // absorb.
     return {
-      pool: new Pool({ connectionString: config.url }),
+      pool: new Pool({ connectionString: config.url, ...poolLimits() }),
       source: "url",
     };
   }
@@ -88,6 +120,7 @@ export async function buildPool(config: DatabaseConfig): Promise<BuiltPool> {
     // restart.
     password: secretPasswordProvider(reader),
     ssl,
+    ...poolLimits(),
   });
 
   // A stale password surfaces as an authentication error. Clearing the cache on one
