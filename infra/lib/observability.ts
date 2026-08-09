@@ -26,12 +26,15 @@
  * is worse than none -- it reads as "fine".
  */
 
-import { Duration } from "aws-cdk-lib";
+import { CfnOutput, Duration } from "aws-cdk-lib";
 import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as actions from "aws-cdk-lib/aws-cloudwatch-actions";
 import type * as ecs from "aws-cdk-lib/aws-ecs";
 // Not `import type`: `HttpCodeTarget` is a runtime enum, used below to select the 5xx
 // metric.
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import { Construct } from "constructs";
 
 export interface ObservabilityProps {
@@ -51,17 +54,68 @@ export interface ObservabilityProps {
   readonly resolveLatencyP99Seconds?: number;
   /** Admin latency tolerance. Higher: an import or a large list is legitimately slower. */
   readonly adminLatencyP99Seconds?: number;
+  /**
+   * Address subscribed to the alarm topic.
+   *
+   * Optional, and the topic is created either way — but an alarm nobody is told about is
+   * decoration. If this is omitted the stack still deploys and prints the topic ARN, so
+   * an operator can subscribe out of band; the deployment is not silently unmonitored, it
+   * is visibly unsubscribed.
+   *
+   * Email specifically because it needs no other infrastructure to be useful on day one.
+   * AWS sends a confirmation link that must be clicked before anything is delivered, so a
+   * subscription in `PendingConfirmation` delivers nothing — which is why the ARN is an
+   * output rather than this being assumed to work.
+   */
+  readonly alarmEmail?: string;
 }
 
 export class Observability extends Construct {
   /** Every alarm, so a deployment can wire them all to one SNS topic. */
   readonly alarms: cloudwatch.Alarm[] = [];
 
+  /** Where every alarm sends both its ALARM and its OK transition. */
+  readonly alarmTopic: sns.Topic;
+
   constructor(scope: Construct, id: string, props: ObservabilityProps) {
     super(scope, id);
 
     const resolveP99 = props.resolveLatencyP99Seconds ?? 1;
     const adminP99 = props.adminLatencyP99Seconds ?? 5;
+
+    // -- Notification ---------------------------------------------------------
+
+    // Created unconditionally, and every alarm below is attached to it by `this.alarm`.
+    // The alternative -- alarms with no action -- looks like monitoring on a dashboard and
+    // tells nobody anything at 3am, which is indistinguishable from the state this whole
+    // construct was added to fix.
+    this.alarmTopic = new sns.Topic(this, "Alarms", {
+      displayName: "TOLAP policy server alarms",
+      // In transit and at rest: an alarm body carries the metric, the threshold and the
+      // reason, which describes the shape of a production incident to anyone who can read
+      // the topic. AWS-managed key rather than a CMK, consistent with the rest of this
+      // deployment -- key policy and rotation management is a real decision for an adopter
+      // rather than a default a reference implementation should make for them.
+      enforceSSL: true,
+      masterKey: undefined,
+    });
+
+    if (props.alarmEmail !== undefined) {
+      this.alarmTopic.addSubscription(
+        new subscriptions.EmailSubscription(props.alarmEmail),
+      );
+    }
+
+    // The ARN either way. With no subscription this is the thing an operator needs in
+    // order to add one, and printing it makes "nobody is subscribed" visible rather than
+    // something discovered during an incident.
+    new CfnOutput(this, "AlarmTopicArn", {
+      value: this.alarmTopic.topicArn,
+      description:
+        props.alarmEmail === undefined
+          ? "Alarm topic. NO SUBSCRIBERS -- subscribe one, or alarms notify nobody."
+          : `Alarm topic. Subscribed: ${props.alarmEmail} (confirm the email to receive alerts).`,
+    });
 
     // -- Resolve path: the one with an install waiting on it -------------------
 
@@ -310,9 +364,21 @@ export class Observability extends Construct {
     );
   }
 
-  /** Create an alarm and record it, so the dashboard and any SNS wiring see them all. */
+  /**
+   * Create an alarm, wire it to the topic, and record it for the dashboard.
+   *
+   * Notification is attached here rather than at each call site so it cannot be forgotten
+   * for one alarm — which is the failure that produces a monitoring gap nobody notices,
+   * because the dashboard still shows the alarm and it still turns red.
+   *
+   * The OK transition is sent too. Without it an incident channel fills with alerts and
+   * never records the recovery, so "is it still broken?" has to be answered by going and
+   * looking.
+   */
   private alarm(id: string, props: cloudwatch.AlarmProps): cloudwatch.Alarm {
     const created = new cloudwatch.Alarm(this, id, props);
+    created.addAlarmAction(new actions.SnsAction(this.alarmTopic));
+    created.addOkAction(new actions.SnsAction(this.alarmTopic));
     this.alarms.push(created);
     return created;
   }

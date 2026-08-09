@@ -566,8 +566,29 @@ Two details worth knowing before changing any of them:
   `ECS/ContainerInsights` metric and so depends on Container Insights, which the cluster
   enables.
 
-Nothing is wired to SNS here — notification routing is a deployment decision. The
-construct exposes `alarms` so a deployment can attach one topic to all of them.
+### Where alarms go
+
+Every alarm publishes to one SNS topic, on **both** the ALARM and the OK transition. The
+action is attached in one place rather than per alarm, so a new alarm cannot be added
+without notification — the failure that produces is a monitoring gap nobody notices,
+because the dashboard still shows the alarm and it still turns red. OK actions are included
+because an incident channel that records alerts and never records recoveries makes "is it
+still broken?" a question you answer by going to look.
+
+Subscribe at deploy time rather than committing an address:
+
+```bash
+cdk deploy TolapServer -c alarmEmail=ops@example.com
+```
+
+With no address the topic is still created and its ARN is a stack output, so subscribing
+later needs no redeploy of the service — and the output description says **NO SUBSCRIBERS**
+rather than leaving that to be discovered during an incident. Note that an email
+subscription stays in `PendingConfirmation` and delivers nothing until the confirmation
+link is clicked.
+
+The topic requires TLS in transit: an alarm body carries the metric, threshold and reason,
+which describes the shape of a production incident to anyone who can read it.
 
 ## Not in v1
 

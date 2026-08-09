@@ -688,6 +688,54 @@ describe("observability", () => {
     expect(byName.get("LOG_LEVEL")).toBe("info");
   });
 
+  it("sends every alarm to a topic, on both ALARM and OK", () => {
+    // An alarm with no action looks like monitoring on a dashboard and tells nobody
+    // anything at 3am. Attaching the action in one helper rather than per call site is
+    // what makes this assertable -- the failure it prevents is one alarm quietly missing
+    // its action while still turning red on the dashboard.
+    //
+    // OK actions too: without them an incident channel fills with alerts and never records
+    // the recovery, so "is it still broken?" has to be answered by going to look.
+    const alarms = Object.values(
+      templates.server.findResources("AWS::CloudWatch::Alarm"),
+    ).map((alarm) => alarm.Properties as Record<string, unknown>);
+
+    expect(alarms.length).toBeGreaterThan(0);
+    for (const alarm of alarms) {
+      expect(alarm.AlarmActions, String(alarm.MetricName)).toBeDefined();
+      expect((alarm.AlarmActions as unknown[]).length).toBeGreaterThan(0);
+      expect(alarm.OKActions, String(alarm.MetricName)).toBeDefined();
+      expect((alarm.OKActions as unknown[]).length).toBeGreaterThan(0);
+    }
+
+    templates.server.resourceCountIs("AWS::SNS::Topic", 1);
+  });
+
+  it("requires TLS on the alarm topic", () => {
+    // An alarm body carries the metric, threshold and reason -- it describes the shape of
+    // a production incident to anyone who can read it in transit.
+    const body = JSON.stringify(templates.server.toJSON());
+    expect(body).toMatch(/aws:SecureTransport/);
+  });
+
+  it("exports the topic ARN, and says when nobody is subscribed", () => {
+    // The test app passes no alarmEmail, so this synthesis has no subscriber. That is a
+    // valid choice -- routing is a deployment decision -- but it must be VISIBLE, not
+    // discovered during an incident. The ARN is also what an operator needs to subscribe
+    // later without redeploying the service.
+    templates.server.resourceCountIs("AWS::SNS::Subscription", 0);
+
+    const outputs = templates.server.toJSON().Outputs as Record<
+      string,
+      { Description?: string }
+    >;
+    const topicOutput = Object.entries(outputs).find(([key]) =>
+      key.includes("AlarmTopicArn"),
+    );
+    expect(topicOutput, "no alarm topic ARN output").toBeDefined();
+    expect(topicOutput![1].Description).toMatch(/NO SUBSCRIBERS/);
+  });
+
   it("publishes one dashboard", () => {
     templates.server.resourceCountIs("AWS::CloudWatch::Dashboard", 1);
   });

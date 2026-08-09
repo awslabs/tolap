@@ -40,6 +40,13 @@ export interface ServerStackProps extends StackProps {
    * deliberate as what it keeps; see server/src/logging.ts.
    */
   readonly logLevel?: string;
+  /**
+   * Address subscribed to the alarm topic.
+   *
+   * The topic exists either way; without a subscriber the alarms notify nobody, which the
+   * stack output says out loud rather than leaving to be discovered during an incident.
+   */
+  readonly alarmEmail?: string;
 }
 
 /**
@@ -331,6 +338,7 @@ export class ServerStack extends Stack {
       resolveLoadBalancer: resolveLb,
       adminTargets,
       resolveTargets,
+      ...(props.alarmEmail !== undefined ? { alarmEmail: props.alarmEmail } : {}),
     });
 
     // -- Outputs -------------------------------------------------------------
