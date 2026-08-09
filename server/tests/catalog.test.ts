@@ -247,6 +247,24 @@ describe("importSqlDdl", () => {
     expect(manifest.objects[0].fields).toEqual(["ssn", "region"]);
   });
 
+  it("splits a dump line on delimiters without retrying whitespace runs", () => {
+    // Same defect shape as the block-comment scan, in the column-dump reader: the cell
+    // split was `/\s*[|,\t]\s*/`, whose `\s` and `\t` overlap, so a long whitespace run
+    // could be divided many ways and the engine tried all of them at every offset before
+    // conceding there was no delimiter. Measured 84ms at 12 KB and 5.1s at 100 KB.
+    //
+    // A time assertion, because the defect *is* the time -- both versions reject this
+    // input identically, one of them slowly. `no tables found` also pins that the line
+    // still yields fewer than two cells, so the bound is not being met by parsing less.
+    const hostile = `tbl${" ".repeat(300_000)}col`;
+
+    const started = performance.now();
+    expect(() => importSqlDdl("db:a:b", hostile)).toThrow(/no tables found/);
+    const elapsed = performance.now() - started;
+
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
   it("rejects input with nothing recognizable", () => {
     expect(() => importSqlDdl("db:a:b", "SELECT 1;")).toThrow(/no tables found/);
     expect(() => importSqlDdl("db:a:b", "")).toThrow(ManifestError);
@@ -554,6 +572,145 @@ describe("importOpenApi", () => {
     expect(importOpenApi("api:internal:x", composed).endpoints[0].responseFields).toEqual(
       ["a", "b"],
     );
+  });
+
+  it("does not re-expand a schema whose properties all point back at it", () => {
+    // The depth bound of 6 bounds depth, not work. `deref`'s cycle set is per-call, so a
+    // schema whose k properties each `$ref` the schema itself was re-expanded once per
+    // property at every level -- k^6 visits. Measured 902ms at k=10 and 7.4s at k=14 on a
+    // spec well under 1 KB, so this one is not bounded by the 2 MB body limit the way a
+    // long string is: the request that stalls the event loop is tiny.
+    //
+    // Time-asserted because the defect is the time; the field list is asserted too, since
+    // memoizing on (node, depth) has to preserve the answer, not approximate it.
+    const properties: Record<string, unknown> = {};
+    for (let i = 0; i < 14; i += 1) {
+      properties[`p${i}`] = { $ref: "#/components/schemas/A" };
+    }
+    const spec = {
+      paths: {
+        "/x": {
+          get: {
+            responses: {
+              "200": {
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/A" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      components: { schemas: { A: { properties } } },
+    };
+
+    const started = performance.now();
+    const manifest = importOpenApi("api:internal:x", spec);
+    const elapsed = performance.now() - started;
+
+    expect(manifest.endpoints[0]!.responseFields).toEqual(Object.keys(properties).sort());
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it("follows a long chain of refs without recursing per link", () => {
+    // A chain where each ref points at the *next* one is not a cycle, so the cycle set
+    // does not stop it, and `deref` recursed once per link. At 10,000 links -- inside the
+    // 2 MB body limit -- that threw `RangeError: Maximum call stack size exceeded`, which
+    // is not a ManifestError, so it escaped as a 500 rather than the 422 a malformed spec
+    // should get. Asserting the resolved leaf rather than the absence of a throw: the
+    // iterative version must still reach the end of the chain.
+    const links = 10_000;
+    const schemas: Record<string, unknown> = {};
+    for (let i = 0; i < links; i += 1) {
+      schemas[`S${i}`] = { $ref: `#/components/schemas/S${i + 1}` };
+    }
+    schemas[`S${links}`] = { properties: { leaf: {} } };
+
+    const manifest = importOpenApi("api:internal:x", {
+      paths: {
+        "/x": {
+          get: {
+            responses: {
+              "200": {
+                content: {
+                  "application/json": {
+                    schema: { $ref: "#/components/schemas/S0" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      components: { schemas },
+    });
+
+    expect(manifest.endpoints[0]!.responseFields).toEqual(["leaf"]);
+  });
+
+  it("resolves many refs without rebuilding the key map per lookup", () => {
+    // `ownChild` built `new Map(Object.entries(node))` on every pointer *step*, and
+    // `#/components/schemas/X` steps through `components` -- so N paths resolving N
+    // schemas cost N lookups over N entries: 113ms at 150 KB, 1.8s at 600 KB, 4.8s here.
+    //
+    // The count is set from the mutation test rather than guessed. At 2,000 the old code
+    // finished in 456ms and this test passed against the defect it exists to catch, which
+    // is the trap a time assertion invites; 6,000 is ~900 KB, still inside the 2 MB body
+    // limit, and the ~15x gap to the bound leaves room for a slow CI box.
+    const count = 6_000;
+    const schemas: Record<string, unknown> = {};
+    const paths: Record<string, unknown> = {};
+    for (let i = 0; i < count; i += 1) {
+      schemas[`S${i}`] = { properties: { [`f${i}`]: {} } };
+      paths[`/p${i}`] = {
+        get: {
+          responses: {
+            "200": {
+              content: {
+                "application/json": {
+                  schema: { $ref: `#/components/schemas/S${i}` },
+                },
+              },
+            },
+          },
+        },
+      };
+    }
+
+    const started = performance.now();
+    const manifest = importOpenApi("api:internal:x", {
+      paths,
+      components: { schemas },
+    });
+    const elapsed = performance.now() - started;
+
+    // Every endpoint still resolved its own schema: caching the key map must not make a
+    // lookup return another node's entry.
+    expect(manifest.endpoints).toHaveLength(count);
+    expect(manifest.endpoints[0]!.responseFields).toEqual(["f0"]);
+    expect(manifest.endpoints[count - 1]!.responseFields).toEqual([`f${count - 1}`]);
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it("templates a path key full of unclosed braces without rescanning", () => {
+    // `/\{[^}]+\}/g` excluded only the closing brace, so an opening one was consumable by
+    // the repeat and a run of them with no `}` anywhere was rescanned from every offset:
+    // 63ms at 12 KB, 3.9s at 100 KB. A path key is a JSON object key in an uploaded body,
+    // so its length is the author's choice. `[^{}]` bounds each attempt at the next brace.
+    const hostile = `/${"{".repeat(300_000)}`;
+
+    const started = performance.now();
+    const manifest = importOpenApi("api:internal:x", {
+      paths: { [hostile]: { get: {} } },
+    });
+    const elapsed = performance.now() - started;
+
+    // Nothing to substitute, so the key survives verbatim -- which is what the old
+    // version returned too, just slowly.
+    expect(manifest.endpoints[0]!.path).toBe(hostile);
+    expect(elapsed).toBeLessThan(2_000);
   });
 
   it("keeps an endpoint that has no documented response schema", () => {

@@ -166,8 +166,18 @@ function parseColumnDump(sql: string): Map<string, string[]> {
     if (/^[-+|\s]+$/.test(trimmed)) continue;
     if (/^\(\d+ rows?\)$/.test(trimmed)) continue;
 
+    // Delimiters only, with no `\s*` padding around them. `\s` and `\t` overlap, so
+    // `/\s*[|,\t]\s*/` gives the engine many ways to divide a run of whitespace and it
+    // retries all of them at every start offset before admitting there is no delimiter:
+    // a line of `"tbl" + " ".repeat(n) + "col"` measured 84ms at 12 KB and 5.1s at 100 KB,
+    // rising with the square. Same shape of defect as the block-comment scan above, same
+    // consequence -- one Fargate task serves both the admin API and `/v1/resolve`.
+    //
+    // The `trim` below already removes the surrounding whitespace the padding was there
+    // to eat, so the two forms agree on every input (checked against the old one over
+    // random whitespace/delimiter strings) while this one cannot backtrack.
     const cells = trimmed
-      .split(/\s*[|,\t]\s*/)
+      .split(/[|,\t]/)
       .map((cell) => cell.trim())
       .filter((cell) => cell !== "");
     if (cells.length < 2) continue;
