@@ -272,3 +272,78 @@ describe("filtering", () => {
     expect(api.listAudit).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("truncation and paging", () => {
+  it("says the log is complete when the server sends no cursor", async () => {
+    // The state that licenses a conclusion: a reviewer asking "did anyone change this"
+    // needs to know an empty result means nothing happened, not that the answer was on a
+    // page nobody fetched.
+    await renderPage();
+    expect(screen.getByText(/Showing all 3 entries/)).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Load more/ })).toBeNull();
+  });
+
+  it("warns, and offers the next page, when the log is truncated", async () => {
+    api.listAudit.mockResolvedValueOnce({ entries: ENTRIES, nextCursor: "cur-1" });
+    render(<AuditPage />);
+    await waitFor(() => expect(screen.getByRole("status")).toBeDefined());
+
+    expect(screen.getByRole("status").textContent).toMatch(/There are more/);
+    expect(screen.getByRole("button", { name: /Load more entries/ })).toBeDefined();
+  });
+
+  it("appends the next page rather than replacing it", async () => {
+    // Appending keeps the reader from holding two screens in their head, and it is what
+    // makes "load until complete" a usable way to read the whole log.
+    const later = entry({ actor: "later@example.com", action: "policy.delete" });
+    api.listAudit
+      .mockResolvedValueOnce({ entries: ENTRIES, nextCursor: "cur-1" })
+      .mockResolvedValueOnce({ entries: [later], nextCursor: null });
+
+    render(<AuditPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /Load more/ })).toBeDefined());
+    await userEvent.click(screen.getByRole("button", { name: /Load more/ }));
+
+    await waitFor(() => expect(screen.getByText(/Showing all 4 entries/)).toBeDefined());
+    // The first page is still on screen.
+    expect(visibleActors()).toContain("later@example.com");
+    expect(visibleActors().length).toBe(4);
+    // And the cursor was actually sent, rather than the first page being re-fetched.
+    expect(api.listAudit).toHaveBeenLastCalledWith(500, "cur-1");
+  });
+
+  it("tells the reader the filter searched only the loaded rows", async () => {
+    // The sharper problem: a client-side filter over a truncated page that reports "no
+    // matching entries" has answered a question about a slice, not about the log.
+    api.listAudit.mockResolvedValueOnce({ entries: ENTRIES, nextCursor: "cur-1" });
+    render(<AuditPage />);
+    await waitFor(() => expect(screen.getByRole("status")).toBeDefined());
+
+    await userEvent.type(screen.getByLabelText("Filter"), "nobody-matches-this");
+
+    expect(screen.getByText(/No matching entries\./)).toBeDefined();
+    expect(screen.getByRole("status").textContent).toMatch(/does not mean there are none/);
+  });
+
+  it("does not blame the filter when the whole log is loaded", async () => {
+    await renderPage();
+    await userEvent.type(screen.getByLabelText("Filter"), "nobody-matches-this");
+    expect(screen.queryByText(/does not mean there are none/)).toBeNull();
+  });
+
+  it("reports a failed load-more instead of looking like the end of the log", async () => {
+    // A swallowed error here is the same mistake one level down: the cursor would clear,
+    // the warning would vanish, and the truncated list would look complete.
+    api.listAudit
+      .mockResolvedValueOnce({ entries: ENTRIES, nextCursor: "cur-1" })
+      .mockRejectedValueOnce(new Error("gateway timeout"));
+
+    render(<AuditPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /Load more/ })).toBeDefined());
+    await userEvent.click(screen.getByRole("button", { name: /Load more/ }));
+
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toMatch(/gateway timeout/));
+    // Still truncated, and still says so.
+    expect(screen.getByRole("status").textContent).toMatch(/There are more/);
+  });
+});

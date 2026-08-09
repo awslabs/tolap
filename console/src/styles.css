@@ -678,3 +678,29 @@ td button {
 .rule-editor__param input[maxlength="1"] {
   width: 3.5em;
 }
+
+/* -- "There is more than this" -------------------------------------------- */
+
+/* The state matters more than the button: a truncated list that looks complete is
+   how a reviewer concludes nothing happened. */
+.more-results {
+  border-top: 1px solid var(--border);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.more-results--complete {
+  border-top: none;
+  color: var(--muted);
+  font-size: 13px;
+  margin: 8px 0 0;
+}
+
+.more-results__warning {
+  background: var(--warn-bg);
+  border-radius: 6px;
+  color: var(--warn-fg);
+  font-size: 13px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+}

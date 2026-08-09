@@ -8,7 +8,8 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { api, type PolicyAssignment, type PolicyDefinition } from "../api.ts";
+import { api, fetchAll, type PolicyAssignment, type PolicyDefinition } from "../api.ts";
+import { MoreResults } from "../components/MoreResults.tsx";
 
 const ASSIGNEE_TYPES = ["user", "group", "role", "serviceAccount"] as const;
 
@@ -23,22 +24,44 @@ export function AssignmentsPage({ readOnly }: { readonly readOnly: boolean }) {
   const [sourceConnectionId, setSourceConnectionId] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
   const [reason, setReason] = useState("");
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [failure, setFailure] = useState<string | undefined>();
   const [status, setStatus] = useState<string | undefined>();
 
   const refresh = useCallback(async () => {
     try {
-      const [{ assignments: list }, { policies: available }] = await Promise.all([
+      const [page, available] = await Promise.all([
         api.listAssignments(),
-        api.listPolicies(),
+        // Every page, not the first: this list populates the policy <select> below, and a
+        // truncated dropdown silently omits policies that exist -- an administrator looks
+        // for one, does not find it, and concludes it was never created. There is nowhere
+        // sensible to put a "load more" control inside a <select>.
+        fetchAll<PolicyDefinition>((cursor) => api.listPolicies({ cursor }), "policies"),
       ]);
-      setAssignments(list);
+      setAssignments(page.assignments);
+      setCursor(page.nextCursor ?? null);
       setPolicies(available);
       setFailure(undefined);
     } catch (caught) {
       setFailure((caught as Error).message);
     }
   }, []);
+
+  /** Append the next page of assignments. See MoreResults for why the signal matters. */
+  const loadMore = useCallback(async () => {
+    if (cursor === null) return;
+    setLoadingMore(true);
+    try {
+      const page = await api.listAssignments(undefined, { cursor });
+      setAssignments((current) => [...current, ...page.assignments]);
+      setCursor(page.nextCursor ?? null);
+    } catch (caught) {
+      setFailure((caught as Error).message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [cursor]);
 
   useEffect(() => {
     void refresh();
@@ -163,6 +186,16 @@ export function AssignmentsPage({ readOnly }: { readonly readOnly: boolean }) {
           </tbody>
         </table>
       )}
+
+      {assignments.length > 0 ? (
+        <MoreResults
+          loaded={assignments.length}
+          nextCursor={cursor}
+          noun="assignments"
+          loading={loadingMore}
+          onLoadMore={() => void loadMore()}
+        />
+      ) : null}
 
       {!readOnly ? (
         <form

@@ -8,20 +8,57 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type AuditEntry } from "../api.ts";
+import { MoreResults } from "../components/MoreResults.tsx";
+
+/**
+ * Rows per request.
+ *
+ * The server's ceiling is 500 and this asks for it, because the alternative -- more
+ * round trips -- costs an auditor more than one large response costs the server.
+ */
+const PAGE = 500;
 
 export function AuditPage() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState("");
   const [failure, setFailure] = useState<string | undefined>();
 
   const refresh = useCallback(async () => {
     try {
-      setEntries((await api.listAudit(500)).entries);
+      const page = await api.listAudit(PAGE);
+      setEntries(page.entries);
+      setCursor(page.nextCursor ?? null);
       setFailure(undefined);
     } catch (caught) {
       setFailure((caught as Error).message);
     }
   }, []);
+
+  /**
+   * Append the next page.
+   *
+   * Appends rather than replaces, so following the log backwards accumulates instead of
+   * making the reader hold two screens in their head. The cursor is read from state at
+   * call time and cleared on failure, so a partial load reports itself rather than
+   * looking like the end of the log -- which is the same mistake this control exists to
+   * prevent, one level down.
+   */
+  const loadMore = useCallback(async () => {
+    if (cursor === null) return;
+    setLoading(true);
+    try {
+      const page = await api.listAudit(PAGE, cursor);
+      setEntries((current) => [...current, ...page.entries]);
+      setCursor(page.nextCursor ?? null);
+      setFailure(undefined);
+    } catch (caught) {
+      setFailure((caught as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [cursor]);
 
   useEffect(() => {
     void refresh();
@@ -100,6 +137,19 @@ export function AuditPage() {
           </tbody>
         </table>
       )}
+
+      {entries.length > 0 ? (
+        <MoreResults
+          loaded={entries.length}
+          nextCursor={cursor}
+          noun="entries"
+          loading={loading}
+          onLoadMore={() => void loadMore()}
+          // The filter below runs over the loaded rows only, so on a truncated log a
+          // "no matching entries" result is an answer about a slice, not the log.
+          filtered={needle !== ""}
+        />
+      ) : null}
     </section>
   );
 }

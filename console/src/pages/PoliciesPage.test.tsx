@@ -162,9 +162,22 @@ async function renderPage(scenario: Scenario = {}) {
   return view;
 }
 
-/** Open a policy for editing, the way an author does: click it in the list. */
+/**
+ * Open a policy for editing, the way an author does: click it in the list.
+ *
+ * A substring predicate rather than `new RegExp(name)`. Testing Library accepts a matcher
+ * function, so the regex bought nothing -- and building one from a variable is the pattern
+ * Semgrep flags for ReDoS. Harmless in a test with literal names, but this repository's
+ * subject is access control and a blocking finding that has to be explained every scan is
+ * worse than one line of code that does not produce it. It also sidesteps a real bug: a
+ * policy name containing a regex metacharacter would not have matched itself.
+ */
 async function openPolicy(name = ANALYST.name) {
-  await userEvent.click(screen.getByRole("button", { name: new RegExp(name) }));
+  await userEvent.click(
+    screen.getByRole("button", {
+      name: (accessibleName) => accessibleName.includes(name),
+    }),
+  );
   await screen.findByLabelText("Name");
 }
 

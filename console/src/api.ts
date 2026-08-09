@@ -386,3 +386,52 @@ export const api = {
       `/v1/audit?${pageQuery({ limit, ...(cursor !== undefined ? { cursor } : {}) })}`,
     ),
 };
+
+/**
+ * Follow `nextCursor` until the server says there is no more.
+ *
+ * For the lists that populate a **selector** rather than a browsable table. A truncated
+ * table is a visible annoyance; a truncated dropdown is a silent one — an administrator
+ * looks for a policy that exists, does not find it, and reasonably concludes it was never
+ * created. There is no good place to put a "load more" control inside a `<select>`.
+ *
+ * Bounded, because "follow every cursor" against a server bug or a cursor that does not
+ * advance is an infinite loop inside a page load. The cap is high enough that hitting it
+ * means something is wrong rather than that a deployment is merely large, and hitting it
+ * throws rather than returning a short list: a caller that silently got 20 pages of a
+ * 40-page list is back to the problem this function exists to solve.
+ */
+const MAX_PAGES = 20;
+
+export async function fetchAll<T>(
+  // Not `PageInfo`: an endpoint that does not paginate returns no `nextCursor` field at
+  // all, and `PageInfo` has no other members for such a response to structurally match.
+  // Read as an open record and narrowed below, which is also what lets the items key be
+  // named per endpoint.
+  fetchPage: (cursor?: string) => Promise<object>,
+  key: string,
+): Promise<T[]> {
+  const all: T[] = [];
+  let cursor: string | undefined;
+
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const result = await fetchPage(cursor);
+    // The items key varies per endpoint ("policies", "sources", ...), so it is read by
+    // name rather than typed -- the alternative is a discriminated union per endpoint for
+    // no benefit at the call site.
+    all.push(...(((result as Record<string, unknown>)[key] ?? []) as T[]));
+
+    const next = (result as PageInfo).nextCursor;
+    if (next === null || next === undefined) return all;
+    // A cursor that does not change would spin forever; treat it as a server fault
+    // rather than looping.
+    if (next === cursor) {
+      throw new Error(`pagination did not advance while listing ${key}`);
+    }
+    cursor = next;
+  }
+
+  throw new Error(
+    `${key} has more than ${MAX_PAGES} pages; refusing to load a partial list silently`,
+  );
+}

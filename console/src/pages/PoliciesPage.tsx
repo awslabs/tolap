@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   ApiError,
+  fetchAll,
   type PolicyDefinition,
   type PolicyVersion,
   type SourceManifest,
@@ -90,9 +91,14 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [{ policies: list }, { sources: catalog }] = await Promise.all([
-        api.listPolicies(),
-        api.listSources(),
+      // Every page of both, rather than the first. These are selectors, not browsable
+      // tables: the policy list IS the navigation for this page, and the source list
+      // populates the manifest dropdown that drives every catalog-backed picker. A
+      // truncated selector hides a policy or a source that exists, and the author
+      // reasonably concludes it was never created -- with no control to prove otherwise.
+      const [list, catalog] = await Promise.all([
+        fetchAll<PolicyDefinition>((cursor) => api.listPolicies({ cursor }), "policies"),
+        fetchAll<SourceManifest>((cursor) => api.listSources({ cursor }), "sources"),
       ]);
       setPolicies(list);
       setSources(catalog);

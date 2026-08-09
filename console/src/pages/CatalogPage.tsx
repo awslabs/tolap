@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type SourceManifest } from "../api.ts";
+import { MoreResults } from "../components/MoreResults.tsx";
 
 type Mode = "manifest" | "openapi" | "sql";
 
@@ -17,15 +18,41 @@ export function CatalogPage({ readOnly }: { readonly readOnly: boolean }) {
   const [sourceId, setSourceId] = useState("");
   const [text, setText] = useState("");
   const [status, setStatus] = useState<string | undefined>();
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [failure, setFailure] = useState<string | undefined>();
 
   const refresh = useCallback(async () => {
     try {
-      setSources((await api.listSources()).sources);
+      const page = await api.listSources();
+      setSources(page.sources);
+      setCursor(page.nextCursor ?? null);
     } catch (caught) {
       setFailure((caught as Error).message);
     }
   }, []);
+
+  /**
+   * Append the next page.
+   *
+   * The server bounds this listing, so without following the cursor the page shows the
+   * first N sources and looks exactly like a page showing all of them -- and an item
+   * missing from a truncated list reads as an item that does not exist. Failure keeps the
+   * cursor, so a partial load reports itself rather than looking like the end.
+   */
+  const loadMore = useCallback(async () => {
+    if (cursor === null) return;
+    setLoadingMore(true);
+    try {
+      const page = await api.listSources({ cursor });
+      setSources((current) => [...current, ...page.sources]);
+      setCursor(page.nextCursor ?? null);
+    } catch (caught) {
+      setFailure((caught as Error).message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [cursor]);
 
   useEffect(() => {
     void refresh();
@@ -130,6 +157,16 @@ export function CatalogPage({ readOnly }: { readonly readOnly: boolean }) {
           </tbody>
         </table>
       )}
+
+      {sources.length > 0 ? (
+        <MoreResults
+          loaded={sources.length}
+          nextCursor={cursor}
+          noun="sources"
+          loading={loadingMore}
+          onLoadMore={() => void loadMore()}
+        />
+      ) : null}
 
       {!readOnly ? (
         <form

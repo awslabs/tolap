@@ -8,21 +8,48 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, type Install } from "../api.ts";
+import { MoreResults } from "../components/MoreResults.tsx";
 
 export function InstallsPage({ readOnly }: { readonly readOnly: boolean }) {
   const [installs, setInstalls] = useState<Install[]>([]);
   const [id, setId] = useState("");
   const [name, setName] = useState("");
   const [issued, setIssued] = useState<{ id: string; credential: string } | undefined>();
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [failure, setFailure] = useState<string | undefined>();
 
   const refresh = useCallback(async () => {
     try {
-      setInstalls((await api.listInstalls()).installs);
+      const page = await api.listInstalls();
+      setInstalls(page.installs);
+      setCursor(page.nextCursor ?? null);
     } catch (caught) {
       setFailure((caught as Error).message);
     }
   }, []);
+
+  /**
+   * Append the next page.
+   *
+   * The server bounds this listing, so without following the cursor the page shows the
+   * first N installs and looks exactly like a page showing all of them -- and an item
+   * missing from a truncated list reads as an item that does not exist. Failure keeps the
+   * cursor, so a partial load reports itself rather than looking like the end.
+   */
+  const loadMore = useCallback(async () => {
+    if (cursor === null) return;
+    setLoadingMore(true);
+    try {
+      const page = await api.listInstalls({ cursor });
+      setInstalls((current) => [...current, ...page.installs]);
+      setCursor(page.nextCursor ?? null);
+    } catch (caught) {
+      setFailure((caught as Error).message);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [cursor]);
 
   useEffect(() => {
     void refresh();
@@ -126,6 +153,16 @@ export function InstallsPage({ readOnly }: { readonly readOnly: boolean }) {
           </tbody>
         </table>
       )}
+
+      {installs.length > 0 ? (
+        <MoreResults
+          loaded={installs.length}
+          nextCursor={cursor}
+          noun="installs"
+          loading={loadingMore}
+          onLoadMore={() => void loadMore()}
+        />
+      ) : null}
 
       {!readOnly ? (
         <form
