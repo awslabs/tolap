@@ -10,39 +10,60 @@ When an AI agent queries a database, calls an API, or searches a knowledge base 
 
 ## The Problem in Practice
 
-```mermaid
-flowchart TD
-    A[User Request] --> B[Agent Framework]
-    B -->|IAM / OAuth — can agent invoke this tool? YES| C{Tool Executes}
-    C --> D[FULL data access]
-    D --> E[ALL data returned to agent]
-    E --> F[Content Guardrails]
-    F -->|Redact PII in output text| G[Response to User]
-
-    style D fill:#ff6b6b,color:#fff,stroke:#cc0000
-    style E fill:#ff6b6b,color:#fff,stroke:#cc0000
-```
-
-The red steps are the gap. The agent already received the unrestricted data. Guardrails filter what the model *says*, not what the model *sees*. Every major agent framework -- AWS Bedrock Agents, Azure AI Agent Service, Google Vertex AI Agents, LangChain -- acknowledges this gap and tells you to solve it yourself inside your tool code.
-
-**With TOLAP:**
+Both paths below start the same way and pass the same authorization check. They differ at
+exactly one point -- what the tool is allowed to return -- and everything downstream
+follows from that.
 
 ```mermaid
 flowchart TD
-    A[User Request] --> B[Agent Framework]
-    B -->|IAM / OAuth — can agent invoke this tool? YES| C[TOLAP Secure Tool Wrapper]
-    C --> D[Enforce column/row/field/tag/endpoint policies]
-    D --> E[Only authorized data returned]
-    E --> F[Agent receives filtered results]
-    F --> G[Content Guardrails]
-    G --> H[Response to User]
+    A[User request] --> B[Agent framework]
+    B -->|"IAM / OAuth: may the agent invoke this tool? YES"| SPLIT{{"Tool executes<br/>the query it built"}}
 
-    style C fill:#51cf66,color:#fff,stroke:#2b8a3e
-    style D fill:#51cf66,color:#fff,stroke:#2b8a3e
-    style E fill:#51cf66,color:#fff,stroke:#2b8a3e
+    SPLIT --> W1
+    SPLIT --> T1
+
+    subgraph gap ["❌ WITHOUT TOLAP — enforcement above the tool"]
+        direction TB
+        W1["Tool has full access<br/>to the data source"]
+        W1 --> W2["Every row and column<br/>returned to the agent"]
+        W2 --> LEAK(["Unauthorized data is now in<br/>the agent's context window"])
+        LEAK --> W3["Content guardrails<br/>redact PII in the output text"]
+        W3 --> W4["Response to user"]
+    end
+
+    subgraph fix ["✅ WITH TOLAP — enforcement inside the tool"]
+        direction TB
+        T1["TOLAP wrapper enforces<br/>columns · rows · fields · tags · endpoints"]
+        T1 --> T2["Only authorized data<br/>leaves the data source"]
+        T2 --> T3["Agent receives<br/>filtered results"]
+        T3 --> T4["Content guardrails"]
+        T4 --> T5["Response to user"]
+    end
+
+    style W1 fill:#ff6b6b,color:#fff,stroke:#cc0000
+    style W2 fill:#ff6b6b,color:#fff,stroke:#cc0000
+    style LEAK fill:#8a1c1c,color:#fff,stroke:#5c0000
+    style T1 fill:#51cf66,color:#fff,stroke:#2b8a3e
+    style T2 fill:#51cf66,color:#fff,stroke:#2b8a3e
+    style T3 fill:#51cf66,color:#fff,stroke:#2b8a3e
 ```
 
-The tool never returns data the user is not authorized to see. There is nothing to bypass because there is nothing to see.
+The dark red step is the whole argument, and note **where** it sits: before the
+guardrails, not after. By the time anything filters the output, the unrestricted data is
+already in the agent's context window. Guardrails constrain what the model *says*, not
+what the model *saw* -- so a prompt injection, a tool-call trace, or a follow-up question
+can still surface it.
+
+Note what the two paths share. The IAM/OAuth check passes in both, because it answers a
+different question: *may this agent call this tool?* Neither RBAC at the identity layer
+nor ABAC at a gateway can answer *which columns and rows may this particular user see
+through this particular call* -- that decision has to be made where the query meets the
+data. Every major agent framework -- AWS Bedrock Agents, Azure AI Agent Service, Google
+Vertex AI Agents, LangChain -- acknowledges this and tells you to solve it yourself inside
+your tool code.
+
+On the green path there is nothing to bypass, because the restricted data never left the
+source.
 
 ## Three Principles
 
