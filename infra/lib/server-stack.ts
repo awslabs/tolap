@@ -14,6 +14,7 @@ import type * as rds from "aws-cdk-lib/aws-rds";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import type * as cognito from "aws-cdk-lib/aws-cognito";
 import type { Construct } from "constructs";
+import { Observability } from "./observability.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,6 +31,15 @@ export interface ServerStackProps extends StackProps {
   readonly auditorGroupName: string;
   /** Artifact lifetime. Capped at 3600 by the server itself. */
   readonly ttlSeconds?: number;
+  /**
+   * Request log verbosity, `info` by default.
+   *
+   * Logging is on because the alternative -- what this deployment had -- is a server that
+   * cannot report its own latency: a quadratic regex in the SQL importer stalled the event
+   * loop for ~15s per request and nothing recorded it. What the log withholds is as
+   * deliberate as what it keeps; see server/src/logging.ts.
+   */
+  readonly logLevel?: string;
 }
 
 /**
@@ -152,6 +162,10 @@ export class ServerStack extends Stack {
         TOLAP_IDENTITY_SOURCE: "cognito",
         TOLAP_ADMIN_GROUP: props.adminGroupName,
         TOLAP_AUDITOR_GROUP: props.auditorGroupName,
+        // Stated rather than left to the server's default, so the running verbosity is
+        // readable from the task definition. The request log deliberately omits the
+        // Authorization header and the resolve query string -- see server/src/logging.ts.
+        LOG_LEVEL: props.logLevel ?? "info",
         DATABASE_NAME: props.databaseName,
         // The server reads the database credential from Secrets Manager **itself**,
         // per connection, rather than receiving the password as an injected
@@ -256,7 +270,7 @@ export class ServerStack extends Stack {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
     });
-    adminListener.addTargets("AdminTarget", {
+    const adminTargets = adminListener.addTargets("AdminTarget", {
       port: adminPort,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [service.loadBalancerTarget({ containerName: "Server", containerPort: adminPort })],
@@ -286,7 +300,7 @@ export class ServerStack extends Stack {
       port: 80,
       protocol: elbv2.ApplicationProtocol.HTTP,
     });
-    resolveListener.addTargets("ResolveTargetV2", {
+    const resolveTargets = resolveListener.addTargets("ResolveTargetV2", {
       port: resolvePort,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [
@@ -305,6 +319,19 @@ export class ServerStack extends Stack {
     // internal there is no path that bypasses the edge.
     this.adminLoadBalancer = adminLb;
     this.resolveLoadBalancer = resolveLb;
+
+    // -- Observability -------------------------------------------------------
+
+    // Not optional here. Both listeners share one Node process on one task, so a slow
+    // parser on the admin side delays policy resolution for every install -- and until
+    // this existed there was no way to see that happen. See lib/observability.ts.
+    new Observability(this, "Observability", {
+      service,
+      adminLoadBalancer: adminLb,
+      resolveLoadBalancer: resolveLb,
+      adminTargets,
+      resolveTargets,
+    });
 
     // -- Outputs -------------------------------------------------------------
 

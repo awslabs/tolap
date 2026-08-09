@@ -72,11 +72,13 @@ export async function start(
     verifier,
     keyring: config.keyring,
     ttlSeconds: config.ttlSeconds,
+    logLevel: config.logLevel,
   });
   const resolve = buildResolveApp({
     store,
     keyring: config.keyring,
     ttlSeconds: config.ttlSeconds,
+    logLevel: config.logLevel,
   });
 
   const adminUrl = await admin.listen({

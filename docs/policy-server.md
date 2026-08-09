@@ -196,6 +196,7 @@ assignments.
 | `TOLAP_AUDITOR_GROUP` | no | Default `tolap-auditor` |
 | `PORT` / `RESOLVE_PORT` | no | Default 8080 / 8081. Must differ |
 | `HOST` / `RESOLVE_HOST` | no | Default `127.0.0.1` |
+| `LOG_LEVEL` | no | Default `info`. One of `fatal`/`error`/`warn`/`info`/`debug`/`trace`/`silent`. An unrecognized value is rejected rather than defaulted |
 
 \* One of the two signing forms is required.
 
@@ -498,6 +499,75 @@ guard test that is not itself behind the skip. The cross-SDK suite shells out to
 `python3` and `dotnet` and skips likewise. A suite that silently disables itself and
 reports success is a defect this repo has already shipped once — see the
 CHANGELOG's "Test-reporting defects".
+
+## Operating it
+
+### What the logs contain, and what they deliberately do not
+
+Both listeners log requests at `info` by default. Two things are withheld on purpose,
+because enabling logging on *this* server is not a free action:
+
+- **The `Authorization` header is never written.** It is a live credential on every
+  route — a Cognito ID token on the admin port, and on the resolve port an install
+  credential that mints signed policy artifacts. Pino's default serializer already omits
+  headers; `redact` states it explicitly so it survives someone later adding header
+  logging, and censors rather than removes, so a line still shows a credential *was*
+  presented.
+- **The resolve query string is dropped, and the path kept.**
+  `?userId=&tenantId=&sourceConnectionId=` is who was resolved for and against which
+  source. The audit log records exactly that, deliberately, with access control and
+  retention chosen for it. A log line is a second copy in a place with weaker controls,
+  so the log answers *is it slow, is it erroring, on which route* and cannot answer *for
+  whom*. Correlation goes through the audit trail.
+
+The route **pattern** is logged (`/v1/policies/:name`) rather than the concrete path, so
+latency aggregates per route instead of splintering across every policy name ever
+fetched.
+
+`LOG_LEVEL=silent` disables the request hooks entirely rather than formatting lines and
+discarding them. That is what the test suite uses.
+
+### Alarms
+
+`infra/lib/observability.ts` creates eight alarms and a dashboard. The shape follows two
+properties of this deployment:
+
+**One task serves both listeners.** The admin API and `/v1/resolve` are two Fastify
+instances in one Node process, so admin-side CPU cost delays policy resolution for every
+install. Resolve therefore gets the tighter threshold — p99 above **1s** for 3 minutes,
+against **5s** for admin. A resolve call is one indexed query plus an HMAC; healthy is
+single-digit milliseconds, so a second means a stalled event loop or a saturated pool.
+
+**Failing to resolve does not fail open.** An install that cannot fetch a policy gets no
+access rather than no restrictions, so an outage here looks like a broad, confusing
+denial inside someone else's service. That is why the resolve path is alarmed first.
+
+| Alarm | Fires when |
+|---|---|
+| `ResolveLatencyP99` | p99 > 1s for 3 min |
+| `ResolveServerErrors` | > 5 target 5xx in 5 min |
+| `ResolveUnhealthyTargets` | any unhealthy target for 2 min |
+| `AdminLatencyP99` | p99 > 5s for 5 min |
+| `AdminServerErrors` | > 5 target 5xx in 5 min |
+| `NoRunningTasks` | running tasks < 1 for 3 min |
+| `TaskCpuHigh` | CPU > 80% for 15 min |
+| `TaskMemoryHigh` | memory > 85% for 15 min |
+
+Two details worth knowing before changing any of them:
+
+- **401 and 403 are not alarmed.** They are the guards working. Alarming on them would
+  fire on every expired console session. Only target 5xx counts — the server failing to
+  produce an artifact it should have produced.
+- **`treatMissingData` is set explicitly on every alarm**, because the CDK default
+  (`MISSING`) is wrong for most of them: a metric that stops arriving because the service
+  is gone would leave the alarm in `INSUFFICIENT_DATA`, which reads as healthy. The
+  latency alarms use `NOT_BREACHING` (no traffic is a quiet period, not a fault) and
+  `NoRunningTasks` uses `BREACHING` (nothing left to report it). `NoRunningTasks` reads an
+  `ECS/ContainerInsights` metric and so depends on Container Insights, which the cluster
+  enables.
+
+Nothing is wired to SNS here — notification routing is a deployment decision. The
+construct exposes `alarms` so a deployment can attach one topic to all of them.
 
 ## Not in v1
 

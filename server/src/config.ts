@@ -1,3 +1,4 @@
+import { isLogLevel, LOG_LEVELS, type LogLevel } from "./logging.ts";
 import { Keyring } from "./signing/keyring.ts";
 
 /**
@@ -53,6 +54,14 @@ export interface ServerConfig {
   readonly auditorGroup: string;
   /** Where group and role membership comes from. */
   readonly identity: IdentityConfig;
+  /**
+   * Request log verbosity.
+   *
+   * `info` by default, because the alternative was `logger: false` and a server that
+   * cannot report its own latency. `silent` disables the request hooks entirely rather
+   * than formatting lines and dropping them, which is what the test suite wants.
+   */
+  readonly logLevel: LogLevel;
 }
 
 /**
@@ -259,7 +268,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     adminGroup: env.TOLAP_ADMIN_GROUP ?? "tolap-admin",
     auditorGroup: env.TOLAP_AUDITOR_GROUP ?? "tolap-auditor",
     identity: loadIdentity(env),
+    logLevel: loadLogLevel(env),
   };
+}
+
+/**
+ * Request log verbosity, `info` unless asked otherwise.
+ *
+ * Rejects an unrecognized value rather than falling back. A typo in `LOG_LEVEL` that
+ * silently produced `info` would be harmless; one that silently produced `silent` would
+ * mean an operator believing they had logs and having none, which is the state this whole
+ * change exists to leave.
+ */
+function loadLogLevel(env: NodeJS.ProcessEnv): LogLevel {
+  const raw = env.LOG_LEVEL;
+  if (raw === undefined || raw === "") return "info";
+  if (!isLogLevel(raw)) {
+    throw new Error(
+      `LOG_LEVEL must be one of ${LOG_LEVELS.join(", ")}, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return raw;
 }
 
 export { MIN_SIGNING_KEY_LENGTH, MAX_TTL_SECONDS, DEFAULT_TTL_SECONDS };

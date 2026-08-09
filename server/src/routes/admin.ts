@@ -30,12 +30,19 @@ import {
 import { parseManifest, ManifestError } from "../catalog/manifest.ts";
 import { importOpenApi } from "../catalog/import-openapi.ts";
 import { importSqlDdl } from "../catalog/import-sql.ts";
+import { loggerOptions, type LogLevel } from "../logging.ts";
 
 export interface AdminDeps {
   readonly store: PostgresPolicyStore;
   readonly verifier: TokenVerifier;
   readonly keyring: Keyring;
   readonly ttlSeconds: number;
+  /**
+   * Request log verbosity. Omitted means `silent`, which is what the tests want:
+   * hundreds of requests per file, and a log line per request buries the failure.
+   * The composition root passes the configured level.
+   */
+  readonly logLevel?: LogLevel;
 }
 
 const actorOf = (principal: AdminPrincipal): Actor => ({
@@ -459,7 +466,7 @@ export const adminRoutes =
 
 export function buildAdminApp(deps: AdminDeps): FastifyInstance {
   const app = Fastify({
-    logger: false,
+    logger: loggerOptions({ level: deps.logLevel ?? "silent", app: "admin" }),
     // Stated rather than inherited. Fastify defaults to 1 MB, which is already the
     // bound on how much work an uploaded OpenAPI document or SQL dump can ask the
     // importers to do -- so it is a security parameter here and belongs where it can

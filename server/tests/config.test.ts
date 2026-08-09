@@ -47,6 +47,29 @@ describe("loadConfig", () => {
     expect(config.resolveHost).toBe("127.0.0.1");
     expect(config.adminGroup).toBe("tolap-admin");
     expect(config.auditorGroup).toBe("tolap-auditor");
+    // Logging on by default. The alternative -- what this used to be -- is a server
+    // that cannot report its own latency: a quadratic regex in the SQL importer stalled
+    // the event loop for ~15s per request and nothing recorded it.
+    expect(config.logLevel).toBe("info");
+  });
+
+  it("accepts an explicit log level", () => {
+    expect(loadConfig({ ...base, LOG_LEVEL: "debug" }).logLevel).toBe("debug");
+    // `silent` stays available, because the test suite wants it.
+    expect(loadConfig({ ...base, LOG_LEVEL: "silent" }).logLevel).toBe("silent");
+  });
+
+  it("refuses an unrecognized log level rather than defaulting", () => {
+    // A typo that quietly became `info` would be harmless. One that quietly became
+    // `silent` would leave an operator believing they had logs and having none, which is
+    // the exact state this was added to leave.
+    expect(() => loadConfig({ ...base, LOG_LEVEL: "verbose" })).toThrow(/LOG_LEVEL/);
+    expect(() => loadConfig({ ...base, LOG_LEVEL: "INFO" })).toThrow(/LOG_LEVEL/);
+  });
+
+  it("treats an empty log level as unset", () => {
+    // An unset variable in a container often arrives as "" rather than absent.
+    expect(loadConfig({ ...base, LOG_LEVEL: "" }).logLevel).toBe("info");
   });
 
   it.each(["DATABASE_URL", "COGNITO_ISSUER", "COGNITO_AUDIENCE"])(

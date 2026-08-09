@@ -17,6 +17,7 @@ import { AuthorizationError, requireInstall } from "../auth/guards.ts";
 import { IdentityLookupError } from "../auth/identity-source.ts";
 import type { Keyring } from "../signing/keyring.ts";
 import type { PostgresPolicyStore } from "../db/store.ts";
+import { loggerOptions, type LogLevel } from "../logging.ts";
 import { buildSignedArtifact } from "../signing/artifact.ts";
 
 export interface ResolveDeps {
@@ -24,6 +25,15 @@ export interface ResolveDeps {
   /** Signs with the active key and stamps its kid. */
   readonly keyring: Keyring;
   readonly ttlSeconds: number;
+  /**
+   * Request log verbosity. Omitted means `silent`, for the tests. The composition root
+   * passes the configured level.
+   *
+   * Note what the serializer drops on this port specifically: the query string names the
+   * user and tenant being resolved for, which the audit log already records under access
+   * control. See src/logging.ts.
+   */
+  readonly logLevel?: LogLevel;
 }
 
 interface ResolveQuery {
@@ -122,7 +132,9 @@ export const resolveRoutes =
  * interfaces -- see docs/policy-server.md on the two-port topology.
  */
 export function buildResolveApp(deps: ResolveDeps): FastifyInstance {
-  const app = Fastify({ logger: false });
+  const app = Fastify({
+    logger: loggerOptions({ level: deps.logLevel ?? "silent", app: "resolve" }),
+  });
 
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof IdentityLookupError) {

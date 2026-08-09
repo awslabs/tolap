@@ -575,3 +575,120 @@ describe("the edge is the only public surface", () => {
     expect(body).not.toMatch(/"cognito-idp:UpdateUserPoolClient"[^}]*"Resource":\s*"\*"/);
   });
 });
+
+describe("observability", () => {
+  /** Every alarm in the server stack, with its properties. */
+  const alarms = () =>
+    Object.values(
+      templates.server.findResources("AWS::CloudWatch::Alarm"),
+    ).map((alarm) => alarm.Properties as Record<string, unknown>);
+
+  /** The target group an alarm's dimensions point at, if any. */
+  const targetGroupOf = (alarm: Record<string, unknown>): string | undefined => {
+    const dimensions = (alarm.Dimensions ?? []) as Array<{
+      Name: string;
+      Value: unknown;
+    }>;
+    const dimension = dimensions.find((d) => d.Name === "TargetGroup");
+    if (!dimension) return undefined;
+    const value = dimension.Value as { "Fn::GetAtt"?: string[] };
+    return value["Fn::GetAtt"]?.[0];
+  };
+
+  it("alarms on resolve latency, errors and target health", () => {
+    // The resolve path first: it is what remote installs call, and a failure there
+    // denies access in someone else's service rather than failing open.
+    const resolveAlarms = alarms().filter((alarm) =>
+      targetGroupOf(alarm)?.includes("ResolveTarget"),
+    );
+    const metrics = resolveAlarms.map((alarm) => alarm.MetricName);
+
+    expect(metrics).toContain("TargetResponseTime");
+    expect(metrics).toContain("HTTPCode_Target_5XX_Count");
+    expect(metrics).toContain("UnHealthyHostCount");
+  });
+
+  it("holds resolve latency to a tighter threshold than admin", () => {
+    // Not cosmetic. A resolve is one indexed query plus an HMAC, so healthy is
+    // milliseconds; an import is legitimately slower. Equal thresholds would mean either
+    // a resolve alarm too loose to catch a stalled event loop, or an admin alarm that
+    // fires on every large import.
+    const latency = alarms().filter(
+      (alarm) => alarm.MetricName === "TargetResponseTime",
+    );
+    const resolve = latency.find((alarm) =>
+      targetGroupOf(alarm)?.includes("ResolveTarget"),
+    );
+    const admin = latency.find((alarm) =>
+      targetGroupOf(alarm)?.includes("AdminTarget"),
+    );
+
+    expect(resolve, "no resolve latency alarm").toBeDefined();
+    expect(admin, "no admin latency alarm").toBeDefined();
+    expect(Number(resolve!.Threshold)).toBeLessThan(Number(admin!.Threshold));
+  });
+
+  it("alarms when no task is running, and treats missing data as breaching", () => {
+    // The alarm that catches "there is no server". Every latency alarm can sit quiet
+    // while the service is gone, because no metric arrives at all -- so this one must
+    // treat absence as failure. The default (MISSING) would leave it in
+    // INSUFFICIENT_DATA, which reads as healthy.
+    const alarm = alarms().find((a) => a.MetricName === "RunningTaskCount");
+
+    expect(alarm, "no RunningTaskCount alarm").toBeDefined();
+    expect(alarm!.ComparisonOperator).toBe("LessThanThreshold");
+    expect(alarm!.Threshold).toBe(1);
+    expect(alarm!.TreatMissingData).toBe("breaching");
+  });
+
+  it("requires Container Insights, which RunningTaskCount depends on", () => {
+    // That alarm reads an ECS/ContainerInsights metric. Without Insights enabled the
+    // metric never arrives and, combined with treatMissingData: BREACHING, the alarm
+    // would sit permanently in ALARM instead of silently never firing -- noisy rather
+    // than blind, but wrong either way.
+    templates.server.hasResourceProperties("AWS::ECS::Cluster", {
+      ClusterSettings: Match.arrayWith([
+        Match.objectLike({ Name: "containerInsights" }),
+      ]),
+    });
+  });
+
+  it("sets treatMissingData explicitly on every alarm", () => {
+    // The CDK default is MISSING, which for most of these reads as healthy when the
+    // metric stops arriving. Whichever value is right, it should be a decision.
+    for (const alarm of alarms()) {
+      expect(alarm.TreatMissingData, String(alarm.AlarmName)).toBeDefined();
+    }
+  });
+
+  it("gives every alarm a description an operator can act on", () => {
+    // An alarm whose name is its only documentation gets acknowledged and ignored.
+    for (const alarm of alarms()) {
+      expect(
+        String(alarm.AlarmDescription ?? "").length,
+        String(alarm.MetricName),
+      ).toBeGreaterThan(40);
+    }
+  });
+
+  it("turns request logging on in the task definition", () => {
+    // Both apps defaulted to `logger: false`, which is why a 15-second event-loop stall
+    // left no trace. The level is stated in the task definition rather than left to the
+    // server's default, so the running verbosity is readable without reading the source.
+    const definitions = templates.server.findResources("AWS::ECS::TaskDefinition");
+    const container = (
+      Object.values(definitions)[0]!.Properties as {
+        ContainerDefinitions: Array<{ Environment?: Array<{ Name: string; Value: unknown }> }>;
+      }
+    ).ContainerDefinitions[0]!;
+    const byName = new Map(
+      (container.Environment ?? []).map((entry) => [entry.Name, entry.Value]),
+    );
+
+    expect(byName.get("LOG_LEVEL")).toBe("info");
+  });
+
+  it("publishes one dashboard", () => {
+    templates.server.resourceCountIs("AWS::CloudWatch::Dashboard", 1);
+  });
+});
