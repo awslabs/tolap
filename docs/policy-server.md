@@ -302,9 +302,52 @@ TOLAP_ACTIVE_KID=2026-08
 TOLAP_SIGNING_KEYS="2026-08:<new secret>"
 ```
 
-The overlap is what removes the flag day: both keys verify throughout, so installs
-update on their own schedule. The server logs the active `kid` and the others it
-still verifies at startup.
+**What the overlap actually buys, precisely.** An earlier version of this section said
+"both keys verify throughout", which is wrong and worth correcting rather than quietly
+rewording: HMAC is symmetric, so **only the signing key verifies a given artifact**. An
+install holding just the old key cannot verify an artifact signed under the new one.
+Verified against the SDKs, not assumed — `server/tools/rotate-key.ts verify` prints this
+for any keyring you give it.
+
+So the overlap is on the **server** side. Between steps 1 and 3 the server can still
+*sign* with the old key while already accepting the new one in its ring; artifacts already
+issued under the old key stay verifiable by installs that still hold it. What removes the
+flag day is step 2, and its position matters: every install must hold the new key **before**
+the active `kid` flips. Otherwise its first post-flip artifact fails to verify — and
+enforcement fails closed, so that is a denial across every tool the install wraps, not a
+warning.
+
+The server logs the active `kid` and the others it still verifies at startup.
+
+### The helper
+
+`server/tools/rotate-key.ts` covers the two places the runbook alone is not enough:
+
+```bash
+# Mint a key. Prints both variables with the CURRENT key still active, because step 1
+# adds a key and step 3 flips to it.
+node --experimental-strip-types tools/rotate-key.ts generate --kid 2026-08
+
+# Prove the keyring behaves as you think BEFORE deploying it -- and again before you
+# drop the old key at step 4.
+node --experimental-strip-types tools/rotate-key.ts verify "2026-05:...,2026-08:..." --active 2026-08
+```
+
+`verify` signs an artifact under the active key and reports, per key, whether it
+verifies — so the asymmetry above is visible for your actual keyring rather than
+something to take on trust. It also fails on two cases worth catching:
+
+- **Two entries sharing a secret**, which is a rotation that looks complete and changed
+  nothing. Nothing else in the system would notice: the kid differs, the artifact
+  validates, and the old key was never retired.
+- A **negative control** — a key outside the ring must be rejected. Without it every
+  passing line could be passing because verification is broken rather than because the
+  keys are right.
+
+It exits non-zero on failure, so it can gate a deploy. It is read-only: it never writes a
+secret, never calls Secrets Manager, and never touches the running service. Rotation is a
+deliberate act, and a tool that *could* perform it is a tool that can perform it by
+accident.
 
 A single `TOLAP_SIGNING_KEY` still works and becomes the key `default`, so an
 existing deployment upgrades without any configuration change — its artifacts gain

@@ -10,7 +10,8 @@
     "test": "vitest run",
     "dev": "node --experimental-strip-types src/index.ts",
     "migrate": "node --experimental-strip-types src/db/migrate.ts",
-    "dev-idp": "node --experimental-strip-types tools/dev-idp.ts"
+    "dev-idp": "node --experimental-strip-types tools/dev-idp.ts",
+    "rotate-key": "node --experimental-strip-types tools/rotate-key.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1105.0",
