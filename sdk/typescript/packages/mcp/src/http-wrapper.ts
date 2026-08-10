@@ -134,6 +134,18 @@ export interface SecureHttpWrapperOptions {
   enforceSignatures?: boolean;
   enforceExpiry?: boolean;
   baseUrl?: string;
+  /**
+   * Secret salt for `hash` masking, turning the digest into a keyed HMAC.
+   *
+   * Unset by default, which preserves the plain-digest pseudonym (and so existing
+   * join keys). Set it and `hash` becomes a confidentiality control: an unsalted
+   * digest of a low-entropy value — an SSN, a date of birth, a small enumeration —
+   * is recoverable by brute force or a rainbow table.
+   *
+   * Must match the value configured on the MCP wrappers, or the same field masks
+   * to two different pseudonyms depending on which transport served the request.
+   */
+  hashSalt?: string | Buffer;
 }
 
 export interface RequestArgs {
@@ -366,7 +378,12 @@ export class SecureHttpToolWrapper {
     }
 
     if (response.ok) {
-      return runPipeline(await response.json(), args.collectionPath, policy);
+      return runPipeline(
+        await response.json(),
+        args.collectionPath,
+        policy,
+        this.options.hashSalt,
+      );
     }
 
     // A 4xx/5xx body is enforced first and thrown second. Throwing before parsing —
@@ -374,7 +391,12 @@ export class SecureHttpToolWrapper {
     // reach it through the response object the transport had already handed back.
     let errorBody: unknown;
     try {
-      errorBody = runPipeline(await response.json(), args.collectionPath, policy);
+      errorBody = runPipeline(
+        await response.json(),
+        args.collectionPath,
+        policy,
+        this.options.hashSalt,
+      );
     } catch {
       // Not JSON, so the pipeline cannot walk it and no field rule applies.
       // Withheld rather than passed through (canonical spec §5) — the status still
@@ -404,11 +426,12 @@ function runPipeline(
   body: unknown,
   collectionPath: string | undefined,
   policy: EffectivePolicy,
+  hashSalt?: string | Buffer,
 ): unknown {
   let result = filterRecordsInBody(body, collectionPath, policy);
   result = stripHiddenFields(result, policy);
   result = projectAllowedFieldsInBody(result, collectionPath, policy);
-  result = applyMaskingToTree(result, policy);
+  result = applyMaskingToTree(result, policy, hashSalt);
   return limitCollection(result, collectionPath, policy);
 }
 

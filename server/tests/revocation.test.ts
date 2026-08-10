@@ -14,8 +14,8 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { PolicyAssignment, PolicyDefinition } from "@tolap/core";
-import { PostgresPolicyStore } from "../src/db/store.ts";
+import { resolve, type PolicyAssignment, type PolicyDefinition } from "@tolap/core";
+import { PostgresPolicyStore, toAssignment } from "../src/db/store.ts";
 import { ADMIN, HAVE_DB, staticIdentity, testDb, type TestDb } from "./helpers/db.ts";
 
 const SOURCE = "db:analytics:patients";
@@ -229,6 +229,41 @@ describe("revocation (spec section 12)", () => {
       const after = await store.resolvePolicy("alice", "t1", SOURCE);
       expect(after.permissions.canQuery).toBe(false);
       expect(await store.listAssignments("alice")).toEqual([]);
+    });
+
+    it("the SDK resolver denies a revoked grant without the SQL filter", async () => {
+      // The point of carrying `revokedAt` into the assignment: the `revoked_at IS
+      // NULL` clause is no longer the only thing implementing section 12.
+      //
+      // This reads the revoked row deliberately *without* that filter — standing in
+      // for a store that forgot it, which is exactly the case the SDK had no
+      // backstop for — and feeds it to the SDK resolver. A deny here means the
+      // guarantee no longer depends on every store implementation remembering.
+      await store.putAssignmentAs(assignment(), ADMIN);
+      await store.revokeAssignment("analyst", "alice", ADMIN);
+
+      const { rows } = await db.pool.query(
+        `SELECT * FROM tolap_assignments WHERE policy_name = $1 AND assignee_id = $2`,
+        ["analyst", "alice"],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].revoked_at).not.toBeNull();
+
+      const leaked = toAssignment(rows[0]);
+      expect(leaked.revokedAt).toBeDefined();
+
+      const resolved = await resolve(
+        "alice",
+        "t1",
+        SOURCE,
+        [leaked],
+        { analyst: POLICY },
+        () => [],
+        () => [],
+      );
+
+      expect(resolved.permissions.canQuery).toBe(false);
+      expect(resolved.sourceProfiles).toEqual([]);
     });
   });
 });

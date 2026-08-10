@@ -3,15 +3,15 @@
 ┌─────────────┐
 │ Scan Status │
 └─────────────┘
-  Scanning 98 files tracked by git with 725 Code rules:
+  Scanning 145 files tracked by git with 725 Code rules:
                                                                                                                         
   Language      Rules   Files          Origin      Rules                                                                
  ─────────────────────────────        ───────────────────                                                               
-  <multilang>      43      98          Community     725                                                                
-  csharp           27      29                                                                                           
-  python          194      26                                                                                           
+  <multilang>      43     145          Community     725                                                                
+  json              3      56                                                                                           
+  csharp           27      30                                                                                           
+  python          194      25                                                                                           
   ts               84      24                                                                                           
-  json              3       9                                                                                           
   bash              1       1                                                                                           
                                                                                                                         
                 
@@ -22,13 +22,13 @@
 ✅ Scan completed successfully.
  • Findings: 0 (0 blocking)
  • Rules run: 352
- • Targets scanned: 98
+ • Targets scanned: 145
  • Parsed lines: ~100.0%
  • Scan skipped: 
-   ◦ Files matching .semgrepignore patterns: 191
+   ◦ Files matching .semgrepignore patterns: 200
  • Scan was limited to files tracked by git
  • For a detailed list of skipped files and lines, run semgrep with the --verbose flag
-Ran 352 rules on 98 files: 0 findings.
+Ran 352 rules on 145 files: 0 findings.
 (need more rules? `semgrep login` for additional free Semgrep Registry rules)
 
 

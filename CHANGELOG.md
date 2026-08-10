@@ -4,95 +4,99 @@ All notable changes to TOLAP are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 2.0.0 — first public release
+## 2.0.0
 
-This is the initial public release, so there is no prior version to diff against and no
-"unreleased" section. What follows describes the state of the code rather than a set of
-changes.
+First public release. There is no prior published version, so this entry describes what
+ships rather than a diff.
 
-Development history before this point is not in the repository: it was squashed into a
-single commit for the public release, so this file — not `git log` — is the record of
-what the pre-release work established. The rest of this entry is therefore written as
-findings rather than as a list of commits.
+### Added
 
-### What ships
+**Three SDKs** — .NET, Python and TypeScript — each with `core`, `store` and `mcp`
+packages. One policy schema (`schema/v1.0/`) covers databases, APIs, knowledge bases and
+object storage; there are no category-specific schemas.
 
-Three SDKs — .NET, Python, TypeScript — each with `core`, `store` and `mcp` packages, one
-policy schema (`schema/v1.0/`) covering databases, APIs, knowledge bases and object
-storage, and a normative specification in
-[`docs/canonical-enforcement-spec.md`](docs/canonical-enforcement-spec.md).
+**A normative specification**, [`docs/canonical-enforcement-spec.md`](docs/canonical-enforcement-spec.md).
+Where an implementation disagrees with it, the implementation is wrong. Cross-language
+behaviour is pinned by shared fixtures in `fixtures/` rather than by three independent
+readings of prose.
 
-A reference policy server (`server/`) with a PostgreSQL store, immutable versions with
-publish and rollback, an audit trail, Cognito-authenticated admin access, and a
-`GET /v1/resolve` endpoint returning a signed policy all three SDKs verify. An authoring
-console (`console/`) and CDK to deploy both (`infra/`).
+**A reference policy server** (`server/`) — PostgreSQL store, schema validation, immutable
+versions with publish and rollback, an audit trail, Cognito-authenticated admin access with
+`admin` and `auditor` roles, per-install credentials, and signing-key rotation with an
+overlap window. `GET /v1/resolve` returns a signed policy that all three SDKs verify. See
+[`docs/policy-server.md`](docs/policy-server.md).
 
-### Findings that shaped the design
+**An authoring console** (`console/`) with catalog-backed pickers for every rule in the
+policy model, source import from OpenAPI and SQL DDL, schema validation as you type, and an
+unsigned resolve preview.
 
-These are recorded because each one changed a decision, and because several were true of
-the code while the test suite reported success.
+**Deployment** (`infra/`) — CDK for CloudFront, WAF, Aurora Serverless v2 and Fargate.
+Neither load balancer is internet-facing; the edge reaches them over VPC origins.
 
-**The SDKs did not verify the same artifact.** Python and .NET check the `SecurityContext`
-envelope and read `issuedAt`; the TypeScript wrapper verifies a bare `EffectivePolicy` via
-`validatePolicy` and reads `resolvedAt`. Those are HMACs over different byte strings, so a
-server signing one silently fails the others. The artifact carries both signatures and both
-timestamp spellings — sound because the canonical projection strips `integrity` before
-hashing (§2), so the policy-level signature cannot perturb the envelope bytes. Verified
-through each SDK's real entry point.
+### Known limitations
 
-**`[]` and `null` are opposite policies.** For an allow-list, absent means unrestricted
-while an empty list denies everything (§3), so coercing either into the other is a
-fail-open that converts the most restrictive policy expressible into no restriction at all.
-Policy bodies are stored as opaque `jsonb` because a normalized table cannot represent
-"empty list" distinctly from "no rows". `sourcePatterns` is the one documented exception
-(§10), where absent and `[]` both mean "every source".
+Each of these is a design decision with a stated reason, not an oversight. The linked
+sections explain the reasoning.
 
-**Several controls were accepted and enforced nothing.** A security review of all three
-SDKs found policy controls that were not applied to returned data, and signed contexts that
-were not tamper-evident in the way the documentation claimed. Each is fixed in all three
-languages with a regression test per defect. The class that recurred: a filter or limit the
-service *accepted* while enforcing nothing, which no unit test could distinguish from a
-working one because the fixtures asserted the document the SDK had chosen to emit. Live
-services, not fixtures, caught those.
+- **Replay detection is opt-in.** Every artifact carries a signed `jti` and every SDK
+  accepts an optional `ReplayGuard`, which together make a context single-use (§13.1).
+  Detection is opt-in rather than automatic because it needs a shared record of consumed
+  identifiers that the SDK cannot assume — the bundled guard is process-local. Configure
+  none and expiry is again the only bound, which is why the server still caps TTL at one
+  hour.
+- **Salted `hash` masking is opt-in.** Set `hashSalt` and `hash` becomes a keyed HMAC
+  (§13.2); leave it unset and the pseudonym is the plain digest it always was, which is
+  brute-forceable for low-entropy values. Opt-in because the salt is a deployment secret
+  the SDK cannot invent, and because changing it changes every masked value.
+- **One deployment serves one tenant.** Any authenticated administrator sees every policy.
+  Assignment `scope.tenantId` narrows which assignments apply; it does not isolate the admin
+  surface.
+- **HMAC signing only.** Every verifier holds a key that can also sign. `ed25519` is in the
+  schema's algorithm enum but unimplemented in all three SDKs — selecting it fails loudly
+  rather than silently downgrading. Implementing it needs a third-party dependency in at
+  least one runtime, which the zero-runtime-dependency rule for `core` forbids.
+- **No offline policy bundles.** Distributing them would mean distributing the signing key,
+  which defeats the trust model.
+- **TOLAP does not judge whether your policy is correct.** An overly permissive policy is
+  enforced faithfully; `hiddenFields: ["ssn"]` protects nothing when the column is
+  `ssn_number`.
 
-**Revocation has no backstop in the SDK.** `PolicyAssignment` carries no revocation field
-and no SDK resolver models one, so the server's `revoked_at IS NULL` filter is the *only*
-thing implementing §12. Established by mutation testing rather than assumed.
+### Security
 
-**Signing-key rotation needed no SDK change.** The security-context envelope has no JSON
-Schema, so an extra top-level `kid` is legal and every SDK ignores members it does not
-model. It sits outside the signed projection, so it cannot alter the signed bytes — which
-is both why it is safe and why it is only a hint: it selects which key to try, and a forged
-one selects a key under which the signature fails.
+The SDKs and server were reviewed and scanned before release; findings, the reasoning for
+each accepted one, and the raw tool output are in [`security/`](security/). Report a
+vulnerability per [`SECURITY.md`](SECURITY.md) — please do not open a public issue.
 
-**Six super-linear parser paths in the catalog importers**, each measured before and after,
-all reachable from an uploaded document within the request body limit. The worst was not
-bounded by that limit at all: an OpenAPI document well under 1 KB, whose schemas reference
-each other, cost close to a second — the depth bound bounded *depth* rather than work, so
-the cost grew with the sixth power of the fan-out. The sixth path survived the sweep that
-fixed the other five, because the test guarding that function fed it input which never
-reached the offending loop.
+Three mechanisms close gaps that earlier revisions of this project documented as
+limitations rather than fixing. Each is normative in the spec and covered by tests in all
+three SDKs:
 
-**Testing failures are recorded as patterns, not as fixed bugs.**
-[`docs/testing-antipatterns.md`](docs/testing-antipatterns.md) lists seven defects that
-shipped here while the suite was green, with the smell to grep for in each. Three of them
-were rediscovered during the final review — including tests that passed against the very
-defect they were written to catch, which is why time-based assertions are now sized from a
-measured mutation run rather than chosen by intuition.
+- **Revocation is enforced by the SDK resolver** (§12). `PolicyAssignment.revokedAt` stops
+  an assignment resolving, overriding `active` and `expiresAt`, and an unreadable value
+  fails closed. Previously a store's own `revoked_at IS NULL` filter was the only thing
+  implementing this, so a store that omitted it failed open with nothing to catch it; that
+  filter is now defence in depth.
+- **Replay is detectable** (§13.1). The `jti` sits *inside* the signed payload, so it
+  cannot be stripped or swapped to dodge a guard — the property that makes the guard worth
+  having. The check runs after signature and expiry so a rejected context cannot consume a
+  live identifier.
+- **`hash` masking can be a confidentiality control** (§13.2). Salted it is a keyed HMAC —
+  RFC 2104 over the chosen digest, byte-pinned across the three SDKs so the pseudonym still
+  joins.
 
-### Deliberately not in this release
+Two properties are worth knowing before you build against this, both specified normatively:
 
-Each of these is a decision with a stated reason, not an oversight:
+- For an allow-list, **absent means unrestricted and `[]` means deny everything** (§3).
+  They are opposite policies, so a store that coerces one into the other is a fail-open.
+  `sourcePatterns` is the one documented exception (§10).
+- **Identity extraction fails closed** (§11). A credential presented and rejected is never
+  downgraded to anonymous.
 
-- **`ed25519`** is in the schema's algorithm enum but unimplemented in all three SDKs.
-- **Asymmetric signing.** HMAC means every verifier holds a key that can also sign.
-- **Replay prevention.** §13 notes that single-use enforcement needs server-side state the
-  SDK deliberately does not assume; short TTLs are the answer, capped at one hour.
-- **Multi-tenant isolation of the admin surface.** One deployment serves one tenant and any
-  authenticated administrator sees every policy. Assignment `scope.tenantId` narrows which
-  assignments apply; it does not isolate the console.
-- **Offline policy bundles.** Distributing them would mean distributing the signing key,
-  which defeats the trust model the server exists to provide.
+### Notes
 
-See [`security/`](security/) for scan evidence, including findings accepted with their
-reasoning, and [`SECURITY.md`](SECURITY.md) for how to report a vulnerability.
+Development history is not in the repository — it was squashed into a single commit for
+this release. Design rationale lives in [`docs/`](docs/), not in commit messages:
+[`architecture.md`](docs/architecture.md) for the model,
+[`canonical-enforcement-spec.md`](docs/canonical-enforcement-spec.md) for normative
+behaviour, and [`testing-antipatterns.md`](docs/testing-antipatterns.md) for the test
+failures this project has actually shipped and what to grep for.

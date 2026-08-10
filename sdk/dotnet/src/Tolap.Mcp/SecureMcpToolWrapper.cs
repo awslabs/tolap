@@ -129,7 +129,7 @@ public sealed class SecureMcpToolWrapper
             return result;
         }
 
-        return EnforcementEngine.ApplyResultPipeline(result, policy);
+        return EnforcementEngine.ApplyResultPipeline(result, policy, _options.HashSalt);
     }
 
     /// <summary>

@@ -56,6 +56,8 @@ from tolap_core.kb_providers import (
     render_kb_filter,
 )
 from tolap_core.context import (
+    InMemoryReplayGuard,
+    ReplayGuard,
     build_security_context,
     deserialize_context,
     serialize_context,
@@ -154,6 +156,8 @@ __all__ = [
     "build_kb_filter",
     "render_kb_filter",
     # Context / Signing
+    "InMemoryReplayGuard",
+    "ReplayGuard",
     "build_security_context",
     "deserialize_context",
     "serialize_context",

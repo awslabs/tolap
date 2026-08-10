@@ -8,10 +8,12 @@
  *    nothing, and no part of TOLAP can detect it — the policy validates, signs,
  *    resolves and enforces perfectly. The catalog dropdown is the fix.
  * 2. **A mask type that discloses more than intended.** The five types are not
- *    interchangeable: `partial` reveals real characters, and `hash` is an unsalted
- *    truncated digest that the spec explicitly says is *not* a confidentiality control
- *    — it is brute-forceable for low-entropy values like SSNs and dates of birth. Both
- *    are stated inline rather than left to the schema docs.
+ *    interchangeable: `partial` reveals real characters, and `hash` is a truncated
+ *    digest that is only a confidentiality control when the deployment configures a
+ *    `hashSalt` (spec section 13.2) — unsalted it is brute-forceable for low-entropy
+ *    values like SSNs and dates of birth. The console cannot see whether a salt is
+ *    configured, which is why the warning is unconditional. Both are stated inline
+ *    rather than left to the schema docs.
  */
 
 import { useId } from "react";
@@ -36,7 +38,7 @@ const MASK_TYPES: Array<{
   {
     value: "hash",
     label: "hash",
-    note: "Stable digest — usable as a join key, and NOT a confidentiality control: brute-forceable for SSNs, dates of birth, and small enumerations.",
+    note: "Stable digest — usable as a join key. NOT a confidentiality control unless the deployment sets a hash salt: unsalted it is brute-forceable for SSNs, dates of birth, and small enumerations.",
   },
   {
     value: "partial",

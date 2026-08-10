@@ -1,6 +1,6 @@
 # Security scan results
 
-Tool output for each SDK, captured **2026-08-04**.
+Tool output for each SDK, captured **2026-08-09**.
 
 The commit it was captured against is not in the repository: development history was
 squashed into a single commit for the public release, so a SHA here would dangle. The
@@ -14,7 +14,7 @@ below against what the tools actually said.
 
 | SDK | Tool | Purpose | Result |
 | --- | --- | --- | --- |
-| all | [Semgrep](semgrep.txt) | SAST — 352 rules (`security-audit`, `secrets`, `owasp-top-ten`) | **0 findings** across 98 files |
+| all | [Semgrep](semgrep.txt) | SAST — 352 rules (`security-audit`, `secrets`, `owasp-top-ten`) | **0 findings** across 145 files |
 | all | [Trivy](trivy.txt) | dependency vulns, secrets, misconfiguration | **0** for the SDKs; **1 Low** in the examples -- see below |
 | .NET | [`dotnet list package --vulnerable`](dotnet/dotnet-vulnerable.txt) | known CVEs, incl. transitive | **0** across all 7 projects |
 | .NET | [`dotnet list package --deprecated`](dotnet/dotnet-deprecated.txt) | deprecated packages | **1** — see below |
@@ -30,12 +30,13 @@ CI-tested against the real thing. Those are **example-only, dev-time dependencie
 TOLAP package depends on any of them, which is why the SDK and example results are reported
 separately rather than as one number.
 
-Fixed on 2026-08-04:
+Fixed (2026-08-04, and 2026-08-09 for the last row):
 
 | Finding | Severity | Action |
 | --- | --- | --- |
 | `vitest` / `vite` / `esbuild` / `@vitest/mocker` / `vite-node` | 1 Critical, 1 High, 3 Moderate | `vitest` 2.1 -> 4.1. All 30 example tests still pass. |
 | `hono` CVE-2026-69207 (ReDoS in CORS middleware) | Moderate | `npm audit fix`; a transitive dep of `@modelcontextprotocol/sdk`. |
+| `nanoid` GHSA-2v37-7h3g-55p8 (custom generators can loop indefinitely at size zero) | High | `npm audit fix` -> `nanoid` 3.3.18, reached only as `vitest` -> `vite` -> `postcss`. Advisory published after the 2026-08-04 scan, which is why a re-scan found a High where the previous run reported none. All SDK suites pass on the bumped toolchain. |
 
 Remaining, and not fixable by us:
 

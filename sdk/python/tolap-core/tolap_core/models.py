@@ -133,6 +133,10 @@ class PolicyAssignment:
     active: bool
     audit: AuditInfo
     expires_at: str | None = None
+    # Revocation tombstone (spec section 12). Set means the grant no longer
+    # resolves while remaining visible to auditors; it is deliberately separate
+    # from `active` so that un-setting `active` cannot be confused with revoking.
+    revoked_at: str | None = None
 
 
 # -- Effective Policy models --
@@ -185,3 +189,8 @@ class SecurityContext:
     expires_at: str | None = None
     signature: str | None = None
     algorithm: SigningAlgorithm | None = None
+    # Unique context identifier for replay detection (spec section 13). Signed
+    # when present, so it cannot be stripped or swapped without invalidating the
+    # signature. Optional for backward compatibility: a context without a `jti`
+    # produces the same canonical bytes it did before this field existed.
+    jti: str | None = None

@@ -286,6 +286,7 @@ def deserialize_policy_assignment(data: dict | str) -> PolicyAssignment:
         active=d["active"],
         audit=_deser_audit(d["audit"]),
         expires_at=d.get("expires_at"),
+        revoked_at=d.get("revoked_at"),
     )
 
 

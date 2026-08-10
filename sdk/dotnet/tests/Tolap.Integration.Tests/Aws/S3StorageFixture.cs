@@ -80,7 +80,7 @@ public sealed class S3StorageFixture : IAsyncLifetime
             // not a reason to report success.
             throw new InvalidOperationException(
                 "TOLAP_TEST_AWS=1 but the S3 bucket could not be created. Assume a role "
-                + "first (e.g. isengardcli assume <account>).", exception);
+                + "first for a sandbox account.", exception);
         }
 
         await SeedAsync();

@@ -14,7 +14,7 @@ Everything created carries the same random suffix and is recorded, so `down` rem
 exactly what `up` made and nothing else -- this account is shared. `up` is idempotent
 enough to resume: each step checks for its resource before creating it.
 
-Run under credentials, e.g. `isengardcli run --account <acct> --region us-east-1 -- \\
+Run under sandbox credentials, e.g. `AWS_REGION=us-east-1 \\
   python provision_bedrock_kb.py up`.
 
 This is test infrastructure. It is not shipped, imports boto3 (a test-only dependency),

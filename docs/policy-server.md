@@ -206,10 +206,11 @@ without one.** A default would be shared by every deployment that forgot to set
 one, making every artifact those servers issue forgeable by anyone who has read the
 source. Load it from Secrets Manager or SSM Parameter Store; never commit it.
 
-**TTL is capped at one hour** because a signed artifact is replayable for its entire
-lifetime — TOLAP has no `jti` and no single-use enforcement (§13), so expiry is the
-*only* bound on a captured artifact. A day-long TTL is a day-long replay window,
-which is why this is a hard ceiling rather than advice.
+**TTL is capped at one hour** because expiry is the only replay bound a consumer gets
+for free. Artifacts carry a signed `jti` and every SDK accepts an optional `ReplayGuard`
+that makes them single-use (§13.1), but the server cannot make a consumer configure one —
+so the ceiling assumes none is. A day-long TTL would be a day-long replay window for any
+consumer that skipped the guard, which is why this is a hard limit rather than advice.
 
 ## Group and role membership
 
@@ -444,9 +445,11 @@ than an error an author would notice.
 - **Masked fields.** Mask types are listed most- to least-restrictive, which is also the
   spec's merge order (least-revealing wins), so the trade-off is visible while choosing
   rather than looked up afterwards. `partial` is marked as revealing real characters and
-  `hash` as **not a confidentiality control** — an unsalted truncated digest is
-  brute-forceable for SSNs, dates of birth and small enumerations, so it is a pseudonym
-  and a join key, not protection.
+  `hash` as **not a confidentiality control unless salted** — a bare truncated digest is
+  brute-forceable for SSNs, dates of birth and small enumerations, so unsalted it is a
+  pseudonym and a join key, not protection. Configuring `hashSalt` on the wrapper makes it
+  a keyed HMAC (§13.2); the console cannot show whether a given deployment has done so,
+  which is why the warning stays.
 
   `partial` also takes `showFirst` / `showLast` / `maskChar`, and `hash` takes
   `algorithm`. Without those controls "reveal the last four of an SSN" is not expressible
@@ -570,9 +573,12 @@ enforcement rather than by inspecting the JSON.
 Revocation is a tombstone so the grant stays visible to auditors, and every read
 path filters it out. §12 requires that revoking make an assignment *stop resolving*;
 recording a revocation while continuing to resolve it is "a fail-open control with a
-misleading audit trail." Note that revocation is a **server-only** concept — the SDK
-resolver has never heard of it — so those filters are the only thing implementing
-§12. There is no backstop.
+misleading audit trail." The store also hands `revokedAt` to the SDK, whose resolver
+refuses a revoked assignment on its own — so these filters are defence in depth
+rather than the only thing implementing §12. They used to be the only thing, which is
+why a store that dropped one failed open silently; if you replace this store, the SDK
+now catches that mistake, but filter in your query anyway so you are not resolving
+rows that cannot apply.
 
 ## Running it
 

@@ -85,7 +85,7 @@ def s3_client(aws_region: str):
     except NoCredentialsError as exc:  # pragma: no cover - setup failure
         raise RuntimeError(
             "TOLAP_TEST_AWS=1 but no AWS credentials are available. "
-            "Assume a role first (e.g. isengardcli assume <account>)."
+            "Assume a role or export credentials for a sandbox account first."
         ) from exc
     return client
 

@@ -557,5 +557,9 @@ class TestUnenforceableModeWarning:
             "enforce_signatures",
             "enforce_expiry",
             "allowed_tools",
+            # Strengthens `hash` masking rather than relaxing anything: unset keeps
+            # the existing plain-digest pseudonym, set makes it a keyed HMAC. There
+            # is no value of it that discloses more than the default.
+            "hash_salt",
             "allow_unenforceable_shapes",
         }

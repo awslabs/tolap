@@ -121,11 +121,31 @@ class TestCanonicalPayloadShape:
 
         payload = json.loads(_canonical_payload(context))
 
-        assert sorted(payload) == ["expiresAt", "issuedAt", "policies", "tenantId", "userId", "version"]
+        # `jti` is present because build_security_context mints one by default, and
+        # it is inside the signed bytes so it cannot be stripped or swapped.
+        assert sorted(payload) == [
+            "expiresAt", "issuedAt", "jti", "policies", "tenantId", "userId", "version",
+        ]
         assert payload["userId"] == "user-001"
         assert payload["tenantId"] == "tenant-midwest-health"
         assert isinstance(payload["policies"], list)
         assert len(payload["policies"]) == 1, "a single-policy SDK projects to a one-element array"
+
+    def test_payload_without_a_jti_keeps_the_pre_jti_shape(self) -> None:
+        """Absence of `jti` must be byte-identical to the pre-`jti` canonical form.
+
+        Emitting the key unconditionally would change the signed bytes for every
+        existing context, breaking the known-answer fixtures and cross-SDK
+        agreement. This pins the compatibility rule rather than trusting it.
+        """
+        context = build_security_context(
+            "user-001", "tenant-midwest-health", [_policy()], ttl=timedelta(hours=1), jti=""
+        )
+
+        payload = json.loads(_canonical_payload(context))
+
+        assert sorted(payload) == ["expiresAt", "issuedAt", "policies", "tenantId", "userId", "version"]
+        assert "jti" not in payload
 
     def test_integrity_block_is_excluded_from_the_policy(self) -> None:
         policy = _policy()

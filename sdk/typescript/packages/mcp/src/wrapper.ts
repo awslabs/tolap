@@ -250,7 +250,7 @@ export class SecureMcpToolWrapper {
       return result;
     }
 
-    return applyResultPipeline(result, policy);
+    return applyResultPipeline(result, policy, this.options.hashSalt);
   }
 
   // -----------------------------------------------------------------------

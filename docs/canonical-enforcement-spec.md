@@ -547,22 +547,52 @@ audit event while leaving the assignment active is a fail-open control with a
 misleading audit trail. Tests MUST assert that access is gone after revocation,
 not merely that an audit event fired.
 
+`PolicyAssignment.revokedAt` is the revocation tombstone, and the SDK resolver
+enforces it: an assignment whose `revokedAt` is set and not future-dated MUST NOT
+resolve, regardless of `active` or `expiresAt`. The rules:
+
+- Revocation is checked **before** `active` and `expiresAt`, and overrides both. A
+  revoked assignment does not become live again by being marked active.
+- A **future-dated** `revokedAt` is not yet in effect, mirroring `expiresAt`. This
+  keeps a scheduled revocation expressible rather than making the field a boolean
+  in disguise.
+- An **unparseable or empty** `revokedAt` MUST NOT resolve — the fail-closed
+  direction. A revocation that cannot be read is honoured, because the alternative
+  keeps a revoked grant silently alive. Note this is the opposite of a truthiness
+  check, which would read `""` as "never revoked".
+
+  The *mechanism* differs by language, and both are acceptable because both deny.
+  Python and TypeScript model the field as a string and treat an unreadable value as
+  revoked inside the resolver; .NET types it as `DateTimeOffset?`, so a malformed
+  value is rejected at deserialization with a `JsonException` before the resolver
+  runs. What MUST hold everywhere is that no such value produces a *resolving*
+  assignment.
+- `revokedAt` is separate from `active` deliberately, so deactivating cannot be
+  mistaken for revoking, and the grant stays visible to auditors after revocation.
+
+A store that filters revoked rows in its own query (as the reference server does
+with `revoked_at IS NULL`) is doing defence in depth, not the only enforcement.
+Before this field existed, that filter *was* the only thing implementing this
+section, so a store that omitted it failed open with nothing to catch it.
+
 ## 13. Known limitations
 
 These are deliberate, documented gaps rather than defects. They are recorded here
 so integrators can compensate and so nobody mistakes them for guarantees.
 
-- **A valid signed context is replayable for its full TTL.** Contexts carry no
-  nonce or `jti` and are not single-use, so expiry is the only replay bound. A
-  captured context is usable until it expires. Keep TTLs short (the default is one
-  hour), use TLS on every hop so contexts are not capturable in transit, and treat
-  a context as a bearer credential. Single-use enforcement requires server-side
-  state the SDK deliberately does not assume.
-- **`hash` masking is not a confidentiality control.** It is an unsalted,
-  truncated SHA-256 digest — stable, so it works as a pseudonymous join key, and
+- **A signed context is replayable for its full TTL unless a replay guard is
+  wired up.** Contexts carry a `jti` (§13.1) and every SDK accepts an optional
+  `ReplayGuard` at deserialization, which makes a context single-use. Detection is
+  opt-in because the state it needs — a shared record of consumed identifiers —
+  is something the SDK cannot assume. With no guard, expiry remains the only
+  replay bound: keep TTLs short (the default is one hour), use TLS on every hop,
+  and treat a context as a bearer credential.
+- **`hash` masking is only a confidentiality control when salted.** Unsalted it is
+  a truncated digest — stable, so it works as a pseudonymous join key, and
   therefore brute-forceable for low-entropy values (SSNs, dates of birth, small
-  enumerations). Use `redact` or `null` when the value must actually be secret.
-  Truncation length is 16 hex characters in all three SDKs.
+  enumerations). Configure a `hashSalt` (§13.2) to make it a keyed HMAC, or use
+  `redact`/`null` when the value must not be derivable at all. Truncation length is
+  16 hex characters in every form and every SDK.
 - **ReDoS mitigation differs by mechanism.** .NET applies a regex match timeout;
   Python and TypeScript bound pattern and input length (their runtimes have no
   regex timeout). All three refuse the same inputs and treat a regex failure as a
@@ -571,6 +601,54 @@ so integrators can compensate and so nobody mistakes them for guarantees.
 - **Policy authors are trusted.** Policies are authored by administrators, not by
   agents or end users. A deliberately malicious policy (for example a pathological
   regex) is outside the threat model, though the bounds above limit the damage.
+- **HMAC signing only.** Every verifier holds a key that can also sign, so a
+  compromised verifier can mint contexts. `ed25519` is in the schema's algorithm
+  enum and unimplemented in all three SDKs; selecting it fails loudly rather than
+  falling back (a silent downgrade to HMAC would be worse than an error). Asymmetric
+  signing needs a third-party dependency in at least one runtime, which the
+  zero-runtime-dependency rule for `core` currently forbids.
+
+### 13.1 Replay detection — `jti`
+
+`SecurityContext.jti` is a unique context identifier. The rules:
+
+- It is **inside the signed payload** when present. Stripping or swapping it MUST
+  invalidate the signature — otherwise a guard is trivially bypassed by removing
+  the field, and a test that only replays an unmodified context would not notice.
+- It is **omitted from the canonical payload entirely when absent**, so a context
+  without a `jti` produces byte-identical bytes to the pre-`jti` form. This keeps
+  the known-answer fixtures and cross-SDK agreement intact. An empty string MUST
+  normalize to absent, so `""` and omitted cannot yield two different signatures.
+- Context builders mint one by default (UUID in Python/TypeScript, GUID in .NET), so
+  contexts are replay-checkable without the caller opting in.
+- A `ReplayGuard` records consumed identifiers. Implementations MUST be atomic:
+  check-then-register as two steps lets concurrent replays both succeed, under
+  exactly the load an attacker generates.
+- When a guard is active, a context carrying **no** `jti` MUST be rejected rather
+  than passed through — silently skipping the check is the failure mode the guard
+  exists to prevent.
+- The replay check MUST run **after** signature and expiry validation. Checking
+  earlier lets an attacker consume the identifier of a context that was going to be
+  rejected anyway, denying the legitimate holder its first use.
+
+### 13.2 Salted `hash` masking — `hashSalt`
+
+When a salt is configured, `hash` masking computes `HMAC(salt, value)` instead of a
+bare digest, truncated to the same 16 hex characters.
+
+- The salt is a **deployment secret**, configured on the wrapper, and MUST NOT be a
+  policy field: policies are readable by every administrator and auditor, which
+  would defeat the point.
+- `blake2b` uses the **RFC 2104 HMAC construction** over BLAKE2b-512, not BLAKE2b's
+  native keyed mode. The two produce different digests; RFC 2104 is what Python's
+  `hmac` and Node's `createHmac("blake2b512")` compute, and all three SDKs MUST
+  agree byte-for-byte or the pseudonym stops joining across services.
+- An absent or empty salt MUST reproduce the unsalted digest exactly, so existing
+  join keys survive an upgrade.
+- Salting MUST NOT change the fail-closed behaviour for an unsupported `algorithm`;
+  it still degrades to `redact`.
+- The same salt yields the same pseudonym everywhere, which is what preserves the
+  join-key property — and why changing it changes every masked value.
 
 ## 14. Conformance
 

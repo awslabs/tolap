@@ -311,27 +311,37 @@ sequenceDiagram
 ```
 
 **Requirements for cross-boundary transport:**
-- Signature key must be shared between authority and executor (symmetric) or use asymmetric signing
+- Signature key must be shared between authority and executor (symmetric); asymmetric
+  signing is not implemented, so every verifier holds a key that can also sign
 - Context must be encrypted in transit if crossing network boundaries
-- Context expiry must be short enough to limit replay window
+- Context expiry must be short enough to limit the replay window, because expiry is the
+  only bound unless a replay guard is configured
 - Executor must reject contexts with invalid signatures or expired timestamps
+- For single-use contexts, pass a `ReplayGuard` to the deserializer. The `jti` it keys on
+  is inside the signature, so it cannot be stripped or swapped to bypass the check; the
+  guard must be backed by a store shared across every process that verifies, since the
+  bundled in-memory guard is process-local
 
 ## Security Properties
 
 ### What TOLAP Guarantees
 
-1. **No unauthorized data exposure** -- The agent cannot receive data the user is not authorized to see, because the tool physically does not return it.
-2. **No policy bypass** -- The Secure Tool Wrapper is the only path to the data source. There is no alternate route.
-3. **Tamper-proof context** -- The Security Context is cryptographically signed. Modification is detectable.
-4. **Time-bounded access** -- Security Context expiry prevents indefinite access from a single policy resolution.
-5. **Audit trail** -- Policy assignments record who granted access, when, and why.
+1. **No unauthorized data exposure** -- The agent cannot receive data the user is not authorized to see, because the tool does not return it. A result shape the pipeline cannot walk is denied rather than passed through (spec §5).
+2. **No policy bypass through the wrapper** -- Enforcement runs inside the tool, so an agent cannot route around it. This holds only as far as you wire it: a tool that reaches a data source *without* a secure wrapper is outside the boundary and TOLAP cannot know about it. "The only path" is a property of your integration, not of the SDK.
+3. **Tamper-proof context** -- The Security Context is cryptographically signed over the whole envelope, including its expiry and `jti`. Modification is detectable.
+4. **Time-bounded access** -- Security Context expiry prevents indefinite access from a single policy resolution, and expiry is inside the signature so it cannot be extended.
+5. **Revocation stops access** -- A revoked assignment stops resolving in the SDK itself, not only in whatever store you use (spec §12).
+6. **Audit trail** -- Policy assignments record who granted access, when, and why.
 
 ### What TOLAP Does Not Guarantee
 
-1. **Correctness of policies** -- TOLAP enforces whatever policies are defined. If a policy is overly permissive, TOLAP will faithfully enforce that permissiveness.
+1. **Correctness of policies** -- TOLAP enforces whatever policies are defined. If a policy is overly permissive, TOLAP will faithfully enforce that permissiveness. `hiddenFields: ["ssn"]` protects nothing when the column is `ssn_number`, and nothing in TOLAP can detect that.
 2. **Data-at-rest security** -- TOLAP governs access through tools, not storage encryption or physical security.
 3. **Network security** -- TOLAP does not replace TLS, VPNs, or network segmentation.
-4. **Authentication** -- TOLAP assumes the user is already authenticated. It does not verify identity.
+4. **Authentication** -- TOLAP assumes the user is already authenticated. It does not verify identity; it does distinguish *no credential* from *a credential that was rejected*, and never downgrades the second to anonymous (spec §11).
+5. **Single-use contexts, unless you ask for them** -- A signed context is replayable until it expires. Pass a `ReplayGuard` to the deserializer to make it single-use; without one, expiry is the only bound (spec §13.1).
+6. **Confidentiality from `hash` masking, unless salted** -- Unsalted it is a pseudonym, brute-forceable for low-entropy values. Configure a `hashSalt`, or use `redact`/`null` (spec §13.2).
+7. **Asymmetric signing** -- HMAC only, so every verifier holds a key that can also sign. Selecting `ed25519` fails loudly rather than downgrading silently.
 
 ## Deployment Patterns: Centralized Policy Store
 
@@ -414,7 +424,7 @@ The SDK defines a `IPolicyStore` interface (C#), `PolicyStore` protocol (Python)
 | `deletePolicy` | Remove a policy definition |
 | `assignPolicy` | Create a policy-to-user/group assignment |
 | `listAssignments` | List assignments for a user, group, or policy |
-| `revokeAssignment` | Remove a policy assignment |
+| `revokeAssignment` | Stop a policy assignment resolving. Set `revoked_at` rather than deleting the row, so the grant stays auditable |
 | `resolveEffectivePolicy` | Merge all applicable policies for a user-source pair |
 
 To centralize, implement this interface against your chosen backend. The in-memory store in the SDK serves as a reference implementation.
@@ -443,15 +453,32 @@ CREATE TABLE tolap_assignments (
     data_source_id  TEXT,
     active          BOOLEAN NOT NULL DEFAULT true,
     expires_at      TIMESTAMPTZ,
+    -- Revocation tombstone. Separate from `active` so deactivating cannot be
+    -- confused with revoking, and NULLable so the grant stays visible to auditors
+    -- after it stops applying. Revoke by setting this, not by DELETE: a deleted row
+    -- takes its own audit trail with it.
+    revoked_at      TIMESTAMPTZ,
     granted_by      TEXT NOT NULL,
     granted_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    reason          TEXT,
-    UNIQUE (policy_name, assignee_type, assignee_id, tenant_id, data_source_id)
+    reason          TEXT
 );
+
+-- One *live* assignment per (policy, assignee, scope). A partial unique index rather
+-- than a table-level UNIQUE, for two reasons the reference server learned the hard way:
+--   * partial, so tombstoned rows accumulate as history without blocking a later
+--     re-grant of the same triple. A plain UNIQUE would reject the re-grant.
+--   * COALESCE, because NULL never equals NULL in a unique index -- without it,
+--     unlimited duplicate tenant-wide assignments slip through.
+CREATE UNIQUE INDEX idx_assignments_unique_live
+    ON tolap_assignments (
+        policy_name, assignee_type, assignee_id,
+        COALESCE(tenant_id, ''), COALESCE(data_source_id, '')
+    )
+    WHERE revoked_at IS NULL;
 
 CREATE INDEX idx_assignments_lookup
     ON tolap_assignments (assignee_id, tenant_id, active)
-    WHERE active = true;
+    WHERE active = true AND revoked_at IS NULL;
 ```
 
 The `policy_json` column stores the full policy definition as JSONB, enabling PostgreSQL's native JSON querying for policy introspection and reporting.
@@ -523,7 +550,11 @@ public class PostgresPolicyStore : IPolicyStore
     public async Task<EffectivePolicy> ResolveEffectivePolicyAsync(
         string userId, string tenantId, string dataSourceId, CancellationToken ct = default)
     {
-        // 1. Load all active, non-expired assignments for this user and tenant
+        // 1. Load all live assignments for this user and tenant.
+        //
+        // `revoked_at IS NULL` and `active = true` are both defence in depth: the SDK
+        // resolver rejects a revoked or inactive assignment on its own. Filter here
+        // anyway so you are not fetching and merging rows that cannot apply.
         const string sql = """
             SELECT p.policy_json
             FROM tolap_assignments a
@@ -532,6 +563,7 @@ public class PostgresPolicyStore : IPolicyStore
               AND (a.tenant_id IS NULL OR a.tenant_id = @tenantId)
               AND (a.data_source_id IS NULL OR a.data_source_id = @dsId)
               AND a.active = true
+              AND a.revoked_at IS NULL
               AND (a.expires_at IS NULL OR a.expires_at > now())
             ORDER BY p.priority DESC
             """;

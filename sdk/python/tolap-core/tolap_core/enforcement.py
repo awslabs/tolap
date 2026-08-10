@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import functools
 import hashlib
+import hmac
 import math
 import re
 from collections.abc import Mapping
@@ -187,6 +188,13 @@ _HASH_ALGORITHMS: dict[str, Any] = {
     "sha512": lambda data: hashlib.sha512(data).hexdigest(),
     "blake2b": _blake2b_512,
 }
+
+# HMAC digest constructors for the salted form, keyed by the same schema values.
+_HMAC_ALGORITHMS: dict[str, Any] = {
+    "sha256": hashlib.sha256,
+    "sha512": hashlib.sha512,
+    "blake2b": lambda: hashlib.blake2b(digest_size=64),
+}
 """Hash-mask algorithms, keyed by the exact schema value (canonical spec §6).
 
 Only the three values the schema permits are accepted, matched exactly. Passing
@@ -196,7 +204,9 @@ reject, which is how a pseudonym stops matching across services.
 """
 
 
-def _apply_mask(value: object, rule: MaskingRule) -> object:
+def _apply_mask(
+    value: object, rule: MaskingRule, hash_salt: str | bytes | None = None
+) -> object:
     """Apply a masking rule to a field value.
 
     Fails closed: an unrecognized mask type is treated as ``redact`` rather than
@@ -249,6 +259,24 @@ def _apply_mask(value: object, rule: MaskingRule) -> object:
                 # service that computed the requested algorithm.
                 return "[REDACTED]"
 
+            if hash_salt:
+                # Salted (keyed) form: HMAC over the value. An unsalted digest of a
+                # low-entropy value (SSN, DOB, small enumeration) is recoverable by
+                # brute force or a rainbow table, so the salt is what makes `hash`
+                # a confidentiality control rather than only a pseudonym. The join
+                # key property survives because the same salt yields the same
+                # pseudonym everywhere -- which is also why the salt is a
+                # deployment-wide secret and not a per-policy field.
+                digest_factory = _HMAC_ALGORITHMS.get(algorithm)
+                if digest_factory is None:  # pragma: no cover - keys mirror the table above
+                    return "[REDACTED]"
+                salt_bytes = (
+                    hash_salt.encode("utf-8") if isinstance(hash_salt, str) else hash_salt
+                )
+                return hmac.new(
+                    salt_bytes, str_value.encode("utf-8"), digest_factory
+                ).hexdigest()[:16]
+
             return hasher(str_value.encode("utf-8"))[:16]
 
         case MaskType.null:
@@ -275,11 +303,13 @@ def _rule_for_key(rules: list[MaskingRule], key: str) -> MaskingRule | None:
     return max(matches, key=lambda rule: mask_restrictiveness(rule.mask_type))
 
 
-def _mask_node(node: Any, rules: list[MaskingRule]) -> Any:
+def _mask_node(
+    node: Any, rules: list[MaskingRule], hash_salt: str | bytes | None = None
+) -> Any:
     """Mask matching keys anywhere in a (possibly nested) structure, in place."""
     if isinstance(node, list):
         for index, item in enumerate(node):
-            node[index] = _mask_node(item, rules)
+            node[index] = _mask_node(item, rules, hash_salt)
         return node
 
     if not isinstance(node, dict):
@@ -288,13 +318,15 @@ def _mask_node(node: Any, rules: list[MaskingRule]) -> Any:
     for key in list(node.keys()):
         rule = _rule_for_key(rules, str(key))
         if rule is not None:
-            node[key] = _apply_mask(node[key], rule)
+            node[key] = _apply_mask(node[key], rule, hash_salt)
         else:
-            node[key] = _mask_node(node[key], rules)
+            node[key] = _mask_node(node[key], rules, hash_salt)
     return node
 
 
-def apply_field_masking(record: dict, policy: EffectivePolicy) -> dict:
+def apply_field_masking(
+    record: dict, policy: EffectivePolicy, hash_salt: str | bytes | None = None
+) -> dict:
     """Apply field masking rules to a record.
 
     Returns a deep copy: the caller's record (including any nested objects) is
@@ -305,10 +337,12 @@ def apply_field_masking(record: dict, policy: EffectivePolicy) -> dict:
     if not rules:
         return copy.deepcopy(record)
 
-    return _mask_node(copy.deepcopy(record), rules)
+    return _mask_node(copy.deepcopy(record), rules, hash_salt)
 
 
-def apply_masking(result: Any, policy: EffectivePolicy) -> Any:
+def apply_masking(
+    result: Any, policy: EffectivePolicy, hash_salt: str | bytes | None = None
+) -> Any:
     """Apply maskedFields to a record, list of records, or arbitrary JSON tree.
 
     The tree-walking counterpart to :func:`strip_hidden_fields`, and the shared
@@ -326,7 +360,7 @@ def apply_masking(result: Any, policy: EffectivePolicy) -> Any:
     if not rules:
         return copy.deepcopy(result)
 
-    return _mask_node(copy.deepcopy(result), rules)
+    return _mask_node(copy.deepcopy(result), rules, hash_salt)
 
 
 def _hidden_field_patterns(policy: EffectivePolicy) -> list[str]:
@@ -538,7 +572,9 @@ def classify_result_shape(result: Any) -> str | None:
     return None
 
 
-def apply_result_pipeline(result: Any, policy: EffectivePolicy) -> Any:
+def apply_result_pipeline(
+    result: Any, policy: EffectivePolicy, hash_salt: str | bytes | None = None
+) -> Any:
     """Run the full post-execution enforcement pipeline over a tool result.
 
     The canonical order, applied identically to a single record and to a list of
@@ -577,7 +613,7 @@ def apply_result_pipeline(result: Any, policy: EffectivePolicy) -> Any:
     filtered = apply_object_size_ceiling(filtered, policy)
     stripped = strip_hidden_fields(filtered, policy)
     projected = project_allowed_fields(stripped, policy)
-    masked = [apply_field_masking(record, policy) for record in projected]
+    masked = [apply_field_masking(record, policy, hash_salt) for record in projected]
     limited = apply_result_limit(masked, policy)
 
     if shape is _RECORD_SHAPE:

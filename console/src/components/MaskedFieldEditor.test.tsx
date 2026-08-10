@@ -113,8 +113,9 @@ describe("MaskedFieldEditor", () => {
       />,
     );
 
-    // Stated where the author is choosing, not only in the schema docs: an unsalted
-    // truncated digest of an SSN is brute-forceable.
+    // Stated where the author is choosing, not only in the schema docs: unsalted, a
+    // truncated digest of an SSN is brute-forceable. The warning is unconditional
+    // because the console cannot see whether the deployment configured a hash salt.
     const note = screen.getByText(/NOT a confidentiality control/i);
     expect(note.textContent).toMatch(/brute-forceable/i);
   });

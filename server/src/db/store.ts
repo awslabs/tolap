@@ -15,9 +15,11 @@
  *    and out of a single `jsonb` column untouched -- no column mapping, no
  *    normalization, no "helpful" emptiness coercion anywhere on the path.
  * 2. **Revocation denies.** Section 12: a revoked assignment MUST stop resolving.
- *    Every read path filters `revoked_at IS NULL`, and revocation is a tombstone
- *    only because the audit trail needs the history -- not because the row stays
- *    live.
+ *    Every read path filters `revoked_at IS NULL`, and `toAssignment` also carries
+ *    `revokedAt` to the SDK, whose resolver rejects a revoked assignment on its own.
+ *    Two independent layers, so neither is the single point of failure it once was.
+ *    Revocation is a tombstone only because the audit trail needs the history -- not
+ *    because the row stays live.
  *
  * Every listing an HTTP route can reach is paginated (`page*` below) rather than
  * returning the table. One Node process serves both this admin API and
@@ -97,7 +99,7 @@ export interface AuditEntry {
   readonly detail: unknown;
 }
 
-interface AssignmentRow {
+export interface AssignmentRow {
   id: string;
   policy_name: string;
   assignee_type: PolicyAssignment["assignee"]["type"];
@@ -106,6 +108,7 @@ interface AssignmentRow {
   source_connection_id: string | null;
   active: boolean;
   expires_at: Date | null;
+  revoked_at: Date | null;
   granted_by: string;
   granted_at: Date;
   reason: string | null;
@@ -117,7 +120,7 @@ interface AssignmentRow {
  * `expiresAt` is emitted only when set, because the SDK reads absence as "no
  * expiry" and an explicit `undefined` would serialize differently downstream.
  */
-function toAssignment(row: AssignmentRow): PolicyAssignment {
+export function toAssignment(row: AssignmentRow): PolicyAssignment {
   return {
     version: "1.0",
     policyName: row.policy_name,
@@ -131,6 +134,13 @@ function toAssignment(row: AssignmentRow): PolicyAssignment {
     active: row.active,
     ...(row.expires_at !== null
       ? { expiresAt: row.expires_at.toISOString() }
+      : {}),
+    // Carried through so the SDK resolver can enforce section 12 itself. The
+    // `revoked_at IS NULL` filter on every read path still does the work; this makes
+    // the SQL clause defense in depth rather than the only thing standing between a
+    // revoked grant and a resolved policy.
+    ...(row.revoked_at !== null && row.revoked_at !== undefined
+      ? { revokedAt: row.revoked_at.toISOString() }
       : {}),
     audit: {
       grantedBy: row.granted_by,
@@ -778,16 +788,15 @@ export class PostgresPolicyStore implements PolicyStore {
     // and role membership is expanded here because the SDK resolver takes
     // callbacks; passing the whole table instead would work but scales badly.
     //
-    // `revoked_at IS NULL` is load-bearing and has no backstop. Revocation is a
-    // server-only concept -- `PolicyAssignment` has no such field and the SDK
-    // resolver has never heard of it -- so this clause is the *only* thing
-    // implementing spec section 12. Removing it fails open silently: the audit log
-    // would still show the revocation while the assignment kept resolving, which
-    // is the exact fail-open section 12 calls out by name.
+    // `revoked_at IS NULL` narrows the read, and `toAssignment` also carries
+    // `revokedAt` through to the SDK, whose resolver rejects a revoked assignment
+    // independently. Both layers implement spec section 12, so dropping either one
+    // alone no longer fails open -- which is why a mutation removing this clause is
+    // correctly not caught by a behavioral test. It stays because filtering in SQL
+    // is cheaper than resolving rows that cannot apply.
     //
-    // `active = true` is different: the SDK resolver already rejects an inactive
-    // assignment (resolution.ts:238), so this is defense in depth and a mutation
-    // that drops it is correctly not caught by a behavioral test.
+    // `active = true` is the same shape of defense in depth: the SDK resolver already
+    // rejects an inactive assignment.
     const { rows } = await this.pool.query(
       `SELECT a.* FROM tolap_assignments a
        WHERE a.revoked_at IS NULL

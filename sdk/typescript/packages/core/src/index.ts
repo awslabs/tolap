@@ -87,6 +87,8 @@ export {
   deserializeContext,
   signPolicy,
   validatePolicy,
+  InMemoryReplayGuard,
+  type ReplayGuard,
 } from "./context.js";
 
 // Enforcement

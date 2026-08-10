@@ -1,6 +1,6 @@
 kb metadata-filter verification — real OpenSearch 2.19 and Elasticsearch 7.10
 Run: 2026-07-30T20:40:07Z
-Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Account: <ACCOUNT_ID> (sandbox)  Region: us-east-1
 Command: python3 verbose_kb_search_log.py --state <state>
 
 This run is AFTER the .keyword fail-open fix.

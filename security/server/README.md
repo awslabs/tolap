@@ -64,9 +64,10 @@ stating next to the scan results:
   edge; plaintext from the edge to the ALB, inside the VPC.
 - **The audit log lives only in Aurora**, with 7-day backups. An operator with database
   access can delete rows and there is no tamper-evident copy.
-- **A signed artifact is replayable for its full TTL.** TOLAP has no `jti` and no
-  single-use enforcement (canonical-enforcement-spec §13); expiry is the only bound,
-  which is why the server caps TTL at one hour.
+- **A signed artifact is replayable for its full TTL unless the consumer opts in.**
+  Artifacts carry a signed `jti` and the SDKs accept a `ReplayGuard` that makes them
+  single-use (canonical-enforcement-spec §13.1), but the server cannot enforce that a
+  consumer configures one — so it assumes none and caps TTL at one hour.
 - **Both listeners share one process.** The admin API and `/v1/resolve` are two Fastify
   instances in a single Node process, so admin-side CPU cost still delays policy
   resolution — that coupling is what made the SQL importer ReDoS a resolve problem rather

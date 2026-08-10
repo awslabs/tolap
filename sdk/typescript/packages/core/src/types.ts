@@ -225,6 +225,14 @@ export interface PolicyAssignment {
   scope: AssignmentScope;
   active: boolean;
   expiresAt?: string;
+  /**
+   * Revocation tombstone (spec §12). When set and not future-dated, the
+   * assignment does not resolve regardless of `active` or `expiresAt`, while
+   * staying visible to auditors. Deliberately separate from `active` so that
+   * deactivating cannot be mistaken for revoking. An unparseable value is
+   * treated as revoked (fail closed).
+   */
+  revokedAt?: string;
   audit: AuditInfo;
 }
 
@@ -261,6 +269,13 @@ export interface SecurityContext {
   expiresAt: string;
   signature?: string;
   algorithm?: string;
+  /**
+   * Unique context identifier for replay detection (spec §13). Signed when
+   * present, so it cannot be stripped or swapped without invalidating the
+   * signature. Optional for backward compatibility: a context without a `jti`
+   * produces the same canonical bytes it did before this field existed.
+   */
+  jti?: string;
 }
 
 // ---------------------------------------------------------------------------

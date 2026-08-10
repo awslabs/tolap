@@ -1,6 +1,6 @@
 db/Athena (Trino dialect) integration tests — real AWS
 Run: 2026-07-30T19:11:40Z
-Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Account: <ACCOUNT_ID> (sandbox)  Region: us-east-1
 Backend: Athena primary workgroup over a Glue table on seeded S3 CSV
 Command: TOLAP_TEST_AWS=1 pytest tests/integration/aws/test_athena_db.py -v
 

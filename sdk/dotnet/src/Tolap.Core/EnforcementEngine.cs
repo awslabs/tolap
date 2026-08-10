@@ -219,13 +219,14 @@ public static class EnforcementEngine
     /// </remarks>
     public static Dictionary<string, object?> ApplyFieldMasking(
         Dictionary<string, object?> record,
-        EffectivePolicy policy)
+        EffectivePolicy policy,
+        string? hashSalt = null)
     {
         var maskedFields = policy.ObjectRules?.FieldRules?.MaskedFields;
         if (maskedFields is null || maskedFields.Length == 0)
             return new Dictionary<string, object?>(record);
 
-        return (Dictionary<string, object?>)MaskNode(CloneNode(record), maskedFields)!;
+        return (Dictionary<string, object?>)MaskNode(CloneNode(record), maskedFields, hashSalt)!;
     }
 
     /// <summary>
@@ -243,7 +244,7 @@ public static class EnforcementEngine
         return best;
     }
 
-    private static object? MaskNode(object? node, MaskingRule[] rules)
+    private static object? MaskNode(object? node, MaskingRule[] rules, string? hashSalt = null)
     {
         if (node is Dictionary<string, object?> dict)
         {
@@ -251,8 +252,8 @@ public static class EnforcementEngine
             {
                 var rule = RuleForKey(rules, key);
                 dict[key] = rule is not null
-                    ? ApplyMask(dict[key], rule)
-                    : MaskNode(dict[key], rules);
+                    ? ApplyMask(dict[key], rule, hashSalt)
+                    : MaskNode(dict[key], rules, hashSalt);
             }
             return dict;
         }
@@ -261,7 +262,7 @@ public static class EnforcementEngine
         {
             for (var i = 0; i < list.Count; i++)
             {
-                list[i] = MaskNode(list[i], rules);
+                list[i] = MaskNode(list[i], rules, hashSalt);
             }
             return list;
         }
@@ -520,7 +521,8 @@ public static class EnforcementEngine
     /// <exception cref="UnenforceableResultException">
     /// Thrown for a shape the policy cannot be applied to.
     /// </exception>
-    public static object? ApplyResultPipeline(object? result, EffectivePolicy policy)
+    public static object? ApplyResultPipeline(
+        object? result, EffectivePolicy policy, string? hashSalt = null)
     {
         var shape = ClassifyResultShape(result);
 
@@ -537,7 +539,7 @@ public static class EnforcementEngine
             ? new List<Dictionary<string, object?>> { ToRecord(result!) }
             : ToRecordList(result!);
 
-        var processed = ApplyRecordPipeline(records, policy);
+        var processed = ApplyRecordPipeline(records, policy, hashSalt);
 
         if (shape == ResultShape.Record)
         {
@@ -558,7 +560,8 @@ public static class EnforcementEngine
     /// </remarks>
     public static IReadOnlyList<Dictionary<string, object?>> ApplyRecordPipeline(
         IReadOnlyList<Dictionary<string, object?>> records,
-        EffectivePolicy policy)
+        EffectivePolicy policy,
+        string? hashSalt = null)
     {
         var working = ApplyRowFilters(records, policy);
         working = FilterByTags(working, policy);
@@ -566,7 +569,7 @@ public static class EnforcementEngine
         working = ApplyObjectSizeCeiling(working, policy);
         working = StripHiddenFields(working, policy);
         working = ProjectAllowedFields(working, policy);
-        working = working.Select(r => ApplyFieldMasking(r, policy)).ToList();
+        working = working.Select(r => ApplyFieldMasking(r, policy, hashSalt)).ToList();
         return ApplyResultLimit(working, policy);
     }
 
@@ -1592,7 +1595,7 @@ public static class EnforcementEngine
     /// <c>redact</c> rather than returning the caller's original value, so a typo or a
     /// mask type from a newer schema version cannot silently disable masking.
     /// </remarks>
-    public static object? ApplyMask(object? value, MaskingRule rule)
+    public static object? ApplyMask(object? value, MaskingRule rule, string? hashSalt = null)
     {
         return rule.MaskType switch
         {
@@ -1600,7 +1603,7 @@ public static class EnforcementEngine
             MaskType.Redact => "[REDACTED]",
             MaskType.Full => ApplyFullMask(value, rule.Parameters),
             MaskType.Partial => ApplyPartialMask(value, rule.Parameters),
-            MaskType.Hash => ApplyHashMask(value, rule.Parameters),
+            MaskType.Hash => ApplyHashMask(value, rule.Parameters, hashSalt),
             _ => "[REDACTED]"
         };
     }
@@ -1658,23 +1661,35 @@ public static class EnforcementEngine
     /// divergence in a new form. An unrecognized value fails closed as <c>redact</c>.
     /// </para>
     /// </remarks>
-    private static string ApplyHashMask(object? value, MaskingParameters? parameters)
+    private static string ApplyHashMask(
+        object? value, MaskingParameters? parameters, string? hashSalt = null)
     {
         var str = value?.ToString() ?? "";
         var bytes = Encoding.UTF8.GetBytes(str);
         var algorithm = parameters?.Algorithm ?? "sha256";
 
+        // Salted (keyed) form: HMAC over the value. An unsalted digest of a low-entropy
+        // value (SSN, DOB, small enumeration) is recoverable by brute force or a rainbow
+        // table, so the salt is what makes `hash` a confidentiality control rather than
+        // only a pseudonym. The join-key property survives because the same salt yields
+        // the same pseudonym everywhere -- which is also why the salt is a
+        // deployment-wide secret and not a per-policy field.
+        var salted = !string.IsNullOrEmpty(hashSalt);
+        var saltBytes = salted ? Encoding.UTF8.GetBytes(hashSalt!) : Array.Empty<byte>();
+
         byte[] hash;
         switch (algorithm)
         {
             case "sha256":
-                hash = SHA256.HashData(bytes);
+                hash = salted ? HMACSHA256.HashData(saltBytes, bytes) : SHA256.HashData(bytes);
                 break;
             case "sha512":
-                hash = SHA512.HashData(bytes);
+                hash = salted ? HMACSHA512.HashData(saltBytes, bytes) : SHA512.HashData(bytes);
                 break;
             case "blake2b":
-                hash = Blake2b512.HashData(bytes);
+                hash = salted
+                    ? Blake2b512.HashKeyed(saltBytes, bytes)
+                    : Blake2b512.HashData(bytes);
                 break;
             default:
                 // Unknown or unavailable: never disclose the original, and never
@@ -1971,6 +1986,47 @@ internal static class Blake2b512
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
         14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3
     };
+
+    /// <summary>
+    /// Computes HMAC-BLAKE2b-512 (RFC 2104 construction) over <paramref name="input"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>Deliberately the generic HMAC construction rather than BLAKE2b's own keyed
+    /// mode. The two produce different digests, and the salted mask has to agree
+    /// byte-for-byte across the three SDKs: Python computes
+    /// <c>hmac.new(salt, value, blake2b)</c> and Node computes
+    /// <c>createHmac("blake2b512", salt)</c>, both of which are RFC 2104 over BLAKE2b.
+    /// Using native keyed BLAKE2b here would yield a pseudonym that silently failed to
+    /// join against either — exactly the class of cross-language divergence the
+    /// canonical spec exists to prevent.</para>
+    ///
+    /// <para>The block size is 128 bytes (BLAKE2b's), not the 64 of SHA-256; a key
+    /// longer than one block is hashed down first, per RFC 2104.</para>
+    /// </remarks>
+    internal static byte[] HashKeyed(ReadOnlySpan<byte> key, ReadOnlySpan<byte> input)
+    {
+        // RFC 2104: keys longer than the block size are replaced by their digest.
+        var normalizedKey = key.Length > BlockBytes ? HashData(key) : key.ToArray();
+
+        var ipad = new byte[BlockBytes];
+        var opad = new byte[BlockBytes];
+        for (var i = 0; i < BlockBytes; i++)
+        {
+            var keyByte = i < normalizedKey.Length ? normalizedKey[i] : (byte)0;
+            ipad[i] = (byte)(keyByte ^ 0x36);
+            opad[i] = (byte)(keyByte ^ 0x5c);
+        }
+
+        var inner = new byte[BlockBytes + input.Length];
+        ipad.CopyTo(inner.AsSpan());
+        input.CopyTo(inner.AsSpan(BlockBytes));
+        var innerHash = HashData(inner);
+
+        var outer = new byte[BlockBytes + innerHash.Length];
+        opad.CopyTo(outer.AsSpan());
+        innerHash.CopyTo(outer.AsSpan(BlockBytes));
+        return HashData(outer);
+    }
 
     /// <summary>Computes the unkeyed BLAKE2b-512 digest of <paramref name="input"/>.</summary>
     internal static byte[] HashData(ReadOnlySpan<byte> input)

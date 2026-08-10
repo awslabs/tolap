@@ -1,43 +1,15 @@
-Run started:2026-07-30 15:54:54.520173
+[main]	INFO	profile include tests: None
+[main]	INFO	profile exclude tests: None
+[main]	INFO	cli include tests: None
+[main]	INFO	cli exclude tests: None
+[main]	INFO	running on Python 3.13.2
+Run started:2026-08-10 01:02:29.355662
 
 Test results:
->> Issue: [B107:hardcoded_password_default] Possible hardcoded password: 'Authorization'
-   Severity: Low   Confidence: Medium
-   CWE: CWE-259 (https://cwe.mitre.org/data/definitions/259.html)
-   More Info: https://bandit.readthedocs.io/en/1.8.3/plugins/b107_hardcoded_password_default.html
-   Location: sdk/python/tolap-mcp/tolap_mcp/extractors.py:94:4
-93	
-94	    def __init__(
-95	        self,
-96	        token_header: str = "Authorization",
-97	        user_id_claim: str = "sub",
-98	        tenant_id_claim: str = "tenant_id",
-99	        *,
-100	        secret: str | bytes | None = None,
-101	        algorithms: tuple[str, ...] = ("HS256",),
-102	        allow_unverified: bool = False,
-103	        leeway_seconds: int = 0,
-104	    ) -> None:
-105	        if secret is None and not allow_unverified:
-106	            raise ValueError(
-107	                "JwtIdentityExtractor requires a signing 'secret' to verify JWTs. "
-108	                "If (and only if) signatures are already verified by a trusted "
-109	                "upstream layer, pass allow_unverified=True explicitly."
-110	            )
-111	
-112	        self._token_header = token_header
-113	        self._user_id_claim = user_id_claim
-114	        self._tenant_id_claim = tenant_id_claim
-115	        self._secret = secret.encode("utf-8") if isinstance(secret, str) else secret
-116	        self._algorithms = tuple(algorithms)
-117	        self._allow_unverified = allow_unverified
-118	        self._leeway_seconds = leeway_seconds
-119	
-
---------------------------------------------------
+	No issues identified.
 
 Code scanned:
-	Total lines of code: 5136
+	Total lines of code: 5375
 	Total lines skipped (#nosec): 0
 	Total potential issues skipped due to specifically being disabled (e.g., #nosec BXXX): 0
 

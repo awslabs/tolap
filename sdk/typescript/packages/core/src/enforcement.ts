@@ -4,7 +4,7 @@
  * Runtime enforcement of effective policies against data access operations.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import {
   type EffectivePolicy,
   type AccessResult,
@@ -265,7 +265,11 @@ export function validateFieldAccess(
  * `redact` rather than returning the caller's original value. A typo, or a mask
  * type from a newer schema version, must not silently disable masking.
  */
-export function applyMask(value: unknown, rule: MaskingRule): unknown {
+export function applyMask(
+  value: unknown,
+  rule: MaskingRule,
+  hashSalt?: string | Buffer,
+): unknown {
   if (value === null || value === undefined) return null;
   switch (rule.maskType) {
     case "full":
@@ -273,7 +277,7 @@ export function applyMask(value: unknown, rule: MaskingRule): unknown {
     case "partial":
       return applyPartialMask(value, rule);
     case "hash":
-      return applyHashMask(value, rule);
+      return applyHashMask(value, rule, hashSalt);
     case "null":
       return null;
     case "redact":
@@ -324,7 +328,11 @@ const HASH_ALGORITHMS: Record<string, string> = {
   blake2b: "blake2b512",
 };
 
-function applyHashMask(value: unknown, rule: MaskingRule): string {
+function applyHashMask(
+  value: unknown,
+  rule: MaskingRule,
+  hashSalt?: string | Buffer,
+): string {
   const str = String(value);
   const algorithm = rule.parameters?.algorithm ?? "sha256";
   const nodeName = HASH_ALGORITHMS[algorithm];
@@ -336,7 +344,17 @@ function applyHashMask(value: unknown, rule: MaskingRule): string {
   // the algorithm the policy actually asked for.
   if (nodeName === undefined) return "[REDACTED]";
 
-  // Truncate to 16 hex chars to match the Python and .NET SDKs.
+  // Salted (keyed) form: HMAC over the value. An unsalted digest of a low-entropy
+  // value (SSN, DOB, small enumeration) is recoverable by brute force or a rainbow
+  // table, so the salt is what makes `hash` a confidentiality control rather than
+  // only a pseudonym. The join-key property survives because the same salt yields
+  // the same pseudonym everywhere -- which is also why the salt is a deployment-wide
+  // secret and not a per-policy field.
+  //
+  // Truncated to 16 hex chars in both forms, to match the Python and .NET SDKs.
+  if (hashSalt !== undefined && hashSalt.length > 0) {
+    return createHmac(nodeName, hashSalt).update(str).digest("hex").slice(0, 16);
+  }
   return createHash(nodeName).update(str).digest("hex").slice(0, 16);
 }
 
@@ -364,10 +382,14 @@ function ruleForKey(rules: MaskingRule[], key: string): MaskingRule | undefined 
 }
 
 /** Mask matching keys anywhere in a (possibly nested) structure, in place. */
-function maskNode(node: unknown, rules: MaskingRule[]): unknown {
+function maskNode(
+  node: unknown,
+  rules: MaskingRule[],
+  hashSalt?: string | Buffer,
+): unknown {
   if (Array.isArray(node)) {
     for (let i = 0; i < node.length; i++) {
-      node[i] = maskNode(node[i], rules);
+      node[i] = maskNode(node[i], rules, hashSalt);
     }
     return node;
   }
@@ -381,9 +403,9 @@ function maskNode(node: unknown, rules: MaskingRule[]): unknown {
     if (isDangerousKey(key)) continue;
     const rule = ruleForKey(rules, key);
     if (rule !== undefined) {
-      safeSet(node, key, applyMask(node[key], rule));
+      safeSet(node, key, applyMask(node[key], rule, hashSalt));
     } else {
-      safeSet(node, key, maskNode(node[key], rules));
+      safeSet(node, key, maskNode(node[key], rules, hashSalt));
     }
   }
   return node;
@@ -399,8 +421,9 @@ function maskNode(node: unknown, rules: MaskingRule[]): unknown {
 export function applyFieldMasking(
   record: Record<string, unknown>,
   policy: EffectivePolicy,
+  hashSalt?: string | Buffer,
 ): Record<string, unknown> {
-  return applyMaskingToTree(record, policy);
+  return applyMaskingToTree(record, policy, hashSalt);
 }
 
 /**
@@ -417,10 +440,14 @@ export function applyFieldMasking(
  *
  * Returns a deep copy; the caller's tree is never mutated.
  */
-export function applyMaskingToTree<T>(result: T, policy: EffectivePolicy): T {
+export function applyMaskingToTree<T>(
+  result: T,
+  policy: EffectivePolicy,
+  hashSalt?: string | Buffer,
+): T {
   const rules = maskingRules(policy);
   if (rules.length === 0) return deepClone(result);
-  return maskNode(deepClone(result), rules) as T;
+  return maskNode(deepClone(result), rules, hashSalt) as T;
 }
 
 // ---------------------------------------------------------------------------
@@ -738,6 +765,7 @@ function typeofName(value: unknown): string {
 export function applyResultPipeline(
   result: unknown,
   policy: EffectivePolicy,
+  hashSalt?: string | Buffer,
 ): unknown {
   const shape = classifyResultShape(result);
   if (shape === undefined) {
@@ -755,7 +783,7 @@ export function applyResultPipeline(
   out = applyObjectSizeCeiling(out, policy);
   out = stripHiddenFields(out, policy);
   out = projectAllowedFields(out, policy);
-  out = out.map((record) => applyFieldMasking(record, policy));
+  out = out.map((record) => applyFieldMasking(record, policy, hashSalt));
   out = applyResultLimit(out, policy);
 
   if (shape === "record") {

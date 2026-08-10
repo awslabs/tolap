@@ -1,6 +1,6 @@
 storage/S3 integration tests — TypeScript, real AWS
 Run: 2026-07-30T19:26:54Z
-Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Account: <ACCOUNT_ID> (sandbox)  Region: us-east-1
 Command: TOLAP_TEST_AWS=1 npx vitest run tests/integration/aws/s3-storage.test.ts
 
 

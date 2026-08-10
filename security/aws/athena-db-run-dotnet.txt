@@ -1,6 +1,6 @@
 db/Athena integration tests — .NET, real AWS
 Run: 2026-07-30T19:33:45Z
-Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Account: <ACCOUNT_ID> (sandbox)  Region: us-east-1
 NOTE: this suite found a real fail-open in .NET ValidateAccess (missing canQuery gate).
 
   Passed Tolap.Integration.Tests.Aws.AthenaDbTests.InOperator_Pushdown [2 s]

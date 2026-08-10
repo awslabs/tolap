@@ -4,8 +4,10 @@ import base64
 import hashlib
 import hmac
 import json
+import threading
+import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Protocol
 
 from tolap_core.enums import SigningAlgorithm
 from tolap_core.models import EffectivePolicy, SecurityContext
@@ -17,6 +19,8 @@ def build_security_context(
     tenant_id: str,
     policies: list[EffectivePolicy],
     ttl: timedelta = timedelta(hours=1),
+    *,
+    jti: str | None = None,
 ) -> SecurityContext:
     """Build a SecurityContext from a resolved effective policy.
 
@@ -31,6 +35,15 @@ def build_security_context(
 
     An empty list is *not* an error: it denies everything, which is the safe
     reading of "no policy resolved".
+
+    ``jti`` is a unique context identifier used for replay detection (spec section
+    13). It defaults to a fresh UUID4 so that contexts are replay-checkable
+    without the caller having to remember to ask; pass a value to supply your own,
+    or ``jti=""`` to omit it and reproduce the pre-``jti`` canonical bytes. The id
+    is inside the signed payload, so it cannot be stripped or swapped without
+    invalidating the signature. Detection still requires a
+    :class:`ReplayGuard` at the verifying end -- an identifier alone records
+    nothing.
 
     Raises:
         ValueError: if more than one effective policy is supplied.
@@ -51,7 +64,79 @@ def build_security_context(
         effective_policy=effective,
         issued_at=now.isoformat().replace("+00:00", "Z"),
         expires_at=(now + ttl).isoformat().replace("+00:00", "Z"),
+        jti=str(uuid.uuid4()) if jti is None else (jti or None),
     )
+
+
+# -- Replay detection --
+
+
+class ReplayGuard(Protocol):
+    """Records which context identifiers have been seen (spec section 13).
+
+    A signed context is otherwise a bearer credential replayable until it expires.
+    Single-use enforcement needs state the SDK deliberately does not assume, so
+    this is the seam: implement it over whatever store the deployment already has
+    (Redis, DynamoDB, a database table) and pass it to
+    :func:`deserialize_context`.
+
+    Implementations MUST be safe to call concurrently and MUST be atomic --
+    check-then-register as two separate steps lets two concurrent replays of the
+    same context both succeed, which defeats the guard under exactly the load an
+    attacker would generate.
+    """
+
+    def check_and_register(self, jti: str, expires_at: str | None) -> bool:
+        """Atomically record ``jti``; return False if it was already present.
+
+        ``expires_at`` is the context's expiry, supplied so implementations can
+        expire their own entries: an id can be forgotten once the context carrying
+        it would be rejected on expiry anyway.
+        """
+        ...
+
+
+class InMemoryReplayGuard:
+    """Process-local :class:`ReplayGuard`, suitable for a single-process tool.
+
+    Not shared across processes or hosts: two workers behind a load balancer each
+    keep their own set, so a context replayed against a *different* worker is not
+    detected. Use a shared store for anything multi-process -- this class exists so
+    that single-process deployments and tests have a working guard rather than none.
+
+    Entries are dropped once their context has expired, so memory is bounded by the
+    number of contexts issued within one TTL rather than growing without limit.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._seen: dict[str, datetime] = {}
+
+    def check_and_register(self, jti: str, expires_at: str | None) -> bool:
+        now = datetime.now(timezone.utc)
+        # Fall back to a bounded retention when expiry is absent or unreadable, so
+        # a malformed value cannot pin an entry in memory forever.
+        expiry = _parse_timestamp(expires_at) or (now + timedelta(hours=1))
+
+        with self._lock:
+            # Opportunistic sweep: an id is only worth remembering while a context
+            # bearing it could still pass the expiry check.
+            if self._seen:
+                self._seen = {k: v for k, v in self._seen.items() if v > now}
+            if jti in self._seen:
+                return False
+            self._seen[jti] = expiry
+            return True
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 # -- Canonical signing payload --
@@ -143,6 +228,13 @@ def _canonical_payload(context: SecurityContext) -> str:
         "expiresAt": _normalize_timestamp(context.expires_at),
         "policies": [policy_dict],
     }
+    # `jti` joins the signed bytes only when present. Emitting it unconditionally
+    # (as `null` or `""`) would change the canonical form for every existing
+    # context and break the known-answer fixtures and cross-SDK agreement, so
+    # absence is byte-identical to the pre-`jti` form. When present it is signed,
+    # so a replay guard cannot be defeated by stripping or swapping the id.
+    if context.jti:
+        payload["jti"] = context.jti
     return json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
 
 
@@ -228,12 +320,24 @@ def serialize_context(context: SecurityContext) -> str:
     return base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
 
 
-def deserialize_context(serialized: str, secret_key: str) -> SecurityContext:
+def deserialize_context(
+    serialized: str,
+    secret_key: str,
+    replay_guard: ReplayGuard | None = None,
+) -> SecurityContext:
     """Deserialize a base64-encoded SecurityContext and validate it.
 
-    Raises ValueError if the signature is invalid or the context has expired.
+    Raises ValueError if the signature is invalid, the context has expired, or --
+    when a ``replay_guard`` is supplied -- the context has already been used.
     The signature is checked first, so a tampered context reports a signature
     failure rather than leaking whether a valid context had merely expired.
+
+    ``replay_guard`` is optional because single-use enforcement needs state the
+    SDK cannot assume (spec section 13); pass one to turn a signed context from a
+    bearer credential replayable for its full TTL into a single-use one. A context
+    with no ``jti`` is rejected when a guard is active rather than waved through,
+    since silently skipping the check is the failure mode a guard exists to
+    prevent.
     """
     json_bytes = base64.b64decode(serialized)
     data = json.loads(json_bytes)
@@ -250,6 +354,7 @@ def deserialize_context(serialized: str, secret_key: str) -> SecurityContext:
         expires_at=d.get("expires_at"),
         signature=d.get("signature"),
         algorithm=_SIGNING_ALG_MAP.get(d.get("algorithm", ""), None) if d.get("algorithm") else None,
+        jti=d.get("jti"),
     )
 
     # Validate signature before expiry
@@ -259,5 +364,17 @@ def deserialize_context(serialized: str, secret_key: str) -> SecurityContext:
     expiry_reason = validate_expiry(context)
     if expiry_reason is not None:
         raise ValueError(f"Security context rejected: {expiry_reason}")
+
+    # Replay check runs last: it consumes the `jti`, so it must not fire for a
+    # context that was going to be rejected anyway. Doing it earlier would let an
+    # attacker burn a legitimate id by replaying an already-expired context.
+    if replay_guard is not None:
+        if not context.jti:
+            raise ValueError(
+                "Security context rejected: replay checking requires a 'jti'; "
+                "this context carries none"
+            )
+        if not replay_guard.check_and_register(context.jti, context.expires_at):
+            raise ValueError("Security context rejected: context already used (replay)")
 
     return context

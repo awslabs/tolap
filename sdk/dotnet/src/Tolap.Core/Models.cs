@@ -136,6 +136,13 @@ public sealed record AuditInfo(
 /// <summary>
 /// Links a policy definition to a user, group, role, or service account.
 /// </summary>
+/// <param name="RevokedAt">
+/// Revocation tombstone (canonical-enforcement-spec.md section 12). When set and
+/// not future-dated, the assignment does not resolve regardless of
+/// <paramref name="Active"/> or <paramref name="ExpiresAt"/>, while remaining
+/// visible to auditors. Deliberately separate from <paramref name="Active"/> so
+/// that deactivating cannot be mistaken for revoking.
+/// </param>
 public sealed record PolicyAssignment(
     string Version,
     string PolicyName,
@@ -143,7 +150,8 @@ public sealed record PolicyAssignment(
     AssignmentScope Scope,
     bool Active,
     AuditInfo Audit,
-    DateTimeOffset? ExpiresAt = null);
+    DateTimeOffset? ExpiresAt = null,
+    DateTimeOffset? RevokedAt = null);
 
 /// <summary>
 /// Cryptographic integrity verification block.
@@ -204,7 +212,8 @@ public sealed record SecurityContext
         DateTimeOffset IssuedAt,
         DateTimeOffset ExpiresAt,
         EffectivePolicy[] Policies,
-        IntegrityBlock? Integrity = null)
+        IntegrityBlock? Integrity = null,
+        string? Jti = null)
     {
         // A null array is left alone deliberately: a context deserialized without a
         // "policies" key must still produce signable bytes rather than throwing here,
@@ -226,6 +235,7 @@ public sealed record SecurityContext
         this.ExpiresAt = ExpiresAt;
         this.Policies = Policies;
         this.Integrity = Integrity;
+        this.Jti = Jti;
     }
 
     public string Version { get; init; }
@@ -235,4 +245,16 @@ public sealed record SecurityContext
     public DateTimeOffset ExpiresAt { get; init; }
     public EffectivePolicy[] Policies { get; init; }
     public IntegrityBlock? Integrity { get; init; }
+
+    /// <summary>
+    /// Unique context identifier for replay detection (spec section 13).
+    /// </summary>
+    /// <remarks>
+    /// Signed when present, so it cannot be stripped or swapped without invalidating
+    /// the signature. Optional for backward compatibility: a context without a
+    /// <c>jti</c> produces the same canonical bytes it did before this field existed.
+    /// Detection still requires an <see cref="IReplayGuard"/> at the verifying end —
+    /// an identifier alone records nothing.
+    /// </remarks>
+    public string? Jti { get; init; }
 }

@@ -58,10 +58,15 @@ model for the full list):
 - **Protect the HMAC signing key.** Store the `SecurityContextSigner` key in a
   secrets manager / KMS. Never commit it or log it. Compromise of the key
   defeats tamper-evidence on signed contexts.
-- **`hash` masking is not confidentiality.** The `hash` mask is an unsalted,
-  truncated SHA-256 digest suitable as a pseudonymous join key. For low-entropy
-  PII (SSN, DOB, small enumerations) it is brute-forceable — use `redact` or
-  `null` when true secrecy is required. *(Threat I2 / remediation R-2.)*
+- **Salt `hash` masking, or do not rely on it for secrecy.** Unsalted, the `hash`
+  mask is a truncated digest: a fine pseudonymous join key, but brute-forceable for
+  low-entropy PII (SSN, DOB, small enumerations) because the input space is small
+  enough to enumerate. Set `hashSalt` / `hash_salt` on the wrapper to make it a
+  keyed HMAC, and treat that salt like the signing key — secrets manager or KMS,
+  never in the policy JSON, which every admin and auditor can read. The same salt
+  must be configured everywhere the pseudonym is joined. Use `redact` or `null`
+  when the value must not be derivable at all. *(Threat I2 / remediation R-2 —
+  resolved.)*
 - **Unenforceable result shapes are denied.** The secure wrappers enforce over
   record-, record-list-, and nested-body-shaped results. A shape enforcement
   cannot inspect (a class instance/DTO, scalar, stream, or unmaterialized
@@ -76,17 +81,47 @@ model for the full list):
   store is for development and testing only.
 - **Use TLS** on every network hop (policy store, signed-context transport,
   data source).
-- **A signed context is a bearer credential.** It carries no nonce and is not
-  single-use, so a captured context is replayable until it expires. Keep TTLs
-  short (the default is one hour).
+- **Wire up a replay guard, or treat a signed context as a bearer credential.**
+  Each context carries a signed `jti`, and `deserializeContext` /
+  `deserialize_context` / `SecurityContextSigner.Deserialize` accept an optional
+  `ReplayGuard` that makes it single-use. Detection is opt-in because it needs a
+  record of consumed identifiers the SDK cannot assume — the bundled in-memory
+  guard is process-local, so anything multi-process needs a shared store (Redis,
+  DynamoDB, a table). Without a guard, expiry is the only replay bound: keep TTLs
+  short (the default is one hour). *(Threat T5 / spec §13.1.)*
+- **Revocation is enforced by the SDK, not only by your store.** Setting
+  `revokedAt` on an assignment stops it resolving, overriding `active` and
+  `expiresAt`, and an unreadable value fails closed. If you implement your own
+  store you should still filter revoked rows in your query, but that filter is no
+  longer the only thing standing between a revoked grant and a resolved policy.
+  *(Threat E2a / spec §12.)*
 
 ## Known limitations
 
 Documented gaps, not guarantees — see
-[the specification](docs/canonical-enforcement-spec.md) §11 for the full list:
-full-TTL replay of a valid context, `hash` masking being a pseudonymous key rather
-than a confidentiality control, ReDoS mitigation differing by mechanism across
-languages, and the assumption that policy authors are trusted.
+[the specification](docs/canonical-enforcement-spec.md) §13 for the full list and the
+reasoning behind each:
+
+- **HMAC signing only.** Every verifier holds a key that can also sign, so a
+  compromised verifier can mint contexts. `ed25519` is in the schema enum and
+  unimplemented; selecting it fails loudly rather than silently downgrading.
+  Implementing it needs a third-party dependency in at least one runtime, which the
+  zero-runtime-dependency rule for `core` forbids.
+- **Replay detection and salted masking are opt-in.** Both mechanisms ship, but a
+  deployment that configures neither gets the previous behaviour: TTL-bounded replay
+  and pseudonymous-only `hash`. They are opt-in because each needs state or a secret
+  the SDK cannot invent.
+- **ReDoS mitigation differs by mechanism.** .NET uses a regex match timeout; Python
+  and TypeScript bound pattern and input length, because their runtimes have no
+  timeout. All three refuse the same inputs; the point at which a pathological
+  pattern stops differs.
+- **Policy authors are trusted.** Policies come from administrators, not agents or
+  end users, and TOLAP enforces the policy you wrote rather than judging whether it
+  is correct — `hiddenFields: ["ssn"]` protects nothing when the column is
+  `ssn_number`.
+- **One deployment of the reference server serves one tenant.** Any authenticated
+  administrator sees every policy; `scope.tenantId` narrows which assignments apply,
+  not who can read them.
 
 ## Supported versions
 

@@ -20,11 +20,12 @@ const DEFAULT_TTL_SECONDS = 900;
 /**
  * The longest TTL the server will issue.
  *
- * A signed artifact is replayable for its entire lifetime -- there is no `jti`
- * and no single-use enforcement anywhere in TOLAP
- * (canonical-enforcement-spec.md section 13), so expiry is the only bound on a
- * captured artifact. A day-long TTL is therefore a day-long window, which is why
- * this is a hard ceiling rather than a documented recommendation.
+ * Expiry is the only replay bound a consumer gets without opting in. Artifacts carry
+ * a signed `jti` and every SDK accepts a `ReplayGuard` that makes them single-use
+ * (canonical-enforcement-spec.md section 13.1), but this server cannot make a consumer
+ * configure one -- so the ceiling assumes none is. A day-long TTL would then be a
+ * day-long replay window, which is why this is a hard limit rather than a documented
+ * recommendation.
  */
 const MAX_TTL_SECONDS = 3600;
 
@@ -229,7 +230,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (ttlSeconds < 1 || ttlSeconds > MAX_TTL_SECONDS) {
     throw new Error(
       `TOLAP_TTL_SECONDS must be between 1 and ${MAX_TTL_SECONDS}, got ${ttlSeconds}. ` +
-        "A signed artifact is replayable until it expires (spec section 13).",
+        "A signed artifact is replayable until it expires unless the consumer " +
+          "configures a replay guard (spec section 13.1).",
     );
   }
 

@@ -388,8 +388,9 @@ describe("task permissions", () => {
     const ttl = Number(
       environment.find((e) => e.Name === "TOLAP_TTL_SECONDS")!.Value,
     );
-    // A signed artifact is replayable until it expires (spec section 13). The server
-    // refuses anything above 3600, so a larger value here would fail to boot.
+    // Without a consumer-side replay guard, expiry is the only bound (spec section
+    // 13.1). The server refuses anything above 3600, so a larger value here would
+    // fail to boot.
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(3600);
   });

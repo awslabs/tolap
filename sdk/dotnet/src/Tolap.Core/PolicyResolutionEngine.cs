@@ -45,8 +45,13 @@ public static class PolicyResolutionEngine
         var groups = getGroups(userId);
         var roles = getRoles(userId);
 
-        // Filter assignments matching user (direct + groups + roles), active, non-expired
+        // Filter assignments matching user (direct + groups + roles), not revoked,
+        // active, non-expired. Revocation is checked first and overrides both
+        // Active and ExpiresAt: a revoked assignment MUST NOT resolve (spec
+        // section 12). A future-dated RevokedAt is not yet in effect, which keeps
+        // revocation consistent with expiry rather than a boolean in disguise.
         var matchingAssignments = assignments
+            .Where(a => a.RevokedAt is null || a.RevokedAt > now)
             .Where(a => a.Active)
             .Where(a => a.ExpiresAt is null || a.ExpiresAt > now)
             .Where(a => MatchesAssignee(a.Assignee, userId, groups, roles))

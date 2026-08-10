@@ -1,6 +1,6 @@
 kb enforcement — .NET, real Bedrock Knowledge Base
 Run: 2026-07-30T19:44:26Z
-Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1   KB: K3BOEARXHI
+Account: <ACCOUNT_ID> (sandbox)  Region: us-east-1   KB: K3BOEARXHI
 
   Passed Tolap.Integration.Tests.Aws.BedrockKbTests.AllowlistPushdown_ReturnsOnlyPublic [823 ms]
   Passed Tolap.Integration.Tests.Aws.BedrockKbTests.PushdownAndPostPass_ReachTheSameVerdict [926 ms]

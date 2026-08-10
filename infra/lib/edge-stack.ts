@@ -135,9 +135,10 @@ export class EdgeStack extends Stack {
         {
           // First, so a flood is shed before the managed groups are evaluated.
           //
-          // This is the rule that matters most: a signed artifact is replayable for
-          // its whole TTL and `/v1/resolve` is what mints them, so throttling one
-          // source bounds how fast a stolen install credential can harvest policy.
+          // This is the rule that matters most: `/v1/resolve` mints signed artifacts,
+          // and one is replayable for its whole TTL unless the consumer configures a
+          // replay guard -- which this server cannot enforce. Throttling one source
+          // bounds how fast a stolen install credential can harvest policy either way.
           name: "RateLimitPerIp",
           priority: 10,
           action: { block: {} },

@@ -14,12 +14,20 @@ public static class SecurityContextBuilder
     /// <param name="tenantId">The tenant context.</param>
     /// <param name="policies">The resolved effective policies.</param>
     /// <param name="ttl">Time-to-live for the context. Defaults to 1 hour.</param>
+    /// <param name="jti">
+    /// Unique context identifier for replay detection (spec section 13). Defaults to a
+    /// fresh GUID so contexts are replay-checkable without the caller having to remember
+    /// to ask; pass your own value to supply one, or <see cref="string.Empty"/> to omit it
+    /// and reproduce the pre-<c>jti</c> canonical bytes. The id is inside the signed
+    /// payload, so it cannot be stripped or swapped without invalidating the signature.
+    /// </param>
     /// <returns>An unsigned security context ready for signing.</returns>
     public static SecurityContext Build(
         string userId,
         string tenantId,
         EffectivePolicy[] policies,
-        TimeSpan? ttl = null)
+        TimeSpan? ttl = null,
+        string? jti = null)
     {
         var now = DateTimeOffset.UtcNow;
         var effectiveTtl = ttl ?? DefaultTtl;
@@ -30,6 +38,12 @@ public static class SecurityContextBuilder
             TenantId: tenantId,
             IssuedAt: now,
             ExpiresAt: now + effectiveTtl,
-            Policies: policies);
+            Policies: policies,
+            Jti: jti switch
+            {
+                null => Guid.NewGuid().ToString(),
+                "" => null,
+                _ => jti
+            });
     }
 }

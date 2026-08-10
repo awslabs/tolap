@@ -73,6 +73,19 @@ export interface SignedArtifact {
   /** Signing algorithm, e.g. `hmac-sha256`. */
   readonly algorithm: string;
   /**
+   * Unique artifact identifier for replay detection (spec section 13).
+   *
+   * **Inside the signed payload**, unlike `kid`: it cannot be stripped or swapped
+   * without invalidating the signature, which is what makes a consumer-side
+   * `ReplayGuard` non-bypassable. It must therefore be carried on the wire — the
+   * server signs it, so an artifact that omitted it would fail verification in
+   * every SDK.
+   *
+   * Replay detection remains opt-in at the consumer: the id alone records nothing,
+   * and single-use enforcement needs state the SDK does not assume.
+   */
+  readonly jti: string;
+  /**
    * Which key signed this, so a consumer holding several can pick one during a
    * rotation overlap.
    *
@@ -170,6 +183,13 @@ export function buildSignedArtifact(
   // integrity block, which is why both verification paths are satisfied.
   signContext(context, secret);
 
+  if (!context.jti) {
+    // buildSecurityContext mints one by default. Asserted rather than defaulted so a
+    // future SDK change cannot silently ship artifacts that no consumer can
+    // replay-check, which would look identical to working ones.
+    throw new Error("buildSecurityContext produced no jti");
+  }
+
   if (!context.signature || !context.algorithm) {
     // Unreachable via signContext, which always sets both. Asserted rather than
     // non-null-asserted so a future SDK change surfaces here instead of shipping
@@ -198,6 +218,9 @@ export function buildSignedArtifact(
     signature: context.signature,
     algorithm: context.algorithm,
     kid,
+    // Signed, unlike `kid`, so it has to travel with the artifact for the signature
+    // to verify at all.
+    jti: context.jti,
 
     // The envelope-level view of the same values -- see the interface. `policies` holds
     // the same object as `effectivePolicy` rather than a copy, so the two cannot drift.

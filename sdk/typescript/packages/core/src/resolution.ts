@@ -234,7 +234,28 @@ export type GetRolesFn = (userId: string) => string[] | Promise<string[]>;
  * an assignment carries no signature at all, so its expiry string is whatever
  * the store hands back.
  */
+/**
+ * Whether a revocation tombstone bars this assignment (spec §12).
+ *
+ * A revoked assignment must stop resolving regardless of `active` or
+ * `expiresAt`. A future-dated `revokedAt` is not yet in effect, which keeps
+ * revocation consistent with expiry rather than making it a flag in disguise.
+ * An unparseable value is treated as revoked: a revocation we cannot read is
+ * honoured rather than ignored, because the alternative keeps a revoked grant
+ * silently alive.
+ */
+function isAssignmentRevoked(assignment: PolicyAssignment): boolean {
+  const revokedAt = assignment.revokedAt;
+  if (revokedAt === undefined || revokedAt === null) return false;
+  if (revokedAt === "") return true;
+  const revoked = new Date(revokedAt);
+  if (Number.isNaN(revoked.getTime())) return true;
+  return revoked.getTime() <= Date.now();
+}
+
 function isAssignmentActive(assignment: PolicyAssignment): boolean {
+  // Revocation is checked first: it overrides both `active` and `expiresAt`.
+  if (isAssignmentRevoked(assignment)) return false;
   if (!assignment.active) return false;
   if (assignment.expiresAt !== undefined) {
     if (assignment.expiresAt === "") return false;

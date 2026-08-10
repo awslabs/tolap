@@ -5,7 +5,7 @@
  * that carry effective policies to tool execution environments.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   type EffectivePolicy,
   type SecurityContext,
@@ -143,7 +143,75 @@ function canonicalPayload(context: SecurityContext): string {
     expiresAt: normalizeTimestamp(context.expiresAt),
     policies: [normalizePolicyTimestamps(stripIntegrity(policy))],
   };
+  // `jti` joins the signed bytes only when present. Emitting it unconditionally
+  // (as `null` or `""`) would change the canonical form for every existing
+  // context and break the known-answer fixtures and cross-SDK agreement, so
+  // absence is byte-identical to the pre-`jti` form. When present it is signed,
+  // so a replay guard cannot be defeated by stripping or swapping the id.
+  if (context.jti) {
+    payload.jti = context.jti;
+  }
   return JSON.stringify(deepSortKeys(payload));
+}
+
+// ---------------------------------------------------------------------------
+// Replay detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Records which context identifiers have been seen (spec §13).
+ *
+ * A signed context is otherwise a bearer credential replayable until it expires.
+ * Single-use enforcement needs state the SDK deliberately does not assume, so
+ * this is the seam: implement it over whatever store the deployment already has
+ * (Redis, DynamoDB, a database table) and pass it to {@link deserializeContext}.
+ *
+ * Implementations must be atomic — check-then-register as two separate steps lets
+ * two concurrent replays of the same context both succeed, which defeats the
+ * guard under exactly the load an attacker would generate.
+ */
+export interface ReplayGuard {
+  /**
+   * Atomically record `jti`; return `false` if it was already present.
+   *
+   * `expiresAt` is the context's expiry, supplied so implementations can expire
+   * their own entries: an id can be forgotten once the context carrying it would
+   * be rejected on expiry anyway.
+   */
+  checkAndRegister(jti: string, expiresAt?: string): boolean;
+}
+
+/**
+ * Process-local {@link ReplayGuard}, suitable for a single-process tool.
+ *
+ * Not shared across processes or hosts: two workers behind a load balancer each
+ * keep their own set, so a context replayed against a *different* worker is not
+ * detected. Use a shared store for anything multi-process — this class exists so
+ * single-process deployments and tests have a working guard rather than none.
+ *
+ * Entries are dropped once their context has expired, so memory is bounded by the
+ * number of contexts issued within one TTL rather than growing without limit.
+ */
+export class InMemoryReplayGuard implements ReplayGuard {
+  private seen = new Map<string, number>();
+
+  checkAndRegister(jti: string, expiresAt?: string): boolean {
+    const now = Date.now();
+    // Fall back to a bounded retention when expiry is absent or unreadable, so a
+    // malformed value cannot pin an entry in memory forever.
+    const parsed = expiresAt === undefined ? NaN : new Date(expiresAt).getTime();
+    const expiry = Number.isNaN(parsed) ? now + 3_600_000 : parsed;
+
+    // Opportunistic sweep: an id is only worth remembering while a context
+    // bearing it could still pass the expiry check.
+    for (const [key, value] of this.seen) {
+      if (value <= now) this.seen.delete(key);
+    }
+
+    if (this.seen.has(jti)) return false;
+    this.seen.set(jti, expiry);
+    return true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +263,7 @@ export function buildSecurityContext(
   tenantId: string,
   policy: EffectivePolicy,
   ttlMs: number = 3_600_000,
+  jti?: string,
 ): SecurityContext {
   if (Array.isArray(policy)) {
     throw new Error(
@@ -206,10 +275,14 @@ export function buildSecurityContext(
 
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlMs);
+  // Defaults to a fresh UUID so contexts are replay-checkable without the caller
+  // remembering to ask. Pass `""` to omit it and reproduce the pre-`jti` bytes.
+  const contextId = jti === undefined ? randomUUID() : jti;
   return {
     effectivePolicy: policy,
     resolvedAt: now.toISOString(),
     expiresAt: expiresAt.toISOString(),
+    ...(contextId ? { jti: contextId } : {}),
   };
 }
 
@@ -305,6 +378,7 @@ export function serializeContext(context: SecurityContext): string {
 export function deserializeContext(
   serialized: string,
   secretKey: string,
+  replayGuard?: ReplayGuard,
 ): SecurityContext {
   let context: SecurityContext;
   try {
@@ -323,6 +397,21 @@ export function deserializeContext(
   const expiryReason = validateExpiry(context);
   if (expiryReason !== undefined) {
     throw new Error(`Security context rejected: ${expiryReason}`);
+  }
+
+  // Replay check runs last: it consumes the `jti`, so it must not fire for a
+  // context that was going to be rejected anyway. Doing it earlier would let an
+  // attacker burn a legitimate id by replaying an already-expired context.
+  if (replayGuard !== undefined) {
+    if (!context.jti) {
+      throw new Error(
+        "Security context rejected: replay checking requires a 'jti'; " +
+          "this context carries none",
+      );
+    }
+    if (!replayGuard.checkAndRegister(context.jti, context.expiresAt)) {
+      throw new Error("Security context rejected: context already used (replay)");
+    }
   }
 
   return context;

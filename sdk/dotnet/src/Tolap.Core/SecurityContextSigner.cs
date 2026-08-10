@@ -24,7 +24,12 @@ public static class SecurityContextSigner
         string TenantId,
         DateTimeOffset IssuedAt,
         DateTimeOffset ExpiresAt,
-        EffectivePolicy[] Policies);
+        EffectivePolicy[] Policies,
+        // Null is omitted from the canonical JSON (WhenWritingNull), so a context
+        // without a jti signs to exactly the bytes it did before this field
+        // existed. That backward compatibility is what keeps the known-answer
+        // fixtures and cross-SDK agreement intact.
+        string? Jti = null);
 
     /// <summary>
     /// Signs a security context by computing an HMAC over its canonical projection and
@@ -109,7 +114,10 @@ public static class SecurityContextSigner
             TenantId: context.TenantId,
             IssuedAt: context.IssuedAt,
             ExpiresAt: context.ExpiresAt,
-            Policies: policies);
+            Policies: policies,
+            // Empty is normalized to null so that "" and absent cannot produce two
+            // different signatures for what is semantically the same context.
+            Jti: string.IsNullOrEmpty(context.Jti) ? null : context.Jti);
 
         return CanonicalJson.Serialize(payload);
     }
@@ -152,6 +160,28 @@ public static class SecurityContextSigner
     /// <returns>The validated security context.</returns>
     /// <exception cref="SecurityException">Thrown if signature is invalid or context has expired.</exception>
     public static SecurityContext Deserialize(string serialized, string secretKey)
+        => Deserialize(serialized, secretKey, replayGuard: null);
+
+    /// <summary>
+    /// Deserializes a Base64-encoded security context, validates its signature, expiry
+    /// and — when <paramref name="replayGuard"/> is supplied — that it has not already
+    /// been used.
+    /// </summary>
+    /// <remarks>
+    /// The guard is optional because single-use enforcement needs state the SDK cannot
+    /// assume (spec section 13); supplying one turns a signed context from a bearer
+    /// credential replayable for its full TTL into a single-use one. A context with no
+    /// <c>jti</c> is rejected when a guard is active rather than waved through, since
+    /// silently skipping the check is the failure mode a guard exists to prevent.
+    /// </remarks>
+    /// <exception cref="SecurityException">
+    /// Thrown if the signature is invalid, the context has expired, or the context has
+    /// already been seen by the guard.
+    /// </exception>
+    public static SecurityContext Deserialize(
+        string serialized,
+        string secretKey,
+        IReplayGuard? replayGuard)
     {
         if (!TryDecodeBase64(serialized, out var jsonBytes))
             throw new SecurityException("Security context is not valid Base64");
@@ -167,6 +197,25 @@ public static class SecurityContextSigner
         var expiryReason = ValidateExpiry(context);
         if (expiryReason is not null)
             throw new SecurityException($"Security context rejected: {expiryReason}");
+
+        // Replay check runs last: it consumes the jti, so it must not fire for a
+        // context that was going to be rejected anyway. Checking earlier would let an
+        // attacker burn a legitimate id by replaying an already-expired context.
+        if (replayGuard is not null)
+        {
+            if (string.IsNullOrEmpty(context.Jti))
+            {
+                throw new SecurityException(
+                    "Security context rejected: replay checking requires a 'jti'; " +
+                    "this context carries none");
+            }
+
+            if (!replayGuard.CheckAndRegister(context.Jti, context.ExpiresAt))
+            {
+                throw new SecurityException(
+                    "Security context rejected: context already used (replay)");
+            }
+        }
 
         return context;
     }

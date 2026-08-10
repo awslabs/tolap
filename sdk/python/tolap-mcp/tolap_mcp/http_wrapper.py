@@ -96,7 +96,9 @@ class UpstreamHttpError(Exception):
         self.url = url
 
 
-def _apply_masking_to_body(body: Any, policy: EffectivePolicy) -> Any:
+def _apply_masking_to_body(
+    body: Any, policy: EffectivePolicy, hash_salt: str | bytes | None = None
+) -> Any:
     """Apply every masked_field rule to a (potentially nested) JSON body.
 
     Delegates to the shared core implementation, for the same reason the
@@ -109,7 +111,7 @@ def _apply_masking_to_body(body: Any, policy: EffectivePolicy) -> Any:
     so both ``results.patient.ssn`` and ``ssn`` reach a nested ``ssn`` key
     (spec section 4).
     """
-    return apply_masking(body, policy)
+    return apply_masking(body, policy, hash_salt)
 
 
 def _strip_hidden_fields_from_body(body: Any, policy: EffectivePolicy) -> Any:
@@ -320,6 +322,7 @@ def _run_pipeline(
     body: Any,
     collection_path: str | None,
     policy: EffectivePolicy,
+    hash_salt: str | bytes | None = None,
 ) -> Any:
     """Run the full canonical pipeline over a parsed response body.
 
@@ -337,7 +340,7 @@ def _run_pipeline(
     body = _filter_records_in_body(body, collection_path, policy)
     body = _strip_hidden_fields_from_body(body, policy)
     body = _project_allowed_fields_in_body(body, collection_path, policy)
-    body = _apply_masking_to_body(body, policy)
+    body = _apply_masking_to_body(body, policy, hash_salt)
     return _limit_collection(body, collection_path, policy)
 
 
@@ -577,14 +580,18 @@ class SecureHttpToolWrapper:
             )
 
         if response.is_success:
-            return _run_pipeline(response.json(), collection_path, policy)
+            return _run_pipeline(
+                response.json(), collection_path, policy, self._options.hash_salt
+            )
 
         # A 4xx/5xx body is enforced first and raised second. `raise_for_status` is
         # deliberately not used: it raises httpx.HTTPStatusError, and `.response`
         # on that exception hands the caller the raw payload with every
         # hiddenFields entry intact.
         try:
-            error_body = _run_pipeline(response.json(), collection_path, policy)
+            error_body = _run_pipeline(
+                response.json(), collection_path, policy, self._options.hash_salt
+            )
         except ValueError:
             # Not JSON, so the pipeline cannot walk it and no field rule can be
             # applied. Withheld rather than passed through

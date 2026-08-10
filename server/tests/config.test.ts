@@ -105,8 +105,9 @@ describe("loadConfig", () => {
   });
 
   it("rejects a TTL above the ceiling", () => {
-    // A signed artifact is replayable until it expires (spec section 13), so the
-    // ceiling is a control rather than a suggestion.
+    // Without a consumer-side replay guard, expiry is the only bound (spec section
+    // 13.1) and this server cannot enforce that one exists -- so the ceiling is a
+    // control rather than a suggestion.
     expect(() =>
       loadConfig({ ...base, TOLAP_TTL_SECONDS: String(MAX_TTL_SECONDS + 1) }),
     ).toThrow(/TOLAP_TTL_SECONDS/);

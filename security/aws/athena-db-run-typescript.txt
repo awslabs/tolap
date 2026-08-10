@@ -1,6 +1,6 @@
 db/Athena integration tests — TypeScript, real AWS
 Run: 2026-07-30T19:37:10Z
-Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Account: <ACCOUNT_ID> (sandbox)  Region: us-east-1
 
 
  RUN  v4.1.10 /Users/pspies/code/tolap-public/sdk/typescript/packages/mcp

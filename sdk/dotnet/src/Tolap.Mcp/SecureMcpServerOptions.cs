@@ -52,6 +52,21 @@ public enum EnforcementMode
 /// lets a result through.
 /// </para>
 /// </param>
+/// <param name="HashSalt">
+/// Secret salt for <c>hash</c> masking, turning the digest into a keyed HMAC.
+/// <para>
+/// Unset by default, which preserves the plain-digest pseudonym (and so existing join
+/// keys). Set it and <c>hash</c> becomes a confidentiality control: an unsalted digest of
+/// a low-entropy value — an SSN, a date of birth, a small enumeration — is recoverable by
+/// brute force or a rainbow table, because the input space is small enough to enumerate.
+/// </para>
+/// <para>
+/// Treat it as a secret on a par with <c>SigningKey</c>: store it in a secrets manager or
+/// KMS, never in the policy JSON (policies are visible to every admin and auditor who can
+/// read them). The same salt must be configured everywhere the pseudonym is joined, since
+/// changing it changes every masked value.
+/// </para>
+/// </param>
 public sealed record SecureMcpServerOptions(
     IPolicyStore PolicyStore,
     IIdentityResolver IdentityResolver,
@@ -60,4 +75,5 @@ public sealed record SecureMcpServerOptions(
     TimeSpan? ContextTtl = null,
     Dictionary<string, string>? SourceMapping = null,
     EnforcementMode EnforcementMode = EnforcementMode.Strict,
-    bool AllowUnenforceableShapes = false);
+    bool AllowUnenforceableShapes = false,
+    string? HashSalt = null);

@@ -304,12 +304,16 @@ using var doc = JsonDocument.Parse(File.ReadAllText(args[0]));
 var root = doc.RootElement;
 var policy = TolapJsonOptions.Deserialize<EffectivePolicy>(
     root.GetProperty("effectivePolicy").GetRawText());
+// jti is inside the signed payload (spec section 13), so a consumer reconstructing
+// the envelope has to carry it across or the recomputed bytes differ and every
+// artifact looks tampered with. kid, by contrast, sits outside and is only a hint.
 var ctx = new SecurityContext(
     policy.Version, policy.UserId, policy.TenantId,
     DateTimeOffset.Parse(root.GetProperty("issuedAt").GetString()),
     DateTimeOffset.Parse(root.GetProperty("expiresAt").GetString()),
     new[] { policy },
-    new IntegrityBlock(SigningAlgorithm.HmacSha256, root.GetProperty("signature").GetString()));
+    new IntegrityBlock(SigningAlgorithm.HmacSha256, root.GetProperty("signature").GetString()),
+    root.TryGetProperty("jti", out var jti) ? jti.GetString() : null);
 Console.WriteLine("valid=" + SecurityContextSigner.Validate(ctx, ${JSON.stringify(SECRET_A)}));
 Console.WriteLine("kid=" + root.GetProperty("kid").GetString());`,
         "utf8",

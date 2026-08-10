@@ -3,7 +3,7 @@
 Enforcement tested against **real AWS services**, not fixtures. Run output is committed so
 the findings below can be checked against what the tests actually did.
 
-Account `<ACCOUNT_ID>` (Isengard sandbox), `us-east-1`, **2026-07-30**.
+Account `<ACCOUNT_ID>` (disposable sandbox), `us-east-1`, **2026-07-30**.
 
 The account number is redacted rather than recorded. The repository is private today, so this
 is not a disclosure fix — it is so that flipping visibility later needs no history rewrite.
@@ -214,18 +214,18 @@ schedule or a manual dispatch against a dedicated account via OIDC, never on eve
 ```bash
 # storage and db/Athena — need only credentials
 #   (Athena creates a Glue database + table over seeded S3 data, deleted on teardown)
-isengardcli run --account <acct> --region us-east-1 -- \
+AWS_REGION=us-east-1 \
   env TOLAP_TEST_AWS=1 pytest sdk/python/tests/integration/aws/test_s3_storage.py \
                               sdk/python/tests/integration/aws/test_athena_db.py -v
 
 # kb — provision, test, tear down. The KB costs money while it exists.
 cd sdk/python/tests/integration/aws
-isengardcli run --account <acct> --region us-east-1 -- \
+AWS_REGION=us-east-1 \
   python3 provision_bedrock_kb.py up --state kb.env      # several minutes
-isengardcli run --account <acct> --region us-east-1 -- \
+AWS_REGION=us-east-1 \
   env TOLAP_TEST_AWS=1 TOLAP_TEST_KB_ID=<KB_ID from kb.env> \
   pytest test_bedrock_kb_e2e.py test_bedrock_kb_filter.py -v
-isengardcli run --account <acct> --region us-east-1 -- \
+AWS_REGION=us-east-1 \
   python3 provision_bedrock_kb.py down --from kb.env      # ALWAYS run this
 ```
 

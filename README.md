@@ -446,10 +446,19 @@ Schema version: **v1.0** (strict versioning, no extension points)
   covers the whole context including its expiry. Any modification invalidates the
   signature, and a context signed by one SDK verifies in the other two.
 - **Replay-bounded** -- Signed contexts carry an expiry that is inside the signature, so
-  it cannot be extended without the key. A valid context is replayable until it expires:
-  there is no nonce and contexts are not single-use, so keep TTLs short.
+  it cannot be extended without the key. Each context also carries a signed `jti`, and the
+  deserializers accept an optional `ReplayGuard` that makes a context single-use. Without a
+  guard a valid context is replayable until it expires, so keep TTLs short.
 - **Cross-boundary** -- Signed contexts can be transported across process, network, and
   cloud boundaries without losing integrity.
+- **Revocation is enforced by the SDK** -- An assignment carrying `revokedAt` stops
+  resolving, overriding `active` and `expiresAt`, and an unreadable value fails closed.
+  If you write your own store, filter revoked rows anyway, but that filter is no longer
+  the only thing standing between a revoked grant and a resolved policy.
+- **Masking can be a confidentiality control** -- Configure a `hashSalt` and `hash`
+  becomes a keyed HMAC rather than a plain digest, so a masked SSN or date of birth is
+  not recoverable by rainbow table. The same salt yields the same pseudonym in every
+  SDK, so it still works as a cross-service join key.
 - **Audit fields are mandatory in the schema** -- Every policy assignment must carry who
   granted it, when, and why. This is a schema constraint on stored assignments; validate
   assignments against the schema in your store, because the SDK does not reject an

@@ -1,6 +1,6 @@
 kb enforcement — TypeScript, real Bedrock Knowledge Base
 Run: 2026-07-30T19:44:31Z
-Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1   KB: K3BOEARXHI
+Account: <ACCOUNT_ID> (sandbox)  Region: us-east-1   KB: K3BOEARXHI
 
 
  RUN  v4.1.10 /Users/pspies/code/tolap-public/sdk/typescript/packages/mcp

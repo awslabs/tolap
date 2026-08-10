@@ -1,6 +1,6 @@
 kb enforcement tests — real Bedrock Knowledge Base
 Run: 2026-07-30T19:04:51Z
-Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Account: <ACCOUNT_ID> (sandbox)  Region: us-east-1
 KB: 6L98ITSF3A  (OpenSearch Serverless vector store, Titan v2 embeddings)
 Corpus: 4 documents — 2 classification=public, 2 classification=secret
 Command: TOLAP_TEST_AWS=1 TOLAP_TEST_KB_ID=... pytest test_bedrock_kb_e2e.py test_bedrock_kb_filter.py -v

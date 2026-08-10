@@ -484,3 +484,74 @@ describe("TOLAP end-to-end", () => {
   });
 });
 ```
+
+## Hardening: replay detection and salted masking
+
+Two protections ship switched off, because each needs something only the deployment can
+supply — shared state for one, a secret for the other. Neither is required to use TOLAP,
+and both are worth turning on in production.
+
+### Make a signed context single-use
+
+A signed context is a bearer credential: capture it and it works until it expires. Pass a
+`ReplayGuard` to `deserializeContext` and it works exactly once.
+
+```ts
+import { InMemoryReplayGuard, deserializeContext } from "@tolap/core";
+
+const guard = new InMemoryReplayGuard();   // process-local; see the warning below
+
+const context = deserializeContext(serialized, SIGNING_KEY, guard);
+// A second call with the same serialized context throws "... (replay)".
+```
+
+The identifier the guard keys on (`jti`) is **inside the signed payload**, so an attacker
+cannot strip or swap it to dodge the check — that is what makes the guard worth having
+rather than theatre. The check also runs after signature and expiry validation, so replaying
+an already-expired context cannot burn the identifier of one that has not been used yet.
+
+`InMemoryReplayGuard` is process-local. Two workers behind a load balancer each keep their
+own set, so a context replayed against a *different* worker is not detected. For anything
+multi-process, implement the one-method interface over a store you already run:
+
+```ts
+import type { ReplayGuard } from "@tolap/core";
+
+class RedisReplayGuard implements ReplayGuard {
+  constructor(private redis: RedisClient) {}
+
+  checkAndRegister(jti: string, expiresAt?: string): boolean {
+    // SET NX is the atomic step. Check-then-register as two calls lets two
+    // concurrent replays both succeed, under exactly the load an attacker makes.
+    return this.redis.setNxSync(`tolap:jti:${jti}`, "1", 3600);
+  }
+}
+```
+
+A context with no `jti` is **rejected** when a guard is active rather than waved through:
+silently skipping the check is the failure mode the guard exists to prevent.
+
+### Salt `hash` masking
+
+Unsalted, `hash` is a truncated digest — a good pseudonymous join key, and brute-forceable
+for anything low-entropy. There are ~10^9 SSNs and ~4×10^4 plausible dates of birth, so a
+masked column of either is recoverable with a rainbow table while still looking like an
+opaque token.
+
+```ts
+const wrapper = new SecureContextToolWrapper({
+  signingKey: SIGNING_KEY,
+  hashSalt: process.env.TOLAP_HASH_SALT,   // from a secrets manager / KMS
+});
+```
+
+The salt makes the mask a keyed HMAC. The join-key property survives — the same salt over
+the same value gives the same pseudonym in every SDK — which is also why:
+
+- **the salt is a deployment secret, not a policy field.** Policies are readable by every
+  administrator and auditor, which would defeat the point.
+- **the same salt must be set everywhere the pseudonym is joined.** Changing it changes
+  every masked value. It must also match on the HTTP wrapper, or the same field masks to
+  two different pseudonyms depending on which transport served the request.
+
+When a value must not be derivable at all, use `redact` or `null` rather than any hash.

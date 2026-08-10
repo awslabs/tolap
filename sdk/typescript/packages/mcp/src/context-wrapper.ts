@@ -41,6 +41,21 @@ export interface SecureContextWrapperOptions {
    * returned unfiltered (canonical spec §5). Integrators mid-migration may opt
    * in per wrapper, which is logged every time it lets a result through.
    */
+  /**
+   * Secret salt for `hash` masking, turning the digest into a keyed HMAC.
+   *
+   * Unset by default, which preserves the plain-digest pseudonym (and so existing
+   * join keys). Set it and `hash` becomes a confidentiality control: an unsalted
+   * digest of a low-entropy value — an SSN, a date of birth, a small enumeration —
+   * is recoverable by brute force or a rainbow table, because the input space is
+   * small enough to enumerate.
+   *
+   * Treat it as a secret on a par with `signingKey`: store it in a secrets manager
+   * or KMS, never in the policy JSON (policies are visible to every admin and
+   * auditor who can read them). The same salt must be configured everywhere the
+   * pseudonym is joined, since changing it changes every masked value.
+   */
+  hashSalt?: string | Buffer;
   allowUnenforceableShapes?: boolean;
 }
 
@@ -255,7 +270,11 @@ export class SecureContextToolWrapper {
       );
       return results;
     }
-    return applyResultPipeline(results, context.effectivePolicy);
+    return applyResultPipeline(
+      results,
+      context.effectivePolicy,
+      this.options.hashSalt,
+    );
   }
 
   /**

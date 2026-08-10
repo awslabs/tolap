@@ -78,6 +78,11 @@
       "format": "date-time",
       "description": "ISO 8601 timestamp when this assignment expires. After expiry, the assignment is treated as inactive. Omit for assignments that do not expire."
     },
+    "revokedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when this assignment was revoked. A revoked assignment MUST NOT resolve, regardless of 'active' or 'expiresAt'. Revocation is a tombstone: the grant stays visible to auditors while ceasing to grant access. Omit for assignments that have not been revoked. An unparseable value is treated as revoked (fail closed)."
+    },
     "audit": {
       "type": "object",
       "required": [

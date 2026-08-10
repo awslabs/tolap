@@ -10,12 +10,28 @@ namespace Tolap.Mcp;
 /// Pass through tool results the policy cannot be applied to. Off by default; see
 /// canonical-enforcement-spec.md section 5.
 /// </param>
+/// <param name="HashSalt">
+/// Secret salt for <c>hash</c> masking, turning the digest into a keyed HMAC.
+/// <para>
+/// Unset by default, which preserves the plain-digest pseudonym (and so existing join
+/// keys). Set it and <c>hash</c> becomes a confidentiality control: an unsalted digest of
+/// a low-entropy value — an SSN, a date of birth, a small enumeration — is recoverable by
+/// brute force or a rainbow table, because the input space is small enough to enumerate.
+/// </para>
+/// <para>
+/// Treat it as a secret on a par with <c>SigningKey</c>: store it in a secrets manager or
+/// KMS, never in the policy JSON (policies are visible to every admin and auditor who can
+/// read them). The same salt must be configured everywhere the pseudonym is joined, since
+/// changing it changes every masked value.
+/// </para>
+/// </param>
 public sealed record SecureContextWrapperOptions(
     string SigningKey,
     bool EnforceSignatures = true,
     bool EnforceExpiry = true,
     string[]? AllowedTools = null,
-    bool AllowUnenforceableShapes = false);
+    bool AllowUnenforceableShapes = false,
+    string? HashSalt = null);
 
 /// <summary>
 /// Pre-execution arguments describing what the tool is about to do.
@@ -338,7 +354,7 @@ public sealed class SecureContextToolWrapper
         var policy = context.Policies.FirstOrDefault()
                      ?? throw new InvalidOperationException("no policy in context");
 
-        return EnforcementEngine.ApplyRecordPipeline(rows, policy);
+        return EnforcementEngine.ApplyRecordPipeline(rows, policy, _options.HashSalt);
     }
 
     /// <summary>
@@ -367,7 +383,7 @@ public sealed class SecureContextToolWrapper
             return result;
         }
 
-        return EnforcementEngine.ApplyResultPipeline(result, policy);
+        return EnforcementEngine.ApplyResultPipeline(result, policy, _options.HashSalt);
     }
 
     public async Task<IReadOnlyList<Dictionary<string, object?>>> ExecuteWithEnforcementAsync(

@@ -96,6 +96,14 @@ def resolve(
     matching_policies: list[PolicyDefinition] = []
 
     for assignment in assignments:
+        # Revocation is checked before anything else (spec section 12). A revoked
+        # assignment MUST NOT resolve regardless of `active` or `expires_at`: the
+        # tombstone keeps the grant auditable while it stops granting access.
+        # An unparseable timestamp counts as revoked -- the fail-closed direction,
+        # because we cannot prove a revocation has *not* happened.
+        if _is_revoked(assignment, now):
+            continue
+
         # Check if assignment is active and not expired
         if not assignment.active:
             continue
@@ -138,6 +146,31 @@ def resolve(
     result.resolved_at = now.isoformat().replace("+00:00", "Z")
 
     return result
+
+
+def _is_revoked(assignment: PolicyAssignment, now: datetime) -> bool:
+    """Whether a revocation tombstone bars this assignment (spec section 12).
+
+    A future-dated ``revoked_at`` is not yet in effect, which keeps revocation
+    consistent with expiry rather than making it a boolean flag in disguise. An
+    unparseable value fails closed: a revocation we cannot read is honoured, not
+    ignored, because the alternative silently keeps a revoked grant alive.
+    """
+    revoked_at = assignment.revoked_at
+    if revoked_at is None:
+        return False
+    # An empty string is a present-but-unusable value, not an absent one: it must
+    # fall through to the fail-closed branch below rather than reading as "never
+    # revoked" the way a falsy check would.
+    if not isinstance(revoked_at, str) or not revoked_at.strip():
+        return True
+    try:
+        revoked = datetime.fromisoformat(revoked_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return True
+    if revoked.tzinfo is None:
+        revoked = revoked.replace(tzinfo=timezone.utc)
+    return revoked <= now
 
 
 def _matches_assignee(

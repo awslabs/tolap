@@ -1,6 +1,6 @@
 storage/S3 integration tests — .NET, real AWS
 Run: 2026-07-30T19:21:16Z
-Account: <ACCOUNT_ID> (isengard sandbox)  Region: us-east-1
+Account: <ACCOUNT_ID> (sandbox)  Region: us-east-1
 Command: TOLAP_TEST_AWS=1 dotnet test --filter Aws.S3StorageTests
 
   Passed Tolap.Integration.Tests.Aws.S3StorageTests.BarePrefix_IsNotGrantedByItsOwnGlob [4 ms]

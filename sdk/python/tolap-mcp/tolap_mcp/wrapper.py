@@ -257,7 +257,7 @@ class SecureMcpToolWrapper:
             )
             return results
 
-        return apply_result_pipeline(results, policy)
+        return apply_result_pipeline(results, policy, self._options.hash_salt)
 
     def execute_with_enforcement(
         self,
