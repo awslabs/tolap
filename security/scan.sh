@@ -62,13 +62,24 @@ run_semgrep() {
 }
 
 run_audit() {
-  step "npm audit — production dependencies"
-  # --omit=dev on purpose: a devDependency advisory does not ship, and treating the two
-  # alike is how a real production finding gets lost in build-tool noise.
+  step "npm audit — every workspace with a lockfile"
+  # Every workspace, not a chosen few. Auditing `server console infra` and skipping
+  # `sdk/typescript` and `examples/typescript` is how a High in each of the latter two
+  # reached the public default branch and was reported by Dependabot rather than here.
+  # A scan whose scope silently excludes a workspace returns a clean result it has not
+  # earned, which is worse than no scan because it is believed.
   local package
-  for package in server console infra; do
-    note "$package"
-    (cd "$package" && npm audit --omit=dev) || FAILED+=("npm audit ($package)")
+  for package in sdk/typescript server console infra examples/typescript; do
+    note "$package (production)"
+    # --omit=dev first: a devDependency advisory does not ship, so a real production
+    # finding must not be lost in build-tool noise. This is the gating run.
+    (cd "$package" && npm audit --omit=dev) || FAILED+=("npm audit ($package, production)")
+
+    # Then the full tree, reported but NOT gating. Dev-only advisories still run on
+    # developer and CI machines and still need triage -- being non-shipping is a reason
+    # to rank them lower, not a reason never to see them.
+    note "$package (including dev — informational)"
+    (cd "$package" && npm audit) || true
   done
 }
 

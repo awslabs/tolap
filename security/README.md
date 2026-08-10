@@ -1,6 +1,6 @@
 # Security scan results
 
-Tool output for each SDK, captured **2026-08-09**.
+Tool output for each SDK and workspace, captured **2026-08-10**.
 
 The commit it was captured against is not in the repository: development history was
 squashed into a single commit for the public release, so a SHA here would dangle. The
@@ -21,6 +21,9 @@ below against what the tools actually said.
 | Python | [Bandit](python/bandit.txt) | SAST | **1 Low**, a false positive — see below |
 | Python | [pip-audit](python/pip-audit.txt) | dependency vulns | **0** attributable to TOLAP |
 | TypeScript | [`npm audit`](typescript/npm-audit.txt) | dependency vulns (SDK) | **0 vulnerabilities** |
+| TypeScript | [`npm audit`](server/npm-audit-production.txt) | dependency vulns (server, production) | **0 vulnerabilities** |
+| TypeScript | [`npm audit`](console/npm-audit.txt) | dependency vulns (console) | **0 vulnerabilities** |
+| TypeScript | [`npm audit`](infra/npm-audit.txt) | dependency vulns (infra, CDK tooling) | **1 High**, vendored inside `aws-cdk-lib` and dev-only -- see below |
 | TypeScript | [`npm audit`](typescript/npm-audit-examples.txt) | dependency vulns (examples) | **2 Low**, unfixable upstream -- see below |
 
 ## The example dependencies, and why they are separated from the SDK result
@@ -30,23 +33,32 @@ CI-tested against the real thing. Those are **example-only, dev-time dependencie
 TOLAP package depends on any of them, which is why the SDK and example results are reported
 separately rather than as one number.
 
-Fixed (2026-08-04, and 2026-08-09 for the last row):
+Fixed (2026-08-04, then 2026-08-09/10 for the last two rows):
 
 | Finding | Severity | Action |
 | --- | --- | --- |
 | `vitest` / `vite` / `esbuild` / `@vitest/mocker` / `vite-node` | 1 Critical, 1 High, 3 Moderate | `vitest` 2.1 -> 4.1. All 30 example tests still pass. |
 | `hono` CVE-2026-69207 (ReDoS in CORS middleware) | Moderate | `npm audit fix`; a transitive dep of `@modelcontextprotocol/sdk`. |
 | `nanoid` GHSA-2v37-7h3g-55p8 (custom generators can loop indefinitely at size zero) | High | `npm audit fix` -> `nanoid` 3.3.18, reached only as `vitest` -> `vite` -> `postcss`. Advisory published after the 2026-08-04 scan, which is why a re-scan found a High where the previous run reported none. All SDK suites pass on the bumped toolchain. |
+| `js-yaml` GHSA-5p4m-2wfm-xmqj / CVE-2026-59870 (quadratic CPU in `!!omap` resolution) | High | `overrides: { "js-yaml": "^3.15.1" }` in `examples/typescript/package.json`. Reached as `@mastra/core` -> `gray-matter` -> `js-yaml@3.15.0`; 3.15.1 carries the fix inside the 3.x line that `gray-matter` pins, and the package is not bundled, so an override reaches it. Examples typecheck and all 30 tests pass afterwards. |
 
 Remaining, and not fixable by us:
 
 | Finding | Severity | Why it stays |
 | --- | --- | --- |
 | `@ai-sdk/provider-utils` CVE-2026-8769 (uncontrolled resource consumption) | Low | `@mastra/core@1.55.0` pins the affected `3.0.30` under the alias `@ai-sdk/provider-utils-v5` for multi-version support. No fixed version is published in the `<=3.0.97` range, and the pin is not overridable without dropping the Mastra example. `npm audit` counts it twice (once for the package, once for `@mastra/core`); Trivy counts it once. |
+| `brace-expansion` GHSA-rgw5-rvv9-x895 (DoS via unbounded intermediate arrays) | High | **Vendored inside `aws-cdk-lib`.** `infra/` reaches it only as `aws-cdk-lib@2.263.0` -> `minimatch` -> `brace-expansion@5.0.8`, and the lockfile marks it `inBundle: true` -- it ships inside the CDK tarball, so neither `npm audit fix` nor an `overrides` entry can replace it (both report "overridden" while still resolving 5.0.8; an override was tried and reverted rather than left in place misleadingly). 2.263.0 is the latest published CDK. Fixed in `brace-expansion` 5.0.9, so this clears when AWS republishes. `infra/` is `private: true` CDK-synth tooling: it is not published, not a runtime dependency of anything, and runs only on a developer or CI machine at deploy time. |
 
 **No TOLAP package is affected.** `sdk/typescript` reports `found 0 vulnerabilities`, and the .NET
 and Python SDKs declare no third-party runtime dependencies at all. An integrator installing
 `@tolap/core`, `@tolap/store` or `@tolap/mcp` pulls none of the above.
+
+**Scan the whole repository, not just `sdk/`.** The `js-yaml` and `brace-expansion` findings above
+were surfaced by GitHub's Dependabot on push, *not* by the local scan set -- because the local
+`npm audit` runs covered `sdk/typescript` and `server/` and never entered `examples/` or `infra/`.
+Both directories are `private: true` and neither ships, which is why the gap was survivable, but a
+scan whose scope silently excludes two workspaces reports a clean result it has not earned. The
+commands below now cover every workspace with a lockfile; run all of them.
 
 The weekly [examples workflow](../.github/workflows/examples.yml) exists partly for this: framework
 dependency drift surfaces there rather than in an integrator's first hour.
@@ -117,8 +129,12 @@ cd sdk/dotnet && dotnet list package --deprecated
 # pytest `assert` statements trigger B101, which is what a test file is made of)
 bandit -r sdk/python/tolap-core sdk/python/tolap-store sdk/python/tolap-mcp
 
-# TypeScript
-cd sdk/typescript && npm audit
+# TypeScript / Node -- every workspace with its own lockfile.
+# Auditing only sdk/typescript is what let a High in examples/ and another in infra/
+# reach the default branch and be found by Dependabot instead of here.
+for d in sdk/typescript server console infra examples/typescript; do
+  echo "--- $d ---"; (cd "$d" && npm audit)
+done
 
 # Cross-cutting
 trivy fs --scanners vuln,secret,misconfig --skip-dirs node_modules .

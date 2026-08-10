@@ -1,5 +1,8 @@
 {
   "name": "tolap-examples-typescript",
+  "overrides": {
+    "js-yaml": "^3.15.1"
+  },
   "private": true,
   "type": "module",
   "description": "TOLAP enforcement in five TypeScript agent frameworks",
