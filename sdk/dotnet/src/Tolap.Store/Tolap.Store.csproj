@@ -6,12 +6,51 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Tolap.Store</RootNamespace>
     <PackageId>Tolap.Store</PackageId>
-    <Version>2.0.0</Version>
+    <Version>1.0.0</Version>
     <Description>TOLAP (Tool-Object Level Access Protocol) policy store - interfaces and in-memory implementation</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Tolap.Core\Tolap.Core.csproj" />
+  </ItemGroup>
+
+  <!-- NuGet package metadata. Shared by the three shipped projects; the test projects
+       set IsPackable=false and are unaffected.
+
+       PackageLicenseFile/PackageReadmeFile name files that must be PACKED, not merely
+       present: the <None Include> block below does that. Without it `dotnet pack`
+       fails NU5030 (license file not found) rather than shipping a package with no
+       license, which is the failure mode we want. -->
+  <PropertyGroup>
+    <Authors>Amazon.com, Inc. or its affiliates</Authors>
+    <Company>Amazon.com, Inc. or its affiliates</Company>
+    <Copyright>Copyright 2026 Amazon.com, Inc. or its affiliates. All Rights Reserved.</Copyright>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/awslabs/tolap</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/awslabs/tolap</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>tolap;access-control;ai-agents;mcp;data-masking;security</PackageTags>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- Deterministic, source-linked builds so a consumer can map an assembly back to
+         the commit that produced it. ContinuousIntegrationBuild is set by the release
+         workflow rather than hardcoded: forcing it on locally makes paths
+         non-debuggable in a developer build. -->
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="LICENSE" Pack="true" PackagePath="" />
+    <None Include="NOTICE" Pack="true" PackagePath="" />
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
   </ItemGroup>
 
 </Project>

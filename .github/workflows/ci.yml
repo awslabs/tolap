@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Callable so the publish workflow can re-run this exact suite at the release commit.
+  # "It passed on main" is a different claim from "it passes at this tag": a tag can be
+  # moved, or cut from a branch main never saw. Publishing is irreversible, so it gets
+  # its own run rather than trusting an earlier green.
+  workflow_call:
 
 # A stale run on a superseded commit tells you nothing useful.
 concurrency:
@@ -239,6 +244,38 @@ jobs:
       # known-answer fixture that loses its expected values would let those tests pass
       # while checking nothing — the exact defect that let the original signing
       # divergence ship (canonical-enforcement-spec §12).
+      # The nine package directories each hold a copy of LICENSE and NOTICE, because all
+      # three packaging systems resolve those paths relative to the manifest rather than
+      # the repository root. Copies drift: someone edits the root NOTICE and the published
+      # packages keep asserting the old text, which is a licensing defect no test would
+      # otherwise catch. Committed copies (rather than staging them in the release
+      # workflow) mean a local `dotnet pack` produces the same compliant artifact CI does.
+      - name: Per-package LICENSE and NOTICE match the root
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys
+          root = {name: pathlib.Path(name).read_bytes() for name in ("LICENSE", "NOTICE")}
+          dirs = [
+              "sdk/python/tolap-core", "sdk/python/tolap-store", "sdk/python/tolap-mcp",
+              "sdk/typescript/packages/core", "sdk/typescript/packages/store",
+              "sdk/typescript/packages/mcp",
+              "sdk/dotnet/src/Tolap.Core", "sdk/dotnet/src/Tolap.Store",
+              "sdk/dotnet/src/Tolap.Mcp",
+          ]
+          bad = []
+          for d in dirs:
+              for name, expected in root.items():
+                  p = pathlib.Path(d) / name
+                  if not p.exists():
+                      bad.append(f"{p}: missing")
+                  elif p.read_bytes() != expected:
+                      bad.append(f"{p}: differs from root {name}")
+          if bad:
+              print("\n".join(bad))
+              sys.exit("per-package license files must match the root; re-copy them")
+          print(f"LICENSE and NOTICE match the root in all {len(dirs)} package directories")
+          PY
+
       - name: Signing fixtures carry their expected values
         run: |
           python - <<'PY'

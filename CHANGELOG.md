@@ -4,10 +4,14 @@ All notable changes to TOLAP are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 2.0.0
+## 1.0.0
 
 First public release. There is no prior published version, so this entry describes what
 ships rather than a diff.
+
+The schema is versioned separately and stays at **v1.0** (`schema/v1.0/`): it describes the
+on-the-wire policy format, not the packages that implement it, and the two move
+independently.
 
 ### Added
 
@@ -32,6 +36,20 @@ unsigned resolve preview.
 
 **Deployment** (`infra/`) — CDK for CloudFront, WAF, Aurora Serverless v2 and Fargate.
 Neither load balancer is internet-facing; the edge reaches them over VPC origins.
+
+**A release pipeline** (`.github/workflows/publish.yml`) publishing all nine SDK packages to
+PyPI, npm and NuGet from a version tag. The nine ship as a set at one version because their
+guarantee is cross-package: a context signed by one must verify in the other two. Before
+anything is pushed the workflow checks that the tag, `VERSION`, every manifest and the
+CHANGELOG agree, re-runs the full suite at the release commit, and asserts that each
+artifact carries its license and its declared dependencies. See
+[`docs/releasing.md`](docs/releasing.md).
+
+### Not yet published
+
+The packages are built and verified but have not been pushed to the public registries, so
+the install commands in the README do not resolve yet. `docs/releasing.md` lists the
+namespace and credential setup that has to happen first.
 
 ### Known limitations
 

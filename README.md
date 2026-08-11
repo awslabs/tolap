@@ -131,6 +131,15 @@ The agent sees: `J*********` for the name, a SHA-256 hash for the email, no SSN 
 
 The TOLAP SDK ships in three languages, each with three packages:
 
+> **Not yet on the public registries.** The nine packages below are built and verified by
+> [`.github/workflows/publish.yml`](.github/workflows/publish.yml) but have not been pushed
+> to PyPI, npm or NuGet yet, so the install commands in this section do not resolve. Until
+> the first release lands, build from a clone: `pip install ./sdk/python/tolap-core` (and
+> its siblings), `npm ci && npx tsc -p tsconfig.json` per package under
+> `sdk/typescript/packages/`, or `dotnet build sdk/dotnet/Tolap.sln`.
+> [`docs/releasing.md`](docs/releasing.md) describes what has to happen first. **Delete this
+> note when the packages are live.**
+
 ### .NET
 
 ```bash
@@ -474,6 +483,7 @@ full list of what TOLAP does not guarantee.
 - [Canonical Enforcement Spec](docs/canonical-enforcement-spec.md) -- Normative cross-language behavior: canonical signing, enforcement pipeline order, fail-closed rules
 - [Connector Spec](docs/connector-spec.md) -- Normative per-category behavior: which policy fields apply to `db` / `api` / `kb` / `storage`, what an object and a record mean for each, and which fields are advisory rather than enforced
 - [Local Testing](docs/local-testing.md) -- Running the suites against live Postgres/MySQL and the test API server
+- [Releasing](docs/releasing.md) -- Publishing the nine packages to PyPI, npm and NuGet: registry setup, the version-agreement gate, and recovering a partial release
 - [Integration examples](examples/) -- Fourteen integrations across Python, TypeScript and .NET (MCP SDK, Strands, LangChain, Vercel AI, Mastra, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents), each CI-tested to enforce the same policy identically
 - [Threat Model](docs/security/threat-model.md) -- STRIDE analysis per trust boundary, with the defects found and fixed since revision 1
 - [Testing Anti-Patterns](docs/testing-antipatterns.md) -- Six defects that shipped here while the suite was green, and the smell to grep for in each

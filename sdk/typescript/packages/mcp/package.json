@@ -1,14 +1,48 @@
 {
   "name": "@tolap/mcp",
-  "version": "2.0.0",
+  "version": "1.0.0",
+  "description": "TOLAP enforcement wrappers for agent tools - MCP servers, agent frameworks, Lambda handlers",
+  "license": "Apache-2.0",
+  "author": "Amazon.com, Inc. or its affiliates",
+  "homepage": "https://github.com/awslabs/tolap",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/awslabs/tolap.git",
+    "directory": "sdk/typescript/packages/mcp"
+  },
+  "bugs": {
+    "url": "https://github.com/awslabs/tolap/issues"
+  },
+  "keywords": [
+    "tolap",
+    "access-control",
+    "ai-agents",
+    "mcp",
+    "data-masking",
+    "security"
+  ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "tsc"
   },
   "dependencies": {
-    "@tolap/core": "2.0.0"
+    "@tolap/core": "^1.0.0"
   },
   "devDependencies": {
     "@aws-sdk/client-athena": "^3.1099.0",
