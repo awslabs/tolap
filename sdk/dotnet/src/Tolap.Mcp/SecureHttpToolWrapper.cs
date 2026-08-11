@@ -317,6 +317,45 @@ public sealed class SecureHttpToolWrapper
     /// paths, not URLs, so <c>?</c> parameters cannot smuggle a path past a glob.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Why a request target is not a usable host-relative path, or <c>null</c> when it is.
+    /// </summary>
+    /// <remarks>
+    /// The endpoint globs decide <i>which paths</i> a policy reaches; they cannot decide which
+    /// <i>host</i> the request goes to, because by the time a glob runs the authority has already
+    /// been chosen. So the shape is checked separately and first. An absolute URL is rejected for
+    /// the same reason even though BaseAddress arithmetic happens to leave it intact: the policy
+    /// has no frame of reference for another origin.
+    /// </remarks>
+    internal static string? RequestPathDenialReason(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return "request path is empty";
+
+        // A backslash is normalized to '/' by enough parsers that "\\evil.example\x" reaches the
+        // same place as "//evil.example/x"; treat both as authority-bearing.
+        var first = path[0];
+        if (first is not ('/' or '\\'))
+            return "request path is not host-relative";
+        if (first is '\\')
+            return "request path is not host-relative";
+        if (path.Length > 1 && path[1] is '/' or '\\')
+            return "request path is protocol-relative";
+
+        // A ".." segment resolves after the glob has already approved the pre-normalization
+        // path, so it can climb above the prefix the policy authorized.
+        foreach (var segment in path.Split('/', '\\'))
+        {
+            var bare = segment;
+            var q = bare.IndexOf('?');
+            if (q >= 0) bare = bare[..q];
+            if (bare == "..")
+                return "request path contains a '..' segment";
+        }
+
+        return null;
+    }
+
     private static AccessResult ValidateHop(
         string method,
         string path,
@@ -324,6 +363,19 @@ public sealed class SecureHttpToolWrapper
         EffectivePolicy policy,
         HttpRequestArgs args)
     {
+        // The target must be a host-relative path before any glob is consulted. A
+        // protocol-relative "//evil.example/x" is not a path at all: Uri resolution reads it as
+        // an authority, so it escapes BaseAddress entirely — while still matching a "/*"
+        // allowedEndpoints glob, because the glob only ever sees a leading slash. The request
+        // then left for an attacker-chosen host carrying whatever DefaultRequestHeaders the
+        // integrator configured. Verified reachable before this check existed.
+        //
+        // Enforced here rather than at the entry point so it covers redirect hops too, where a
+        // Location of "//evil.example/x" would otherwise pass IsSameOrigin's resolution.
+        var shapeDenial = RequestPathDenialReason(path);
+        if (shapeDenial is not null)
+            return new AccessResult(false, shapeDenial);
+
         var queryIndex = path.IndexOf('?');
         var policyPath = queryIndex >= 0 ? path[..queryIndex] : path;
 

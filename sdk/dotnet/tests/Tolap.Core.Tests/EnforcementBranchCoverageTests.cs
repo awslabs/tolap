@@ -660,6 +660,57 @@ public class EnforcementBranchCoverageTests
     }
 
     [Fact]
+    public void ApplyRowFilters_NumberComparedToItsOwnStringForm_DoesNotMatch()
+    {
+        // The case the test above MEANT to pin. It used "thirty", which cannot collide
+        // with 30.ToString() and so passed either way; the ToString() fallback in
+        // ValuesEqual made int 30 equal string "30" while Python (`left == right`) and
+        // TypeScript (`===`) both said false. Same signed policy, opposite verdicts.
+        //
+        // It also disagreed with this SDK's OWN SqlQueryRewriter, which renders equals as
+        // `"age" = '30'` -- and SQL's = is type-strict, so a row Postgres excluded came
+        // back when the pushdown optimization was off. Enforcement must not depend on
+        // whether an optimization ran.
+        EnforcementEngine.ApplyRowFilters(
+            Rows(new Dictionary<string, object?>() { ["age"] = 30 }),
+            Policy(new ObjectRules(RowFilters: new[]
+            {
+                new RowFilter("age", FilterOperator.Equals, "30")
+            })))
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ApplyRowFilters_NotEqualsAcrossTypes_KeepsTheRow()
+    {
+        // The mirror of the above: if int 30 is not string "30", then notEquals must
+        // RETAIN it. Asserting only the equals half would let a future "fix" satisfy one
+        // direction while inverting the other.
+        EnforcementEngine.ApplyRowFilters(
+            Rows(new Dictionary<string, object?>() { ["age"] = 30 }),
+            Policy(new ObjectRules(RowFilters: new[]
+            {
+                new RowFilter("age", FilterOperator.NotEquals, "30")
+            })))
+            .Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void ApplyRowFilters_NumericWidthsStillCompareEqual()
+    {
+        // Cross-WIDTH numeric coercion is kept: a JSON parser yields int/long/double for
+        // the same literal depending on its size and the driver, so 30 and 30.0 are one
+        // value. Removing the string fallback must not have taken this with it.
+        EnforcementEngine.ApplyRowFilters(
+            Rows(new Dictionary<string, object?>() { ["age"] = 30L }),
+            Policy(new ObjectRules(RowFilters: new[]
+            {
+                new RowFilter("age", FilterOperator.Equals, 30.0)
+            })))
+            .Should().HaveCount(1);
+    }
+
+    [Fact]
     public void ApplyRowFilters_JsonElementValues_AreUnwrappedForComparison()
     {
         // A raw HTTP body yields JsonElement values. Each JsonValueKind must normalize to

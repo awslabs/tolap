@@ -256,6 +256,33 @@ OBJECT_NAME_CORPUS: list[tuple[str, EffectivePolicy, str | None, str | None]] = 
 ]
 
 
+#: Table 4: request targets that are not host-relative paths.
+#:
+#: Every row is checked against :data:`OPEN` -- ``allowedEndpoints: ["/*", "/**"]``,
+#: the most permissive policy in the corpus -- because the point is that the globs
+#: cannot save you here. A glob decides *which paths* a policy reaches; by the time
+#: one runs, the authority is already chosen. ``//evil.example/x`` matches ``/*`` on
+#: its leading slash and then resolves as an authority, so the request left for a
+#: host the policy author never named, carrying whatever auth headers the integrator
+#: configured on the client. Confirmed reachable in .NET before this check existed.
+#:
+#: The transport must never be invoked: a denial that still made the request would
+#: have already leaked the credentials, whatever it returned to the caller.
+PATH_SHAPE_CORPUS: list[tuple[str, str, str]] = [
+    ("protocol-relative", "//evil.example/x", "request path is protocol-relative"),
+    ("protocol-relative-backslash", "/\\evil.example/x",
+     "request path is protocol-relative"),
+    ("absolute-https", "https://evil.example/x", "request path is not host-relative"),
+    ("absolute-http", "http://evil.example/x", "request path is not host-relative"),
+    ("leading-backslash", "\\\\evil.example\\x", "request path is not host-relative"),
+    ("schemeless-relative", "drug/event.json", "request path is not host-relative"),
+    ("dot-dot-escapes-prefix", "/drug/../../internal/admin",
+     "request path contains a '..' segment"),
+    ("dot-dot-before-query", "/drug/..?x=1", "request path contains a '..' segment"),
+    ("empty", "", "request path is empty"),
+]
+
+
 def _signed(policy: EffectivePolicy) -> SecurityContext:
     context = build_security_context(
         "parity-user", "parity-tenant", [policy], ttl=timedelta(hours=1)
@@ -398,6 +425,53 @@ class TestObjectNameParity:
             client.close()
 
 
+class TestPathShapeParity:
+    """Table 4: a request target that is not a host-relative path is refused."""
+
+    @pytest.mark.parametrize(
+        ("case_id", "path", "denial"),
+        PATH_SHAPE_CORPUS,
+        ids=[row[0] for row in PATH_SHAPE_CORPUS],
+    )
+    def test_case_matches_the_shared_expectation(
+        self, case_id: str, path: str, denial: str
+    ) -> None:
+        served: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            served.append(str(request.url))
+            return httpx.Response(200, json={"results": []})
+
+        wrapper, client = _wrapper(handler)
+        try:
+            with pytest.raises(PermissionError) as exc_info:
+                wrapper.request(_signed(OPEN), "GET", path)
+            assert denial in str(exc_info.value)
+            # The credentials are on the client, so a request that went out has
+            # already leaked them regardless of what the wrapper returned.
+            assert served == [], f"transport reached for {path!r}: {served}"
+        finally:
+            client.close()
+
+    def test_an_ordinary_rooted_path_is_still_allowed(self) -> None:
+        """The control: the check must not reject the paths policies are written for."""
+        served: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            served.append(str(request.url))
+            return httpx.Response(200, json={"results": [{"id": 1}]})
+
+        wrapper, client = _wrapper(handler)
+        try:
+            body = wrapper.request(
+                _signed(OPEN), "GET", "/drug/event.json?limit=3", collection_path="results"
+            )
+            assert body["results"] == [{"id": 1}]
+            assert served == ["https://parity.test/drug/event.json?limit=3"]
+        finally:
+            client.close()
+
+
 class TestTheCorpusItself:
     """A corpus that silently shrank would make every SDK agree by asserting nothing."""
 
@@ -405,9 +479,15 @@ class TestTheCorpusItself:
         assert len(ERROR_BODY_CORPUS) == 24
         assert len(REDIRECT_CORPUS) == 13
         assert len(OBJECT_NAME_CORPUS) == 7
+        assert len(PATH_SHAPE_CORPUS) == 9
 
     def test_case_ids_are_unique_within_each_table(self) -> None:
-        for corpus in (ERROR_BODY_CORPUS, REDIRECT_CORPUS, OBJECT_NAME_CORPUS):
+        for corpus in (
+            ERROR_BODY_CORPUS,
+            REDIRECT_CORPUS,
+            OBJECT_NAME_CORPUS,
+            PATH_SHAPE_CORPUS,
+        ):
             ids = [row[0] for row in corpus]
             assert len(ids) == len(set(ids))
 

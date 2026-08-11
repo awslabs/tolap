@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
@@ -921,14 +922,30 @@ public static class EnforcementEngine
         if (a is bool != b is bool) return false;
 
         if (a.Equals(b)) return true;
-        // Cross-type numeric: scenarios JSON deserializes ints/longs/doubles
-        // depending on parser; coerce to a common form for the comparison.
+
+        // Cross-WIDTH numeric only: a JSON parser yields int/long/double for the same
+        // literal depending on its size and the driver, so 30 and 30L and 30.0 are the
+        // same value. InvariantCulture because ToDouble on a string is culture-sensitive
+        // and a de-DE host would otherwise read "1.5" as 15.
         if (IsNumeric(a) && IsNumeric(b))
         {
-            return Convert.ToDouble(a) == Convert.ToDouble(b);
+            return Convert.ToDouble(a, CultureInfo.InvariantCulture)
+                == Convert.ToDouble(b, CultureInfo.InvariantCulture);
         }
-        if (IsNumeric(a) != IsNumeric(b)) return a.ToString() == b.ToString();
-        return a.ToString() == b.ToString();
+
+        // Cross-TYPE comparison is NOT equality. The former `a.ToString() == b.ToString()`
+        // fallback made int 30 equal string "30" here while Python (`left == right`) and
+        // TypeScript (`===`) both said false — so `equals` and `notEquals` returned
+        // opposite verdicts across the SDKs for the identical policy and row, which is the
+        // divergence class this codebase exists to prevent. It was also culture-sensitive:
+        // (1.5).ToString() is "1,5" on a de-DE host, so a numeric filter silently stopped
+        // matching depending on where the process ran.
+        //
+        // EnforcementBranchCoverageTests already states the rule in a comment — "coercing
+        // them would make a policy's type discipline depend on the driver that produced the
+        // row" — but its case used "thirty", which passes either way; the behaviour was
+        // never pinned. It is now.
+        return false;
     }
 
     private static int? CompareNullable(object? a, object? b)

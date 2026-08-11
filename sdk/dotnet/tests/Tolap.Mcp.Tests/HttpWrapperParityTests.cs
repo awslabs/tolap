@@ -339,6 +339,84 @@ public class HttpWrapperParityTests
             .Which.Message.Should().Contain(denial);
     }
 
+    /// <summary>
+    /// Table 4: request targets that are not host-relative paths.
+    /// </summary>
+    /// <remarks>
+    /// Every row is checked against <see cref="Open"/> — <c>allowedEndpoints: ["/*", "/**"]</c>,
+    /// the most permissive policy in the corpus — because the point is that the globs cannot
+    /// save you here. A glob decides <i>which paths</i> a policy reaches; by the time one runs,
+    /// the authority is already chosen. <c>//evil.example/x</c> matches <c>/*</c> on its leading
+    /// slash and then resolves as an authority, so the request left for a host the policy author
+    /// never named, carrying whatever DefaultRequestHeaders the integrator configured. This SDK
+    /// is the one where it was confirmed reachable.
+    /// </remarks>
+    public static TheoryData<string, string, string> PathShapeCorpus() => new()
+    {
+        { "protocol-relative", "//evil.example/x", "request path is protocol-relative" },
+        { "protocol-relative-backslash", "/\\evil.example/x", "request path is protocol-relative" },
+        { "absolute-https", "https://evil.example/x", "request path is not host-relative" },
+        { "absolute-http", "http://evil.example/x", "request path is not host-relative" },
+        { "leading-backslash", "\\\\evil.example\\x", "request path is not host-relative" },
+        { "schemeless-relative", "drug/event.json", "request path is not host-relative" },
+        { "dot-dot-escapes-prefix", "/drug/../../internal/admin", "request path contains a '..' segment" },
+        { "dot-dot-before-query", "/drug/..?x=1", "request path contains a '..' segment" },
+        { "empty", "", "request path is empty" },
+    };
+
+    [Theory]
+    [MemberData(nameof(PathShapeCorpus))]
+    public async Task PathShape_MatchesTheSharedExpectation(
+        string caseId, string path, string denial)
+    {
+        _ = caseId;
+        var spy = new SpyHandler();
+        using var client = new HttpClient(spy) { BaseAddress = new Uri(Base + "/") };
+        var wrapper = new SecureHttpToolWrapper(new SecureHttpWrapperOptions(Key), client);
+
+        var act = () => wrapper.RequestAsync(
+            SignedContext(Open()), new HttpRequestArgs("GET", path));
+
+        (await act.Should().ThrowAsync<UnauthorizedAccessException>())
+            .Which.Message.Should().Contain(denial);
+        // The credentials are on the client, so a request that went out has already
+        // leaked them regardless of what the wrapper returned.
+        spy.Requested.Should().BeEmpty($"transport reached for \"{path}\"");
+    }
+
+    [Fact]
+    public async Task PathShape_AnOrdinaryRootedPathIsStillAllowed()
+    {
+        // The control: the check must not reject the paths policies are written for.
+        var spy = new SpyHandler("""{"results":[{"id":1}]}""");
+        using var client = new HttpClient(spy) { BaseAddress = new Uri(Base + "/") };
+        var wrapper = new SecureHttpToolWrapper(new SecureHttpWrapperOptions(Key), client);
+
+        var body = await wrapper.RequestAsync(
+            SignedContext(Open()),
+            new HttpRequestArgs("GET", "/drug/event.json?limit=3", CollectionPath: "results"));
+
+        Compact(body.GetProperty("results")).Should().Be("""[{"id":1}]""");
+        spy.Requested.Should().Equal(new[] { $"{Base}/drug/event.json?limit=3" });
+    }
+
+    /// <summary>Records every URL the transport was asked for.</summary>
+    private sealed class SpyHandler : HttpMessageHandler
+    {
+        private readonly string _body;
+        public List<string> Requested { get; } = new();
+        public SpyHandler(string body = "{}") => _body = body;
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct)
+        {
+            Requested.Add(request.RequestUri!.ToString());
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_body, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
     // A corpus that silently shrank would make every SDK agree by asserting nothing.
 
     [Fact]
@@ -347,6 +425,7 @@ public class HttpWrapperParityTests
         ErrorBodyCorpus().Count().Should().Be(24);
         RedirectCorpus().Count().Should().Be(13);
         ObjectNameCorpus().Count().Should().Be(6);
+        PathShapeCorpus().Count().Should().Be(9);
     }
 
     [Fact]

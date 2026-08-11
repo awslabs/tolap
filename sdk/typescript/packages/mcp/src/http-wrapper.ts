@@ -176,6 +176,36 @@ export interface RequestArgs {
   resourceFields?: string[];
 }
 
+/**
+ * Why a request target is not a usable host-relative path, or `undefined` when it is.
+ *
+ * The endpoint globs decide *which paths* a policy reaches; they cannot decide which
+ * *host* the request goes to, because by the time a glob runs the authority has
+ * already been chosen. So the shape is checked separately and first. An absolute URL
+ * is rejected for the same reason even though string concatenation happens to leave
+ * some forms harmless: the policy has no frame of reference for another origin.
+ */
+export function requestPathDenialReason(path: string): string | undefined {
+  if (!path) return "request path is empty";
+
+  // A backslash is normalized to "/" by enough parsers that "\\evil.example\x"
+  // reaches the same place as "//evil.example/x"; treat both as authority-bearing.
+  const first = path[0];
+  if (first !== "/" && first !== "\\") return "request path is not host-relative";
+  if (first === "\\") return "request path is not host-relative";
+  if (path.length > 1 && (path[1] === "/" || path[1] === "\\")) {
+    return "request path is protocol-relative";
+  }
+
+  // A ".." segment resolves after the glob has already approved the
+  // pre-normalization path, so it can climb above the authorized prefix.
+  for (const segment of path.replace(/\\/g, "/").split("/")) {
+    if (segment.split("?")[0] === "..") return "request path contains a '..' segment";
+  }
+
+  return undefined;
+}
+
 export class SecureHttpToolWrapper {
   private options: Required<
     Pick<SecureHttpWrapperOptions, "enforceSignatures" | "enforceExpiry">
@@ -211,6 +241,18 @@ export class SecureHttpToolWrapper {
     policy: EffectivePolicy,
     args: RequestArgs,
   ): AccessResult {
+    // The target must be a host-relative path before any glob is consulted. A
+    // protocol-relative "//evil.example/x" is not a path at all: URL resolution
+    // reads it as an authority, so it escapes `baseUrl` entirely — while still
+    // matching a "/*" `allowedEndpoints` glob, because the glob only ever sees a
+    // leading slash. Checked here rather than at the entry point so it covers
+    // redirect hops too, where a `Location` of "//evil.example/x" would otherwise
+    // pass the same-origin comparison.
+    const shapeDenial = requestPathDenialReason(path);
+    if (shapeDenial !== undefined) {
+      return { allowed: false, reason: shapeDenial };
+    }
+
     const queryIndex = path.indexOf("?");
     const policyPath = queryIndex >= 0 ? path.slice(0, queryIndex) : path;
 

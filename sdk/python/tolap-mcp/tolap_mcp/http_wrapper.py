@@ -344,6 +344,38 @@ def _run_pipeline(
     return _limit_collection(body, collection_path, policy)
 
 
+def _request_path_denial_reason(path: str) -> str | None:
+    """Why a request target is not a usable host-relative path, or ``None``.
+
+    The endpoint globs decide *which paths* a policy reaches; they cannot decide
+    which *host* the request goes to, because by the time a glob runs the
+    authority has already been chosen. So the shape is checked separately and
+    first. An absolute URL is rejected for the same reason even though httpx
+    happens to normalize some forms back onto base_url: the policy has no frame
+    of reference for another origin.
+    """
+    if not path:
+        return "request path is empty"
+
+    # A backslash is normalized to "/" by enough parsers that "\\evil.example\x"
+    # reaches the same place as "//evil.example/x"; treat both as
+    # authority-bearing.
+    if path[0] not in ("/", "\\"):
+        return "request path is not host-relative"
+    if path[0] == "\\":
+        return "request path is not host-relative"
+    if len(path) > 1 and path[1] in ("/", "\\"):
+        return "request path is protocol-relative"
+
+    # A ".." segment resolves after the glob has already approved the
+    # pre-normalization path, so it can climb above the authorized prefix.
+    for segment in path.replace("\\", "/").split("/"):
+        if segment.split("?", 1)[0] == "..":
+            return "request path contains a '..' segment"
+
+    return None
+
+
 class SecureHttpToolWrapper:
     """Enforces TOLAP policy around an httpx.Client.
 
@@ -397,6 +429,17 @@ class SecureHttpToolWrapper:
         written against paths, not URLs, so ``?`` parameters cannot smuggle a path
         past a glob.
         """
+        # The target must be a host-relative path before any glob is consulted. A
+        # protocol-relative "//evil.example/x" is not a path at all: URL
+        # resolution reads it as an authority, so it escapes base_url entirely --
+        # while still matching a "/*" allowedEndpoints glob, because the glob only
+        # ever sees a leading slash. Checked here rather than at the entry point so
+        # it covers redirect hops too, where a Location of "//evil.example/x" would
+        # otherwise pass the same-origin comparison.
+        shape_denial = _request_path_denial_reason(path)
+        if shape_denial is not None:
+            return AccessResult(allowed=False, reason=shape_denial)
+
         policy_path = path.split("?", 1)[0]
 
         # Endpoint rules and, for a write method, the section 4 write checks. Both

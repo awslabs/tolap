@@ -460,16 +460,96 @@ describe("spec §6 parity: object rules are honoured when named, never inferred"
   }
 });
 
+/**
+ * Table 4: request targets that are not host-relative paths.
+ *
+ * Every row is checked against {@link OPEN} — `allowedEndpoints: ["/*", "/**"]`, the
+ * most permissive policy in the corpus — because the point is that the globs cannot
+ * save you here. A glob decides *which paths* a policy reaches; by the time one runs,
+ * the authority is already chosen. `//evil.example/x` matches `/*` on its leading
+ * slash and then resolves as an authority, so the request left for a host the policy
+ * author never named, carrying whatever auth headers the integrator configured on the
+ * client. Confirmed reachable in .NET before this check existed.
+ *
+ * The transport must never be invoked: a denial that still made the request would
+ * have already leaked the credentials, whatever it returned to the caller.
+ */
+const PATH_SHAPE_CORPUS: Array<{ id: string; path: string; denial: string }> = [
+  { id: "protocol-relative", path: "//evil.example/x", denial: "request path is protocol-relative" },
+  { id: "protocol-relative-backslash", path: "/\\evil.example/x", denial: "request path is protocol-relative" },
+  { id: "absolute-https", path: "https://evil.example/x", denial: "request path is not host-relative" },
+  { id: "absolute-http", path: "http://evil.example/x", denial: "request path is not host-relative" },
+  { id: "leading-backslash", path: "\\\\evil.example\\x", denial: "request path is not host-relative" },
+  { id: "schemeless-relative", path: "drug/event.json", denial: "request path is not host-relative" },
+  { id: "dot-dot-escapes-prefix", path: "/drug/../../internal/admin", denial: "request path contains a '..' segment" },
+  { id: "dot-dot-before-query", path: "/drug/..?x=1", denial: "request path contains a '..' segment" },
+  { id: "empty", path: "", denial: "request path is empty" },
+];
+
+describe("path shape parity", () => {
+  // Table 4: a request target that is not a host-relative path is refused.
+  for (const testCase of PATH_SHAPE_CORPUS) {
+    it(testCase.id, async () => {
+      const served: string[] = [];
+      const wrapper = wrapperOver(async (input) => {
+        served.push(input.url);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ results: [] }),
+          headers: { get: () => null },
+        };
+      });
+
+      await expect(
+        wrapper.request(signed(OPEN), { method: "GET", path: testCase.path }),
+      ).rejects.toThrow(testCase.denial);
+      // The credentials are on the transport, so a request that went out has
+      // already leaked them regardless of what the wrapper returned.
+      expect(served, `transport reached for ${JSON.stringify(testCase.path)}`).toEqual([]);
+    });
+  }
+
+  it("an ordinary rooted path is still allowed", async () => {
+    // The control: the check must not reject the paths policies are written for.
+    const served: string[] = [];
+    const wrapper = wrapperOver(async (input) => {
+      served.push(input.url);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ results: [{ id: 1 }] }),
+        headers: { get: () => null },
+      };
+    });
+
+    const body = (await wrapper.request(signed(OPEN), {
+      method: "GET",
+      path: "/drug/event.json?limit=3",
+      collectionPath: "results",
+    })) as { results: unknown[] };
+
+    expect(body.results).toEqual([{ id: 1 }]);
+    expect(served).toEqual(["https://parity.test/drug/event.json?limit=3"]);
+  });
+});
+
 describe("the corpus itself", () => {
   // A corpus that silently shrank would make every SDK agree by asserting nothing.
   it("the tables carry the expected number of cases", () => {
     expect(ERROR_BODY_CORPUS.length).toBe(24);
     expect(REDIRECT_CORPUS.length).toBe(13);
     expect(OBJECT_NAME_CORPUS.length).toBe(6);
+    expect(PATH_SHAPE_CORPUS.length).toBe(9);
   });
 
   it("case ids are unique within each table", () => {
-    for (const corpus of [ERROR_BODY_CORPUS, REDIRECT_CORPUS, OBJECT_NAME_CORPUS]) {
+    for (const corpus of [
+      ERROR_BODY_CORPUS,
+      REDIRECT_CORPUS,
+      OBJECT_NAME_CORPUS,
+      PATH_SHAPE_CORPUS,
+    ]) {
       const ids = corpus.map((c) => c.id);
       expect(new Set(ids).size).toBe(ids.length);
     }
