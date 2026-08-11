@@ -35,6 +35,7 @@ namespace Tolap.Integration.Tests;
 /// well-formed — it just meant something different in the other engine. Only executing it can.
 /// </para>
 /// </remarks>
+[Collection(DatabaseCollection.Name)]
 public class MySqlDialectRewriteTests : IClassFixture<MySqlFixture>
 {
     private readonly MySqlFixture _fixture;

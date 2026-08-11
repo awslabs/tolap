@@ -68,3 +68,29 @@ export function signPolicy(
   const ctx = buildSecurityContext(policy.userId, policy.tenantId, policy, ttlMs);
   return signContext(ctx, signingKey);
 }
+
+/**
+ * Throws when a required backing service is unavailable.
+ *
+ * Tests previously wrote `if (!dbReady) return;`, and an early return from a test body is
+ * a **PASS**, not a skip. Measured before this helper existed: with the databases pointed
+ * at dead ports the integration suite reported `243 passed` — indistinguishable from a run
+ * against live databases. For a policy-enforcement SDK that means a regression letting
+ * `patients.ssn` through could ship behind a green build.
+ *
+ * There is deliberately no opt-out. The .NET counterpart tried one and removed it: an
+ * escape hatch can suppress this call but not the dead connection the test uses two lines
+ * later, so the tests failed anyway with a worse message. Start the services (see
+ * `docs/local-testing.md`) or filter the run. Python's conftest reports an honest
+ * `pytest.skip` for the same condition, which is the behaviour to match when a runner
+ * offers it.
+ */
+export function requireService(ready: boolean, service: string, detail?: string): void {
+  if (ready) return;
+  const because = detail === undefined ? service : `${service} (${detail})`;
+  throw new Error(
+    `This integration test requires ${because}, which is unavailable. ` +
+      "Start it (see docs/local-testing.md), or filter it out of the run. It must not be " +
+      "skipped silently: an early return would be recorded as a pass.",
+  );
+}

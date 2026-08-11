@@ -49,11 +49,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     {
         // /patients returns one record with status "deleted". A policy excluding it must
         // drop that record; before the fix every record came back.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             RowFilters: new[] { new RowFilter("status", FilterOperator.NotEquals, "deleted") },
             EndpointRules: AllowPatients()));
@@ -71,10 +67,7 @@ public sealed class HttpWrapperPipelineRegressionTests
         // Spec section 7: a row lacking the referenced field is dropped, for every
         // operator including the negative ones. Record 5 has no `tags` key, and the
         // negative operator must not retain it.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             RowFilters: new[] { new RowFilter("nonexistent_column", FilterOperator.NotEquals, "x") },
             EndpointRules: AllowPatients()));
@@ -87,10 +80,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     [Fact]
     public async Task RowFilters_CompositeFiltersAndTogether()
     {
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             RowFilters: new[]
             {
@@ -110,10 +100,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     {
         // The collection is under "items" here rather than "results", so the filter must
         // follow CollectionPath the way the limit and projection already do.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             RowFilters: new[] { new RowFilter("status", FilterOperator.Equals, "deleted") },
             EndpointRules: AllowPatients()));
@@ -130,10 +117,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     public async Task DeniedTags_ExcludeRecordsFromAnHttpResponseBody()
     {
         // Chloe Adeyemi carries the "confidential" tag and must not be disclosed.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             TagRules: new TagRules(DeniedTags: new[] { "confidential" }),
             EndpointRules: AllowPatients()));
@@ -149,10 +133,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     [Fact]
     public async Task AllowedTags_KeepOnlyMatchingRecordsAndDropUntaggedOnes()
     {
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             TagRules: new TagRules(AllowedTags: new[] { "research" }),
             EndpointRules: AllowPatients()));
@@ -168,10 +149,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     {
         // Spec section 3: an empty allow-list is deny-everything. Before the fix this
         // returned every record — the most restrictive possible policy became the least.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             TagRules: new TagRules(AllowedTags: Array.Empty<string>()),
             EndpointRules: AllowPatients()));
@@ -184,10 +162,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     [Fact]
     public async Task DeniedTagsTakePrecedenceOverAllowedTags()
     {
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             TagRules: new TagRules(
                 AllowedTags: new[] { "public", "confidential" },
@@ -205,10 +180,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     {
         // The other side of both conditionals: a policy that filters nothing must not
         // drop anything.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var records = await Records(Policy(new ObjectRules(EndpointRules: AllowPatients())),
             "/patients", "results");
 
@@ -223,10 +195,7 @@ public sealed class HttpWrapperPipelineRegressionTests
         // The limit is last so that filtering never yields fewer rows than maxResults when
         // more qualifying rows exist. Filters drop 2 of 5, leaving 3, and the limit of 2
         // then truncates to 2 — not "take 2 first, then filter down to 1".
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(
             new ObjectRules(
                 RowFilters: new[] { new RowFilter("status", FilterOperator.Equals, "active") },
@@ -247,10 +216,7 @@ public sealed class HttpWrapperPipelineRegressionTests
         // step 1 and hidden-field removal is step 3, so the field is present when the
         // filter reads it. Reversing the order would make the filter fail closed on every
         // row and return nothing.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(HiddenFields: new[] { "status" }),
             RowFilters: new[] { new RowFilter("status", FilterOperator.Equals, "active") },
@@ -267,10 +233,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     {
         // Same ordering point for tags: an allowedFields list omitting `tags` must not
         // stop the tag rule from working.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(AllowedFields: new[] { "id", "full_name" }),
             TagRules: new TagRules(DeniedTags: new[] { "confidential" }),
@@ -291,10 +254,7 @@ public sealed class HttpWrapperPipelineRegressionTests
         // the MCP wrapper and as hidden-field removal already did here. Before the fix
         // masking walked a literal dotted path from the root, so a bare rule matched only
         // a top-level key and the nested SSN was returned in cleartext.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(MaskedFields: new[] { new MaskingRule("ssn", MaskType.Redact) }),
             EndpointRules: AllowPatients()));
@@ -310,10 +270,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     {
         // Spec section 4 requires matching in both directions: a rule `patients.ssn` must
         // reach a bare `ssn` key.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(
                 MaskedFields: new[] { new MaskingRule("patients.ssn", MaskType.Redact) }),
@@ -328,10 +285,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     [Fact]
     public async Task MaskRuleMatchingIsCaseInsensitive()
     {
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(MaskedFields: new[] { new MaskingRule("SSN", MaskType.Redact) }),
             EndpointRules: AllowPatients()));
@@ -346,10 +300,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     {
         // The dotted-path form is how API responses were already being addressed, so the
         // matcher change must not regress it.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(MaskedFields: new[]
             {
@@ -366,10 +317,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     [Fact]
     public async Task MaskingDoesNotTouchFieldsNoRuleNames()
     {
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(MaskedFields: new[] { new MaskingRule("ssn", MaskType.Redact) }),
             EndpointRules: AllowPatients()));
@@ -385,10 +333,7 @@ public sealed class HttpWrapperPipelineRegressionTests
     {
         // Two rules matching the same key: the more restrictive must win (spec section 6),
         // which is the core matcher's behaviour rather than "last rule applied".
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(MaskedFields: new[]
             {
@@ -410,10 +355,7 @@ public sealed class HttpWrapperPipelineRegressionTests
         // All six steps at once, so their composition is pinned and not just each in
         // isolation: filters drop records, tags drop another, the hidden field goes, the
         // allow-list projects, masking applies, and the limit truncates.
-        if (!_api.Ready)
-        {
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(
             new ObjectRules(
                 FieldRules: new FieldRules(

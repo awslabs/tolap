@@ -17,6 +17,7 @@ import {
   mergePolicy,
   policyFromDict,
   signPolicy,
+  requireService,
 } from "./_scenarios.js";
 
 const SCHEMA_PATH = resolve(
@@ -36,6 +37,7 @@ const quote = (c: string) => (RESERVED.has(c) ? `\`${c}\`` : c);
 
 let conn: Connection | null = null;
 let dbReady = false;
+let dbSkipReason: string | undefined;
 
 beforeAll(async () => {
   try {
@@ -55,6 +57,7 @@ beforeAll(async () => {
     await conn.query(cleaned);
     dbReady = true;
   } catch (err) {
+    dbSkipReason = String(err);
     console.warn("MySQL not reachable; skipping integration tests.", err);
   }
 });
@@ -86,7 +89,7 @@ function wrapper() {
 describe("MySQL: healthcare-analyst", () => {
   for (const scenario of HEALTHCARE_SCENARIOS) {
     it(scenario.name, async () => {
-      if (!dbReady) return;
+      requireService(dbReady, "a local database", dbSkipReason);
       const merged = mergePolicy(HEALTHCARE_BASE, scenario.policyOverride);
       const ctx = signPolicy(policyFromDict(merged), SIGNING_KEY);
       const fields = scenario.query.columns.map((c: string) => `${scenario.query.table}.${c}`);
@@ -191,7 +194,7 @@ function assertMask(actual: unknown, original: unknown, mask: string) {
 describe("MySQL: row filters", () => {
   for (const scenario of ROW_FILTER_SCENARIOS) {
     it(scenario.name, async () => {
-      if (!dbReady) return;
+      requireService(dbReady, "a local database", dbSkipReason);
       const ctx = signPolicy(policyFromDict(scenario.policy), SIGNING_KEY);
       const exec = () =>
         wrapper().executeWithEnforcement(
@@ -221,7 +224,7 @@ describe("MySQL: row filters", () => {
 describe("MySQL: field rules", () => {
   for (const scenario of FIELD_RULE_SCENARIOS) {
     it(scenario.name, async () => {
-      if (!dbReady) return;
+      requireService(dbReady, "a local database", dbSkipReason);
       const ctx = signPolicy(policyFromDict(scenario.policy), SIGNING_KEY);
       const exec = () =>
         wrapper().executeWithEnforcement(
@@ -269,7 +272,7 @@ describe("MySQL: field rules", () => {
 describe("MySQL: permissions and limits", () => {
   for (const scenario of PERMISSION_SCENARIOS) {
     it(scenario.name, async () => {
-      if (!dbReady) return;
+      requireService(dbReady, "a local database", dbSkipReason);
       const ctx = signPolicy(policyFromDict(scenario.policy), SIGNING_KEY);
       const exec = () =>
         wrapper().executeWithEnforcement(

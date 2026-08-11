@@ -23,6 +23,8 @@ import { Client } from "pg";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
+import { requireService } from "./_scenarios.js";
+
 import {
   SqlQueryRewriter,
   applyResultPipeline,
@@ -47,6 +49,7 @@ const DSN = process.env.TOLAP_TEST_DB_DSN ?? "postgresql:///tolap_integration_te
 
 let client: Client;
 let dbReady = false;
+let dbSkipReason: string | undefined;
 
 beforeAll(async () => {
   client = new Client({ connectionString: DSN });
@@ -61,6 +64,7 @@ beforeAll(async () => {
     // ids 3-6 keep nickname NULL.
     dbReady = true;
   } catch (err) {
+    dbSkipReason = String(err);
     console.warn(`Postgres not reachable at ${DSN}; skipping rewrite tests.`, err);
   }
 });
@@ -130,7 +134,7 @@ function ids(records: Array<Record<string, unknown>>): number[] {
 
 describe("the pushed-down filter reaches the database", () => {
   it("the rewritten query returns fewer rows than the unfiltered one", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const original = "SELECT id, region FROM patients ORDER BY id";
     const policy = policyOf({
@@ -156,7 +160,7 @@ describe("the pushed-down filter reaches the database", () => {
   });
 
   it("the post-fetch path reaches the SAME rows the slow way", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const original = "SELECT id, region FROM patients ORDER BY id";
     const policy = policyOf({
@@ -174,7 +178,7 @@ describe("the pushed-down filter reaches the database", () => {
   });
 
   it("LIMIT is enforced by the database, not just by truncation", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const original = "SELECT id FROM patients ORDER BY id";
     const policy = policyOf({ maxResults: 2 });
@@ -188,7 +192,7 @@ describe("the pushed-down filter reaches the database", () => {
   });
 
   it("hidden columns are projected out by the database", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const original = "SELECT id, full_name, ssn FROM patients ORDER BY id";
     const policy = policyOf({ hiddenFields: ["ssn"] });
@@ -203,7 +207,7 @@ describe("the pushed-down filter reaches the database", () => {
   });
 
   it("SELECT * expands to the allowed columns at the database", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const policy = policyOf({
       allowedFields: ["id", "full_name", "region", "ssn"],
@@ -220,7 +224,7 @@ describe("the pushed-down filter reaches the database", () => {
   });
 
   it("SELECT * with hiddenFields but no allowedFields still returns the hidden column", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // The documented limitation, proved rather than asserted: the rewriter cannot
     // subtract a hidden column from `*` without schema knowledge, so ssn DOES cross
@@ -338,7 +342,7 @@ describe("pushed-down and post-fetch paths select identical rows", () => {
 
   for (const { name, filter, columns } of cases) {
     it(name, async () => {
-      if (!dbReady) return;
+      requireService(dbReady, "a local database", dbSkipReason);
 
       const policy = policyOf({ rowFilters: [filter] });
       const original = `SELECT ${columns} FROM patients ORDER BY id`;
@@ -368,7 +372,7 @@ describe("pushed-down and post-fetch paths select identical rows", () => {
   }
 
   it("the nullable-column cases genuinely exercise nulls", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
     // Guards the guard: if the fixture stopped having null nicknames, the IS NULL
     // cases above would pass vacuously.
     const nulls = await rows(
@@ -382,7 +386,7 @@ describe("pushed-down and post-fetch paths select identical rows", () => {
   });
 
   it("notEquals on a nullable column returns MORE rows than bare SQL would", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // The concrete demonstration of the prior implementation's defect. Bare `<>` loses the
     // null-nickname rows; the rewritten form keeps them, matching the post pass.
@@ -403,7 +407,7 @@ describe("pushed-down and post-fetch paths select identical rows", () => {
   });
 
   it("notLike on a nullable column returns MORE rows than bare SQL would", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // The same demonstration for the third negative operator. `NULL NOT LIKE 'x'` is
     // unknown -- therefore not true -- for exactly the same reason `NULL <> 'x'` is, so
@@ -431,7 +435,7 @@ describe("pushed-down and post-fetch paths select identical rows", () => {
   });
 
   it("all three negative operators select the same rows, pushed down and post-fetch", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // Regression guard for the asymmetry: `notLike` omitted the IS NULL arm that
     // `notEquals` and `notIn` carried, so the same policy's row set depended on which
@@ -505,7 +509,7 @@ describe("every emitted statement is valid SQL", () => {
 
   for (const original of shapes) {
     it(`parses and runs: ${original.slice(0, 62)}`, async () => {
-      if (!dbReady) return;
+      requireService(dbReady, "a local database", dbSkipReason);
 
       const { query } = rewriter.rewriteQuery(original, policy);
 
@@ -526,7 +530,7 @@ describe("every emitted statement is valid SQL", () => {
   }
 
   it("a JOIN whose tables share the filtered column ERRORS rather than guessing", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // A deliberate, documented consequence of emitting a BARE column name. Both
     // `patients` and `encounters` have `region`, so `WHERE "region" = 'us-east'` is
@@ -559,7 +563,7 @@ describe("every emitted statement is valid SQL", () => {
   });
 
   it("a refused injection value leaves a query that still runs", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // A value with a backslash is declined rather than escaped, so the filter falls
     // to the post pass. The emitted query must still be valid, and the post pass
@@ -585,7 +589,7 @@ describe("every emitted statement is valid SQL", () => {
   });
 
   it("an escaped-but-pushed injection payload is data, not syntax", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // No backslash, so this one IS pushed down -- with the quote doubled. If the
     // escaping were wrong, Postgres would either error or return every row.
@@ -622,7 +626,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
   const wrapper = new SecureContextToolWrapper({ signingKey: SIGNING_KEY });
 
   it("prepares, executes, and post-processes in one call", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const policy = policyOf({
       rowFilters: [
@@ -644,7 +648,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
   });
 
   it("passes the dialect through to the rewriter", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // The dialect is the integrator's to supply; the wrapper must plumb it, not
     // infer it (connector spec §5.1). `postgres` here matches the live connection.
@@ -667,7 +671,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
   });
 
   it("emits mysql quoting when the mysql dialect is passed through", () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // Not executed against Postgres -- backticks are a syntax error there, which is
     // exactly why the profile has to be the caller's choice.
@@ -689,7 +693,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
   });
 
   it("declines to rewrite for an unrecognized dialect, and the post pass still works", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const policy = policyOf({
       rowFilters: [
@@ -720,7 +724,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
   });
 
   it("passes the dialect through executeSqlWithEnforcement too", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const policy = policyOf({
       rowFilters: [
@@ -746,7 +750,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
   });
 
   it("reports fullyPushedDown when every filter reached the database", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const prep = wrapper.prepareSqlQuery(
       contextFor(
@@ -767,7 +771,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
   });
 
   it("reports the unpushable filters, and the post pass still enforces them", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // `contains` has no portable SQL form, so the database returns extra rows and the
     // post pass is what removes them. The integrator can SEE that from the result.
@@ -794,7 +798,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
   });
 
   it("resolves the object name from the query when the caller omits it", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // An allowedObjects rule must apply to the table the query READS, not to a
     // declaration the query is free to contradict.
@@ -814,7 +818,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
   });
 
   it("refuses a query naming a hidden field rather than silently narrowing it", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     const prep = wrapper.prepareSqlQuery(
       contextFor(policyOf({ hiddenFields: ["ssn"] })),
@@ -954,7 +958,7 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
 
 describe("footgun: filtering on an unprojected column returns zero rows", () => {
   it("the database filters correctly, then the post pass drops everything", async () => {
-    if (!dbReady) return;
+    requireService(dbReady, "a local database", dbSkipReason);
 
     // Fail-closed, not a leak, but surprising enough to pin against a live DB. The
     // query projects only `id`, so the rows carry no `region` key and spec §7 drops

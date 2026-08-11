@@ -40,6 +40,7 @@ namespace Tolap.Integration.Tests;
 /// unreachable.
 /// </para>
 /// </remarks>
+[Collection(DatabaseCollection.Name)]
 public class LikeCollationPushdownTests
     : IClassFixture<PostgresFixture>, IClassFixture<MySqlFixture>, IAsyncLifetime
 {
@@ -198,7 +199,7 @@ public class LikeCollationPushdownTests
     [Fact]
     public async Task PostgresLike_IsCaseSensitive()
     {
-        if (!_pg.Ready) return;
+        ScenarioHelpers.RequireService(_pg.Ready, "a local database");
 
         var rows = await PgRowsAsync("SELECT ('ALICE JONES' LIKE 'alice%') AS cmp");
 
@@ -208,7 +209,7 @@ public class LikeCollationPushdownTests
     [Fact]
     public async Task MySqlLike_IsNot_UnderItsDefaultCollation()
     {
-        if (!_mysql.Ready) return;
+        ScenarioHelpers.RequireService(_mysql.Ready, "a local database");
 
         var rows = await MySqlRowsAsync("SELECT ('ALICE JONES' LIKE 'alice%') AS cmp");
 
@@ -227,7 +228,7 @@ public class LikeCollationPushdownTests
     [Fact]
     public async Task TheBareMySqlPredicate_WouldDropARealRow()
     {
-        if (!_mysql.Ready) return;
+        ScenarioHelpers.RequireService(_mysql.Ready, "a local database");
 
         var dropped = await MySqlRowsAsync(
             "SELECT id, name FROM collation_probe "
@@ -247,7 +248,7 @@ public class LikeCollationPushdownTests
     [Fact]
     public async Task MySql_DoesNotPush_AndThePostPassKeepsTheRow()
     {
-        if (!_mysql.Ready) return;
+        ScenarioHelpers.RequireService(_mysql.Ready, "a local database");
 
         var policy = Policy(NotLikeAlice);
 
@@ -276,7 +277,7 @@ public class LikeCollationPushdownTests
     [Fact]
     public async Task APositiveLike_IsDeclinedOnMySql_AndStillCorrect()
     {
-        if (!_mysql.Ready) return;
+        ScenarioHelpers.RequireService(_mysql.Ready, "a local database");
 
         var like = new RowFilter("name", FilterOperator.Like, Value: "alice%");
         var policy = Policy(like);
@@ -308,7 +309,7 @@ public class LikeCollationPushdownTests
     [Fact]
     public async Task Postgres_StillPushes_AndStillAgreesWithThePostPass()
     {
-        if (!_pg.Ready) return;
+        ScenarioHelpers.RequireService(_pg.Ready, "a local database");
 
         var policy = Policy(NotLikeAlice);
 
@@ -391,7 +392,7 @@ public class LikeCollationPushdownTests
     [Fact]
     public async Task TheMySqlCollateForm_WouldHaveWorked()
     {
-        if (!_mysql.Ready) return;
+        ScenarioHelpers.RequireService(_mysql.Ready, "a local database");
 
         var forced = await MySqlRowsAsync(
             "SELECT ('ALICE JONES' LIKE 'alice%' COLLATE utf8mb4_0900_as_cs) AS cmp");

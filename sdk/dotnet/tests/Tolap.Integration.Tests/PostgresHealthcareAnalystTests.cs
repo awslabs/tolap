@@ -8,6 +8,7 @@ using Tolap.Mcp;
 
 namespace Tolap.Integration.Tests;
 
+[Collection(DatabaseCollection.Name)]
 public sealed class PostgresHealthcareAnalystTests : IClassFixture<PostgresFixture>
 {
     private const string SigningKey = "integration-test-signing-key";
@@ -38,7 +39,7 @@ public sealed class PostgresHealthcareAnalystTests : IClassFixture<PostgresFixtu
     [MemberData(nameof(Scenarios))]
     public async Task HealthcareAnalystScenario(string name, string baseJson, string scenarioJson)
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         using var baseDoc = JsonDocument.Parse(baseJson);
         using var scenarioDoc = JsonDocument.Parse(scenarioJson);

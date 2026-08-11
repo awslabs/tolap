@@ -12,6 +12,15 @@ public sealed class MySqlFixture : IAsyncLifetime, IDisposable
     public MySqlConnection Connection { get; private set; } = null!;
     public bool Ready { get; private set; }
 
+    /// <summary>Why the service was unavailable, or null when Ready.</summary>
+    /// <remarks>
+    /// A bare <c>catch (Exception)</c> with no logging made a bad schema, a permissions
+    /// error, and an unreachable server indistinguishable — and since the tests treated
+    /// all three as a silent pass, there was nothing to read either. Recording the reason
+    /// is what makes the failure actionable.
+    /// </remarks>
+    public string? SkipReason { get; private set; }
+
     public async Task InitializeAsync()
     {
         var host = Environment.GetEnvironmentVariable("TOLAP_TEST_MYSQL_HOST") ?? "127.0.0.1";
@@ -40,9 +49,11 @@ public sealed class MySqlFixture : IAsyncLifetime, IDisposable
             }
             Ready = true;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             Ready = false;
+            SkipReason = $"{ex.GetType().Name}: {ex.Message}";
+            Console.Error.WriteLine($"[MySqlFixture] unavailable — {SkipReason}");
         }
     }
 

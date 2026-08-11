@@ -1,8 +1,25 @@
 # Running the test suites locally
 
 The unit suites need nothing but a toolchain. The integration suites need Postgres
-and MySQL, and skip cleanly without them — which is worth knowing, because a green
-run that skipped 120 tests looks identical to a green run that executed them.
+and MySQL, and **fail** without them rather than skipping.
+
+That is deliberate, and it is a change. They used to return early when a database was
+unreachable, and an early return from a test body is a *pass*: with the databases pointed
+at dead ports, .NET reported `Passed: 273` and TypeScript `243 passed`, output
+indistinguishable from a run that verified everything. Python alone reported an honest
+`pytest.skip`.
+
+Worse, it hid a live bug rather than a missing service. Three .NET classes shared
+`MySqlFixture` through `IClassFixture`, so each built its own instance and each re-seeded
+the same tables in parallel; the losers of that race failed with `Table 'patients' already
+exists`, and 39 MySQL tests reported success while never reaching MySQL — which was running
+the whole time. Both fixtures now hang off one `DatabaseCollection` so seeding happens once.
+
+If you cannot run a database locally, filter those tests out of the run explicitly
+(`dotnet test --filter`, `vitest run <path>`) rather than expecting the suite to
+degrade quietly. There is no environment-variable escape hatch: one was tried and removed,
+because it could suppress the guard but not the closed connection the test used two lines
+later.
 
 ## Databases
 

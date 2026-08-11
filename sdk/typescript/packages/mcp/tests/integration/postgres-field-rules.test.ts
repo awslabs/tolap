@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { SecureContextToolWrapper } from "../../src/context-wrapper.js";
-import { loadScenarios, policyFromDict, signPolicy } from "./_scenarios.js";
+import { loadScenarios, policyFromDict, signPolicy, requireService } from "./_scenarios.js";
 
 const SCHEMA_PATH = resolve(
   __dirname, "..", "..", "..", "..", "..", "..", "sdk", "python", "tests", "integration", "schema.sql",
@@ -21,6 +21,7 @@ const SCENARIOS = loadScenarios("postgres-field-rules.json").scenarios;
 
 let client: Client;
 let dbReady = false;
+let dbSkipReason: string | undefined;
 
 beforeAll(async () => {
   client = new Client({ connectionString: DSN });
@@ -29,6 +30,7 @@ beforeAll(async () => {
     await client.query(readFileSync(SCHEMA_PATH, "utf8"));
     dbReady = true;
   } catch (err) {
+    dbSkipReason = String(err);
     console.warn(`Postgres not reachable; skipping`, err);
   }
 });
@@ -46,7 +48,7 @@ async function runQuery(table: string, columns: string[]) {
 describe("postgres field rules", () => {
   for (const scenario of SCENARIOS) {
     it(scenario.name, async () => {
-      if (!dbReady) return;
+      requireService(dbReady, "a local database", dbSkipReason);
 
       const policy = policyFromDict(scenario.policy);
       const ctx = signPolicy(policy, SIGNING_KEY);

@@ -10,6 +10,50 @@ namespace Tolap.Integration.Tests;
 /// </summary>
 public static class ScenarioHelpers
 {
+    /// <summary>
+    /// Fails the current test when a required backing service is unavailable.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Tests previously wrote <c>if (!_db.Ready) return;</c>, and an early return from a
+    /// test body is a <b>PASS</b>, not a skip. Measured before this helper existed: with
+    /// Postgres pointed at a dead port, the 82 Postgres integration tests reported
+    /// <c>Passed: 82</c> — byte-identical to a run against a live database. For a
+    /// policy-enforcement SDK that means a regression letting <c>patients.ssn</c> through
+    /// could ship behind a green build. The AWS suites' genuine <c>Skipped: 41</c> shows
+    /// the runner reports real skips plainly when it is given one.
+    /// </para>
+    /// <para>
+    /// It also hid a live bug rather than a missing service. Three classes shared
+    /// <c>MySqlFixture</c> via <c>IClassFixture</c>, so each built its own instance and
+    /// each re-seeded the same tables in parallel; the losers failed with "Table 'patients'
+    /// already exists" and 39 MySQL tests reported success while never touching MySQL —
+    /// which was reachable the whole time. See <c>DatabaseCollection</c>.
+    /// </para>
+    /// <para>
+    /// There is deliberately <b>no opt-out</b>. xUnit v2 has no dynamic-skip API
+    /// (<c>Assert.Skip</c> is v3), so the only alternatives were to fail or to return —
+    /// and returning is what produced the false green. An escape hatch was tried and
+    /// removed: it could suppress this call but not the closed connection the test used
+    /// two lines later, so 34 tests failed anyway with
+    /// <c>Connection must be Open</c>. A half-working opt-out is worse than none, because
+    /// it invites the reader to believe the suite degrades gracefully when it does not.
+    /// Start the services (see <c>docs/local-testing.md</c>) or filter the run.
+    /// </para>
+    /// </remarks>
+    public static void RequireService(bool ready, string service, string? detail = null)
+    {
+        if (ready) return;
+
+        var because = detail is null ? service : $"{service} ({detail})";
+        throw new InvalidOperationException(
+            $"This integration test requires {because}, which is unavailable. "
+            + "Start it (see docs/local-testing.md), or filter it out of the run "
+            + "(dotnet test --filter). It must not be skipped silently: an early return "
+            + "would be recorded as a pass, which is how 39 MySQL tests reported success "
+            + "while never reaching MySQL.");
+    }
+
     public static readonly string RepoRoot = FindRepoRoot();
     public static readonly string ScenariosDir =
         Path.Combine(RepoRoot, "fixtures", "integration-scenarios");

@@ -6,6 +6,7 @@ using Tolap.Mcp;
 
 namespace Tolap.Integration.Tests;
 
+[Collection(DatabaseCollection.Name)]
 public sealed class PostgresPermissionsAndLimitsTests : IClassFixture<PostgresFixture>
 {
     private const string SigningKey = "integration-test-signing-key";
@@ -29,7 +30,7 @@ public sealed class PostgresPermissionsAndLimitsTests : IClassFixture<PostgresFi
     [MemberData(nameof(Scenarios))]
     public async Task Scenario(string name, string scenarioJson)
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
         using var doc = JsonDocument.Parse(scenarioJson);
         var scenario = doc.RootElement;
         var policy = ScenarioHelpers.PolicyFromJson(scenario.GetProperty("policy"));

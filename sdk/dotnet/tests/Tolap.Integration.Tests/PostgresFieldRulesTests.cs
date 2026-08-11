@@ -11,6 +11,7 @@ namespace Tolap.Integration.Tests;
 /// <summary>
 /// Cross-SDK field-rule scenarios.
 /// </summary>
+[Collection(DatabaseCollection.Name)]
 public sealed class PostgresFieldRulesTests : IClassFixture<PostgresFixture>
 {
     private const string SigningKey = "integration-test-signing-key";
@@ -34,7 +35,7 @@ public sealed class PostgresFieldRulesTests : IClassFixture<PostgresFixture>
     [MemberData(nameof(Scenarios))]
     public async Task FieldRuleScenario(string name, string scenarioJson)
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
         using var doc = JsonDocument.Parse(scenarioJson);
         var scenario = doc.RootElement;
 

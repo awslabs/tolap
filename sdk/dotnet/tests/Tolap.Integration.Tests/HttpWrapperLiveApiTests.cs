@@ -33,11 +33,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // /admin/audit is deliberately reachable on the server: the point is that the
         // policy denies it, not that the server hides it.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var wrapper = Wrapper();
 
         var act = () => wrapper.RequestAsync(
@@ -57,11 +53,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // POST /patients succeeds by design on the server, so a test asserting denial is
         // testing the policy's method restriction rather than the server's routing.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var wrapper = Wrapper();
 
         var act = () => wrapper.RequestAsync(
@@ -82,11 +74,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // The request-body branch is only reached on an allowed write; /echo reflects what
         // arrived, so this asserts the payload really crossed the socket.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         // Permitting a write takes AllowedMethods, ReadOnly: false, AND CanInsert. Three
         // independent gates (canonical-enforcement-spec.md section 9, connector-spec.md
         // sections 4 and 6): AllowedMethods makes the verb reachable on the path, ReadOnly is
@@ -117,11 +105,7 @@ public sealed class HttpWrapperLiveApiTests
         // open -- the only thing refusing this POST is the absent write permission. Absent
         // defaults to false (connector-spec.md section 4.1), deliberately opposite to
         // CanQuery, so a policy authored before writes existed does not silently acquire them.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(
             new ObjectRules(EndpointRules: new EndpointRules(
                 AllowedEndpoints: new[] { "/echo" },
@@ -147,11 +131,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // Policy patterns are written against paths. The wrapper must evaluate the path
         // alone yet still transmit the query, or ?limit= would be silently dropped.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(EndpointRules: new EndpointRules(
             AllowedEndpoints: new[] { "/echo" },
             AllowedMethods: new[] { "GET" })));
@@ -181,11 +161,7 @@ public sealed class HttpWrapperLiveApiTests
         // latter came from EnsureSuccessStatusCode, which raised *before* enforcement ran,
         // so the error payload was never put through the pipeline at all
         // (connector-spec.md section 6, "error bodies are enforced").
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(EndpointRules: new EndpointRules(
             AllowedEndpoints: new[] { "/status/*" },
             AllowedMethods: new[] { "GET" })));
@@ -212,11 +188,7 @@ public sealed class HttpWrapperLiveApiTests
         // before the pipeline, so the error payload reached the caller unenforced.
         // connector-spec.md section 6: "A 4xx/5xx payload carries the same fields as a
         // success payload; a validation error echoing a rejected value is a common leak."
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: new EndpointRules(
                 AllowedEndpoints: new[] { "/status/*" },
@@ -237,11 +209,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task ErrorBody_IsMaskedRatherThanReturnedInCleartext()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: new EndpointRules(
                 AllowedEndpoints: new[] { "/status/*" },
@@ -267,11 +235,7 @@ public sealed class HttpWrapperLiveApiTests
         // closed and drops it, so the enforced body is null. That is the fail-closed
         // direction and it is only observable if the record-dropping pass really ran — a
         // wrapper that merely stripped fields from an error body would return the record.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: new EndpointRules(
                 AllowedEndpoints: new[] { "/status/*" },
@@ -297,11 +261,7 @@ public sealed class HttpWrapperLiveApiTests
         // The point of enforcing an error body is defeated if the exception also ships a
         // handle on the raw one. UpstreamHttpException carries a status, an enforced body
         // and a URL, and nothing else — no HttpResponseMessage, no raw string.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: new EndpointRules(
                 AllowedEndpoints: new[] { "/status/*" },
@@ -322,11 +282,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task InvalidSignatureAndExpiredContext_AreBothDeniedBeforeAnyRequest()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var wrapper = Wrapper();
 
         // Signed with the wrong key.
@@ -350,11 +306,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task ContextWithNoPolicy_Throws()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var context = SecurityContextSigner.Sign(
             SecurityContextBuilder.Build("u", "t", Array.Empty<EffectivePolicy>()), SigningKey);
 
@@ -366,11 +318,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task QueryPermissionDenied_IsRefusedBeforeAnyRequest()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(canQuery: false);
 
         await FluentActions.Awaiting(() => Wrapper().RequestAsync(
@@ -383,11 +331,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // The opt-outs exist for integrators terminating trust upstream; both must work
         // over a real transport, not just against a mock.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var unsignedExpired = SecurityContextBuilder.Build(
             "u", "t", new[] { EndpointPolicy() }, TimeSpan.FromHours(-1));
 
@@ -405,11 +349,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task HiddenFieldsAreStrippedFromEveryRecordInARealResponse()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(HiddenFields: new[] { "ssn", "date_of_birth" }),
             EndpointRules: AllowPatients()));
@@ -432,11 +372,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // The nested endpoint puts ssn under demographics and email under
         // demographics.contact, so a wrapper that only walks the first level is caught.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(HiddenFields: new[] { "ssn", "email" }),
             EndpointRules: AllowPatients()));
@@ -459,11 +395,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // The HTTP path masks by dotted path from the body root, which is how an API
         // response is addressed (as distinct from the DB path's table.column matching).
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(MaskedFields: new[]
             {
@@ -486,11 +418,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // Spec section 6, over a real body: a maskType from a newer schema version must
         // not silently disable masking. This is the shape of a shipped critical defect.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(MaskedFields: new[]
             {
@@ -520,11 +448,7 @@ public sealed class HttpWrapperLiveApiTests
     public async Task PartialMaskThatWouldRevealTheWholeValueDegradesToAFullMask()
     {
         // Spec section 6: showFirst + showLast >= len(value) must not return the value.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(MaskedFields: new[]
             {
@@ -544,11 +468,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // Projection targets the records at CollectionPath, not the transport envelope,
         // so an API's paging block survives while undeclared columns are trimmed.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(AllowedFields: new[] { "id", "region" }),
             EndpointRules: AllowPatients()));
@@ -569,11 +489,7 @@ public sealed class HttpWrapperLiveApiTests
     public async Task EmptyAllowedFieldsDeniesEveryFieldOfEveryRecord()
     {
         // Spec section 3: [] is deny-everything, not "unrestricted".
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(AllowedFields: Array.Empty<string>()),
             EndpointRules: AllowPatients()));
@@ -589,11 +505,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task NullAllowedFieldsLeavesTheBodyUnprojected()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(AllowedFields: null),
             EndpointRules: AllowPatients()));
@@ -607,11 +519,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task ResultLimitTruncatesTheCollectionAtItsPath()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(
             new ObjectRules(EndpointRules: AllowPatients()),
             new PolicyLimits(MaxResults: 2));
@@ -625,11 +533,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task ResultLimitLeavesAShorterCollectionAlone()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(
             new ObjectRules(EndpointRules: AllowPatients()),
             new PolicyLimits(MaxResults: 500));
@@ -645,11 +549,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // ?limit= truncates server-side; maxResults truncates in the wrapper. The tighter
         // of the two must win, in either order.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(
             new ObjectRules(EndpointRules: new EndpointRules(
                 AllowedEndpoints: new[] { "/drug/*" }, AllowedMethods: new[] { "GET" })),
@@ -667,11 +567,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // A misconfigured CollectionPath must be inert rather than throwing or silently
         // dropping the body: the limit and projection simply do not find a collection.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(
             new ObjectRules(
                 FieldRules: new FieldRules(AllowedFields: new[] { "id" }),
@@ -688,11 +584,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task CollectionPathPointingAtANonArray_LeavesTheBodyUntouched()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(
             new ObjectRules(EndpointRules: AllowPatients()),
             new PolicyLimits(MaxResults: 1));
@@ -709,11 +601,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // With no CollectionPath the body itself is treated as the record, so the
         // envelope's own keys are projected.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(AllowedFields: new[] { "total" }),
             EndpointRules: AllowPatients()));
@@ -729,11 +617,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // Spec section 4 ordering, over a real body: hidden removal precedes masking, so a
         // field that is both must be gone rather than present-and-masked.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(
                 HiddenFields: new[] { "ssn" },
@@ -753,11 +637,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // The recorded openFDA payload is a deeply nested real-world shape; masking a
         // dotted path inside it must reach the leaf.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             FieldRules: new FieldRules(MaskedFields: new[]
             {
@@ -791,11 +671,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task SlowResponseWithinTheClientTimeout_Succeeds()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(EndpointRules: new EndpointRules(
             AllowedEndpoints: new[] { "/slow" }, AllowedMethods: new[] { "GET" })));
 
@@ -810,11 +686,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // A timeout must surface as a failure rather than as an empty-but-successful
         // result that the pipeline would then hand back as data.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(EndpointRules: new EndpointRules(
             AllowedEndpoints: new[] { "/slow" }, AllowedMethods: new[] { "GET" })));
         using var client = _api.CreateClient();
@@ -847,11 +719,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // The server really serves /admin/audit, so a wrapper that followed the 302 handed
         // back data the policy denies by name.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var act = () => NonFollowingWrapper().RequestAsync(
             SignedContext(RedirectAndAdminPolicy()), new HttpRequestArgs("GET", "/redirect/302"));
 
@@ -862,11 +730,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task RedirectDenial_NamesTheEndpointRuleThatRefusedTheHop()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(EndpointRules: new EndpointRules(
             AllowedEndpoints: new[] { "/redirect/*" }, AllowedMethods: new[] { "GET" })));
 
@@ -886,11 +750,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // 307/308 preserve the method and body; 301/302 downgrade to GET. Both re-check, so
         // neither shape is a way past the rules.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var act = () => NonFollowingWrapper().RequestAsync(
             SignedContext(RedirectAndAdminPolicy()),
             new HttpRequestArgs("GET", $"/redirect/{code}"));
@@ -904,11 +764,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // Re-validating is not refusing. And the followed hop's body still runs the full
         // pipeline, so a redirect is not a way around field rules either.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: new EndpointRules(
                 AllowedEndpoints: new[] { "/redirect/*", "/patients" },
@@ -935,11 +791,7 @@ public sealed class HttpWrapperLiveApiTests
         // for. Matching that glob against a path on another host would "permit" an origin
         // the author never considered, so the hop is refused on the host change rather than
         // re-globbed on the path.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(EndpointRules: new EndpointRules(
             AllowedEndpoints: new[] { "/*", "/**" }, AllowedMethods: new[] { "GET" })));
 
@@ -958,11 +810,7 @@ public sealed class HttpWrapperLiveApiTests
         // every client's own limit differs (HttpClientHandler 50, httpx 20, fetch 20). The
         // target is permitted at every hop, which makes this the bound's test rather than
         // the endpoint rules'.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(EndpointRules: new EndpointRules(
             AllowedEndpoints: new[] { "/redirect-loop" }, AllowedMethods: new[] { "GET" })));
 
@@ -980,11 +828,7 @@ public sealed class HttpWrapperLiveApiTests
         // asserted identical.
         SecureHttpToolWrapper.MaxRedirects.Should().Be(5);
 
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(EndpointRules: new EndpointRules(
             AllowedEndpoints: new[] { "/redirect/*", "/patients" },
             AllowedMethods: new[] { "GET" })));
@@ -1012,11 +856,7 @@ public sealed class HttpWrapperLiveApiTests
         // wrapper cannot switch it off — but it can detect that the response came from a
         // location no check approved, and refuse rather than enforce a body it never
         // authorized the fetch of.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         using var following = new HttpClient(new HttpClientHandler { AllowAutoRedirect = true })
         {
             BaseAddress = _api.BaseAddress,
@@ -1046,11 +886,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task HiddenObjectNamedByTheCaller_DeniesAGet()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: AllowAllGet(),
             HiddenObjects: new[] { "patients" }));
@@ -1066,11 +902,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task ObjectOutsideTheAllowList_DeniesAGet()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: AllowAllGet(),
             AllowedObjects: new[] { "encounters" }));
@@ -1086,11 +918,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task PermittedObjectName_StillReturnsAnEnforcedBody()
     {
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: AllowAllGet(),
             AllowedObjects: new[] { "patients" },
@@ -1114,11 +942,7 @@ public sealed class HttpWrapperLiveApiTests
     {
         // A wrapper that derived "patients" from /patients would deny this, which is exactly
         // the unspecified behaviour section 6 marks with a warning.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: AllowAllGet(),
             HiddenObjects: new[] { "patients" }));
@@ -1134,11 +958,7 @@ public sealed class HttpWrapperLiveApiTests
     public async Task ARedirectHop_ReChecksTheNamedObject()
     {
         // The object check is part of a hop, so a redirect cannot shed it.
-        if (!_api.Ready)
-        {
-            // Test API unavailable; mirror the Postgres/MySQL suites' skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(new ObjectRules(
             EndpointRules: new EndpointRules(
                 AllowedEndpoints: new[] { "/redirect/*", "/patients" },
@@ -1249,7 +1069,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task Regression_MaxResultsIsEnforcedOnAnEnvelopedBody()
     {
-        if (!_api.Ready) return;
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         var policy = Policy(
             new ObjectRules(EndpointRules: AllowAllGet()),
             new PolicyLimits(MaxResults: 1));
@@ -1265,7 +1085,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task Control_TheUpstreamReallyReturnsMoreThanOneRecord()
     {
-        if (!_api.Ready) return;
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         // Without this the regression assertion could pass because the corpus shrank to one row.
         var raw = await Wrapper().RequestAsync(
             SignedContext(Policy(new ObjectRules(EndpointRules: AllowAllGet()))),
@@ -1277,7 +1097,7 @@ public sealed class HttpWrapperLiveApiTests
     [Fact]
     public async Task ADifferentlyNamedCollection_IsStillEnforced()
     {
-        if (!_api.Ready) return;
+        ScenarioHelpers.RequireService(_api.Ready, "the in-process test API server", "the fixture could not bind a socket");
         // The key is discovered, not assumed to be "results". openFDA uses `results`,
         // ClinicalTrials.gov uses `studies`, this endpoint uses `items` -- recognising only one
         // of them would be the same bug wearing a different hat.

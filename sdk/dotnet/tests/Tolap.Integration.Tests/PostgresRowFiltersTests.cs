@@ -10,6 +10,7 @@ namespace Tolap.Integration.Tests;
 /// Cross-SDK row-filter scenarios, against real Postgres.
 /// Cases come from fixtures/integration-scenarios/postgres-row-filters.json.
 /// </summary>
+[Collection(DatabaseCollection.Name)]
 public sealed class PostgresRowFiltersTests : IClassFixture<PostgresFixture>
 {
     private const string SigningKey = "integration-test-signing-key";
@@ -38,11 +39,7 @@ public sealed class PostgresRowFiltersTests : IClassFixture<PostgresFixture>
     [MemberData(nameof(Scenarios))]
     public async Task RowFilterScenario(string name, string scenarioJson)
     {
-        if (!_db.Ready)
-        {
-            // Postgres not available; mirror Python's pytest.skip behavior.
-            return;
-        }
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         using var doc = JsonDocument.Parse(scenarioJson);
         var scenario = doc.RootElement;

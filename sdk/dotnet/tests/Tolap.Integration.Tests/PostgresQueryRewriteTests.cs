@@ -24,6 +24,7 @@ namespace Tolap.Integration.Tests;
 /// the table holds. A post-fetch-only implementation fails the first two.
 /// </para>
 /// </remarks>
+[Collection(DatabaseCollection.Name)]
 public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
 {
     private const string SigningKey = "integration-test-signing-key";
@@ -119,7 +120,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task RewrittenQuery_MakesPostgresReturnOnlyPermittedRows()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(rowFilters: new[] { new RowFilter("region", FilterOperator.Equals, "us-east") });
         const string original = "SELECT id, region FROM patients ORDER BY id";
@@ -147,7 +148,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task Postgres_PlansTheInjectedPredicate_ProvingItIsNotAppliedAfterTheFetch()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(rowFilters: new[] { new RowFilter("region", FilterOperator.Equals, "us-east") });
         var rewritten = _rewriter.RewriteQuery("SELECT id, region FROM patients", policy);
@@ -167,7 +168,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task InjectedLimit_BoundsWhatPostgresProduces()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var total = await ScalarCountAsync("SELECT count(*) FROM patients");
         total.Should().BeGreaterThan(2);
@@ -188,7 +189,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task InjectedLimit_ClampsToTheSmallerOfExistingAndPolicy()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(maxResults: 3);
 
@@ -202,7 +203,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task HiddenField_NeverLeavesTheDatabase()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(hiddenFields: new[] { "ssn" });
         var rewritten = _rewriter.RewriteQuery(
@@ -220,7 +221,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task SelectStar_ExpandsToAllowedMinusHidden_AgainstTheRealTable()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(
             allowedFields: new[] { "id", "full_name", "ssn", "region" },
@@ -240,7 +241,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task MaskedField_SurvivesIntoTheExecutedQuery_SoMaskingCanApply()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // The failure this guards against: dropping a masked column from the rewritten SELECT
         // means the post-fetch masker has nothing to act on, and the field vanishes from the
@@ -274,7 +275,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task Like_PushedToPostgres()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(rowFilters: new[] { new RowFilter("region", FilterOperator.Like, "us-%") });
         var rewritten = _rewriter.RewriteQuery("SELECT id, region FROM patients ORDER BY id", policy);
@@ -292,7 +293,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task NotLike_PushedToPostgres()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(rowFilters: new[] { new RowFilter("region", FilterOperator.NotLike, "us-%") });
         var rewritten = _rewriter.RewriteQuery("SELECT id, region FROM patients ORDER BY id", policy);
@@ -306,7 +307,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task Between_PushedToPostgres()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(rowFilters: new[]
         {
@@ -324,7 +325,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task GreaterThanOrEqualAndLessThanOrEqual_PushedToPostgres()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(rowFilters: new[]
         {
@@ -344,7 +345,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task IsNullAndIsNotNull_PushedToPostgres()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // patient_id is nullable in billing_internal only by reference; encounters.patient_id
         // is populated for every seeded row, so IS NOT NULL keeps all and IS NULL keeps none.
@@ -364,7 +365,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task NotEquals_KeepsANullValuedRow_MatchingThePostFetchPass()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // The three-valued-logic case. A plain "col <> 'x'" drops a null-valued row, but the
         // post-fetch pass keeps it, so pushing the filter down would change the result. The
@@ -403,7 +404,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task NotIn_KeepsANullValuedRow_MatchingThePostFetchPass()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         await using (var setup = new NpgsqlCommand(
             "DROP TABLE IF EXISTS rewrite_notin_probe; "
@@ -447,7 +448,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task NotLike_KeepsANullValuedRow_MatchingThePostFetchPass()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         await using (var setup = new NpgsqlCommand(
             "DROP TABLE IF EXISTS rewrite_notlike_probe; "
@@ -495,7 +496,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task EveryNegativeOperator_SelectsTheSameRows_InBothPaths()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         await using (var setup = new NpgsqlCommand(
             "DROP TABLE IF EXISTS rewrite_negatives_probe; "
@@ -572,7 +573,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [MemberData(nameof(EquivalenceCases))]
     public async Task PushedDownAndPostFetch_SelectTheSameRows(string name, RowFilter filter)
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(rowFilters: new[] { filter });
         const string original = "SELECT id, region FROM patients ORDER BY id";
@@ -596,7 +597,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task ExecuteSqlWithEnforcementAsync_RunsTheRewrittenQueryAndStillAppliesThePipeline()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(
             hiddenFields: new[] { "ssn" },
@@ -634,7 +635,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task PrepareSqlQuery_ResolvesTheObjectFromTheQuery_AndDeniesAHiddenTable()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // The caller names no object, so the table comes from the FROM clause. audit_log is
         // hidden, and a caller that simply omitted ObjectName must not thereby bypass the
@@ -654,7 +655,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task PrepareSqlQuery_DeniesAQueryReferencingAHiddenField()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var prep = Wrapper().PrepareSqlQuery(
             Sign(Policy(hiddenFields: new[] { "ssn" })),
@@ -668,7 +669,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task PrepareSqlQuery_ReportsFiltersItCouldNotPushDown()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // "matches" compiles as ^(?:pattern)$ (spec section 7), so the pattern must describe
         // the whole value: a bare "^J" would become "^(?:^J)$" and match nothing.
@@ -698,7 +699,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task PrepareSqlQuery_ReportsFullPushDown_WhenEveryFilterIsExpressible()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var prep = Wrapper().PrepareSqlQuery(
             Sign(Policy(rowFilters: new[] { new RowFilter("region", FilterOperator.Like, "us-%") })),
@@ -717,7 +718,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task PrepareSqlQuery_LeavesAnUnrestrictedQueryUnchanged()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         const string sql = "SELECT id, region FROM patients ORDER BY id";
 
@@ -731,7 +732,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task PrepareSqlQuery_DeniesAnEmptyQuery()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var prep = Wrapper().PrepareSqlQuery(Sign(Policy()), new PreExecuteArgs("pg-query"), "   ");
 
@@ -742,7 +743,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task PrepareSqlQuery_DeniesAnUnsignedContext()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // The signature check must run before any rewriting: a tampered context's policy must
         // not be the one pushed into the query.
@@ -763,7 +764,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task RowFilterField_MustBeProjected_OrThePostFetchPassDropsEveryRow()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // A sharp edge worth pinning, and not a rewrite defect: the two halves of enforcement
         // are individually correct and compose into a surprise.
@@ -802,7 +803,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task AHiddenFilterField_StillDropsEveryRow_BecauseHiddenRemovalPrecedesNothing()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // The same edge, reached a second way: hiddenFields strips the field from every record
         // at step 5, but row filtering is step 1, so the filter sees the field and the caller
@@ -832,7 +833,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task AQuoteInAPolicyValue_CannotBreakOutOfTheLiteral()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // Postgres is the arbiter here, not an assertion about generated text: if the escaping
         // were wrong this either raises a syntax error or returns every row.
@@ -850,7 +851,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task ABackslashInAPolicyValue_IsNotPushedAndIsEnforcedAfterTheFetch()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         // Refused as a literal because MySQL and Postgres disagree on backslash escaping. The
         // query is therefore unfiltered and the post-fetch pass must do the work.
@@ -872,7 +873,7 @@ public sealed class PostgresQueryRewriteTests : IClassFixture<PostgresFixture>
     [Fact]
     public async Task ADroppedTableAttemptInAPolicyValue_IsInert()
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
 
         var policy = Policy(rowFilters: new[]
         {

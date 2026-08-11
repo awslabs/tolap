@@ -12,6 +12,7 @@ namespace Tolap.Integration.Tests;
 /// Cross-SDK scenarios executed against real MySQL.
 /// Same shared scenario JSON the Postgres and Python/TypeScript suites use.
 /// </summary>
+[Collection(DatabaseCollection.Name)]
 public sealed class MySqlScenariosTests : IClassFixture<MySqlFixture>
 {
     private const string SigningKey = "integration-test-signing-key";
@@ -42,7 +43,7 @@ public sealed class MySqlScenariosTests : IClassFixture<MySqlFixture>
     [MemberData(nameof(Healthcare))]
     public async Task Healthcare_Mysql(string name, string baseJson, string scenarioJson)
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
         using var baseDoc = JsonDocument.Parse(baseJson);
         using var scenarioDoc = JsonDocument.Parse(scenarioJson);
         var scenario = scenarioDoc.RootElement;
@@ -79,7 +80,7 @@ public sealed class MySqlScenariosTests : IClassFixture<MySqlFixture>
     [MemberData(nameof(RowFilters))]
     public async Task RowFilters_Mysql(string name, string _, string scenarioJson)
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
         using var doc = JsonDocument.Parse(scenarioJson);
         var scenario = doc.RootElement;
         var policy = ScenarioHelpers.PolicyFromJson(scenario.GetProperty("policy"));
@@ -121,7 +122,7 @@ public sealed class MySqlScenariosTests : IClassFixture<MySqlFixture>
     [MemberData(nameof(FieldRules))]
     public async Task FieldRules_Mysql(string name, string _, string scenarioJson)
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
         using var doc = JsonDocument.Parse(scenarioJson);
         var scenario = doc.RootElement;
         var policy = ScenarioHelpers.PolicyFromJson(scenario.GetProperty("policy"));
@@ -153,7 +154,7 @@ public sealed class MySqlScenariosTests : IClassFixture<MySqlFixture>
     [MemberData(nameof(Permissions))]
     public async Task Permissions_Mysql(string name, string _, string scenarioJson)
     {
-        if (!_db.Ready) return;
+        ScenarioHelpers.RequireService(_db.Ready, "a local database", _db.SkipReason);
         using var doc = JsonDocument.Parse(scenarioJson);
         var scenario = doc.RootElement;
         var policy = ScenarioHelpers.PolicyFromJson(scenario.GetProperty("policy"));
