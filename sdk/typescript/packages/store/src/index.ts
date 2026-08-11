@@ -1,5 +1,5 @@
 /**
- * @tolap/store - TOLAP Policy Store Package
+ * @aws/tolap-store - TOLAP Policy Store Package
  *
  * Provides storage and identity resolution interfaces and implementations.
  */

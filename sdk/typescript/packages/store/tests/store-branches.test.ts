@@ -1,5 +1,5 @@
 /**
- * Branch and public-API coverage for @tolap/store.
+ * Branch and public-API coverage for @aws/tolap-store.
  *
  * The store is where an administrator's intent is recorded, so the assertions that
  * matter are about the DECISION a stored change produces, not about the bookkeeping.
@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { InMemoryPolicyStore } from "../src/in-memory-store.js";
 import { StaticIdentityResolver } from "../src/static-identity-resolver.js";
 import type { IdentityResolver, PolicyAuditEvent, PolicyStore } from "../src/types.js";
-import type { PolicyAssignment, PolicyDefinition } from "@tolap/core";
+import type { PolicyAssignment, PolicyDefinition } from "@aws/tolap-core";
 
 const TENANT = "tenant-001";
 // Canonical `category:namespace:name` form: resolution filters definitions on their

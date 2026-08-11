@@ -8,8 +8,8 @@ import type {
   PolicyDefinition,
   PolicyAssignment,
   EffectivePolicy,
-} from "@tolap/core";
-import { resolve } from "@tolap/core";
+} from "@aws/tolap-core";
+import { resolve } from "@aws/tolap-core";
 import type {
   PolicyStore,
   IdentityResolver,

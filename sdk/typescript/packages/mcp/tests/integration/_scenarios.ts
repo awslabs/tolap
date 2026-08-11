@@ -11,7 +11,7 @@ import {
   signContext,
   type EffectivePolicy,
   type SecurityContext,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..", "..", "..");
 export const SCENARIOS_DIR = resolve(REPO_ROOT, "fixtures", "integration-scenarios");

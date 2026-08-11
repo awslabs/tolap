@@ -4,7 +4,55 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tolap-mcp"
-version = "2.0.0"
+version = "1.0.0"
 requires-python = ">=3.10"
-description = "TOLAP SDK MCP - Secure MCP tool wrapper with policy enforcement"
-dependencies = ["tolap-core>=2.0.0"]
+description = "TOLAP SDK enforcement wrappers for agent tools - MCP servers, agent frameworks, Lambda handlers"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Amazon.com, Inc. or its affiliates" }]
+keywords = ["tolap", "access-control", "ai-agents", "mcp", "data-masking", "security"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Typing :: Typed",
+]
+
+# tolap-core is pinned below the next major: a breaking change in its models or
+# canonical form would break enforcement here, and that must be an explicit upgrade.
+#
+# httpx is a REAL runtime dependency of this package, not a test-only one. `__init__`
+# eagerly imports `http_wrapper` and `factory`, both of which import httpx at module
+# level and use `httpx.URL` in the same-origin check that stops a redirect from
+# escaping the policy's host. Omitting it made `pip install tolap-mcp` produce a
+# package that raised ModuleNotFoundError on `import tolap_mcp` -- invisible in CI,
+# which installs httpx separately for the test suite.
+#
+# The zero-dependency guarantee is a property of the *core* packages, which this is
+# not. The TypeScript and .NET wrappers take a caller-supplied HTTP client instead and
+# so declare nothing; that asymmetry is a design difference, not an error here.
+dependencies = ["tolap-core>=1.0.0,<2", "httpx>=0.27,<1"]
+
+[project.urls]
+Homepage = "https://github.com/awslabs/tolap"
+Repository = "https://github.com/awslabs/tolap"
+Issues = "https://github.com/awslabs/tolap/issues"
+Changelog = "https://github.com/awslabs/tolap/blob/main/CHANGELOG.md"
+
+# Explicit rather than inferred. Hatchling can guess the package directory from the
+# project name, but the directory here is tolap_mcp while the project is tolap-mcp;
+# naming it removes the guess. `license-files` and `readme` resolve relative to THIS
+# file, which is why LICENSE, NOTICE and README.md are committed in this directory --
+# a wheel built without them omits the license silently, with no build error.
+[tool.hatch.build.targets.wheel]
+packages = ["tolap_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = ["tolap_mcp", "README.md", "LICENSE", "NOTICE", "pyproject.toml"]

@@ -14,7 +14,7 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { resolve, type PolicyAssignment, type PolicyDefinition } from "@tolap/core";
+import { resolve, type PolicyAssignment, type PolicyDefinition } from "@aws/tolap-core";
 import { PostgresPolicyStore, toAssignment } from "../src/db/store.ts";
 import { ADMIN, HAVE_DB, staticIdentity, testDb, type TestDb } from "./helpers/db.ts";
 

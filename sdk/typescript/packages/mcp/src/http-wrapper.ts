@@ -43,7 +43,7 @@ import {
   type EffectivePolicy,
   type SecurityContext,
   type WriteTargetRow,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 /**
  * How many redirect hops a single request may take before it is denied.

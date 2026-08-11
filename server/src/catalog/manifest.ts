@@ -24,7 +24,7 @@
  * credentials.
  */
 
-import { parseSourceIdentity } from "@tolap/core";
+import { parseSourceIdentity } from "@aws/tolap-core";
 
 export class ManifestError extends Error {
   constructor(message: string) {

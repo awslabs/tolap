@@ -42,7 +42,7 @@ import {
   SqlDialect,
   type EffectivePolicy,
   type RowFilter,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 const DSN = process.env.TOLAP_TEST_DB_DSN ?? "postgresql:///tolap_integration_test";
 

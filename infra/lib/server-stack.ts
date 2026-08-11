@@ -182,7 +182,7 @@ export class ServerStack extends Stack {
       image: ecs.ContainerImage.fromAsset(REPO_ROOT, {
         file: "infra/docker/Dockerfile",
         // The build context is the repository root because the server imports
-        // @tolap/core and @tolap/store from sdk/typescript through file: links, and
+        // @aws/tolap-core and @aws/tolap-store from sdk/typescript through file: links, and
         // a context scoped to server/ cannot see them.
         exclude: [
           "**/node_modules",

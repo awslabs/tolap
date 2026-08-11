@@ -9,7 +9,7 @@ import {
   buildSecurityContext,
   signContext,
   type EffectivePolicy,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import {
   SecureHttpToolWrapper,
   type FetchLike,

@@ -1,6 +1,6 @@
 {
-  "name": "@tolap/policy-server",
-  "version": "2.0.0",
+  "name": "@amzn/tolap-policy-server",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Reference implementation of the TOLAP Policy Service: central policy management with server-side resolution and signing.",
@@ -16,8 +16,8 @@
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1105.0",
     "@aws-sdk/client-secrets-manager": "^3.1105.0",
-    "@tolap/core": "file:../sdk/typescript/packages/core",
-    "@tolap/store": "file:../sdk/typescript/packages/store",
+    "@aws/tolap-core": "file:../sdk/typescript/packages/core",
+    "@aws/tolap-store": "file:../sdk/typescript/packages/store",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "fastify": "^5.2.1",

@@ -3,7 +3,7 @@
  *
  * This is the one place the server produces bytes that another process
  * cryptographically depends on, and it is the only genuinely new logic in the
- * server. Everything about the canonical form comes from `@tolap/core` -- this
+ * server. Everything about the canonical form comes from `@aws/tolap-core` -- this
  * module composes two SDK calls and adds one key. It does not serialize, sort,
  * or normalize anything itself, because
  * `docs/canonical-enforcement-spec.md` sections 1-2 are normative about the
@@ -49,7 +49,7 @@ import {
   buildSecurityContext,
   signContext,
   type EffectivePolicy,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import type { SigningKey } from "./keyring.ts";
 
 /**

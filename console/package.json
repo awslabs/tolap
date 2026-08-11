@@ -1,6 +1,6 @@
 {
-  "name": "@tolap/console",
-  "version": "2.0.0",
+  "name": "@amzn/tolap-console",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Administrative console for the TOLAP Policy Server.",

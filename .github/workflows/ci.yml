@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Callable so the publish workflow can re-run this exact suite at the release commit.
+  # "It passed on main" is a different claim from "it passes at this tag": a tag can be
+  # moved, or cut from a branch main never saw. Publishing is irreversible, so it gets
+  # its own run rather than trusting an earlier green.
+  workflow_call:
 
 # A stale run on a superseded commit tells you nothing useful.
 concurrency:
@@ -115,13 +120,13 @@ jobs:
         working-directory: sdk/typescript
         run: npm ci
       # MUST precede the typecheck, not follow it. `store` and `mcp` resolve
-      # @tolap/core through packages/core/dist, so on a fresh clone — where dist/ does
+      # @aws/tolap-core through packages/core/dist, so on a fresh clone — where dist/ does
       # not exist yet — typechecking them first fails with TS6305 ("has not been built
       # from source file") plus a cascade of TS7006 implicit-any errors, because the
       # callback parameter types come from core's .d.ts. This ran green locally only
       # because a developer's dist/ is already built from earlier work; CI starts from
       # nothing, which is exactly the case the ordering has to satisfy.
-      - name: TypeScript build core (store and mcp resolve @tolap/core from dist)
+      - name: TypeScript build core (store and mcp resolve @aws/tolap-core from dist)
         working-directory: sdk/typescript/packages/core
         run: npx tsc -p tsconfig.json
 
@@ -130,7 +135,7 @@ jobs:
         run: |
           fail=0
           for pkg in core store mcp; do
-            echo "::group::tsc @tolap/$pkg"
+            echo "::group::tsc @aws/tolap-$pkg"
             # Not `set -e`-dependent: a subshell failure inside a loop would otherwise
             # abort at the first package and hide the rest, and knowing whether one or
             # all three are broken is the difference between a typo and a bad build.
@@ -143,7 +148,7 @@ jobs:
         run: |
           fail=0
           for pkg in core store mcp; do
-            echo "::group::vitest @tolap/$pkg"
+            echo "::group::vitest @aws/tolap-$pkg"
             (cd "packages/$pkg" && npx vitest run) || fail=1
             echo "::endgroup::"
           done
@@ -157,13 +162,13 @@ jobs:
         working-directory: server
         run: npm ci
 
-      # The server resolves @tolap/core AND @tolap/store through their dist/
+      # The server resolves @aws/tolap-core AND @aws/tolap-store through their dist/
       # directories, so both must be built first. Verified by deleting them and
       # watching tsc report TS2307 for both packages — the same fresh-clone
       # ordering problem documented for store and mcp above, one layer further out.
       # `core` is already built by the step above; `store` is not, because the SDK
       # typecheck only ever type-checks it.
-      - name: Build @tolap/store (the server resolves it from dist)
+      - name: Build @aws/tolap-store (the server resolves it from dist)
         working-directory: sdk/typescript/packages/store
         run: npx tsc -p tsconfig.json
 
@@ -239,6 +244,74 @@ jobs:
       # known-answer fixture that loses its expected values would let those tests pass
       # while checking nothing — the exact defect that let the original signing
       # divergence ship (canonical-enforcement-spec §12).
+      # A package must import with ONLY its declared dependencies installed. The suite
+      # above cannot catch this: it installs httpx, psycopg, PyMySQL and jsonschema for
+      # the tests, so a package that imports one of them without declaring it passes
+      # every test and then fails on `import` for anyone who installs it from PyPI.
+      # That shipped -- tolap-mcp imports httpx at module level in http_wrapper and
+      # factory, both eagerly imported by __init__, and declared no httpx dependency.
+      #
+      # A fresh venv with nothing but the built wheels is the only place the real
+      # dependency surface is visible.
+      - name: Python packages import with only their declared dependencies
+        working-directory: sdk/python
+        run: |
+          python -m pip install --quiet build
+          rm -rf /tmp/dist-check && mkdir -p /tmp/dist-check
+          for pkg in tolap-core tolap-store tolap-mcp; do
+            python -m build --wheel --outdir /tmp/dist-check "$pkg" >/dev/null
+          done
+          python -m venv /tmp/import-check
+          # Installing the wheels by filename, with a plain index available for the
+          # declared third-party dependencies. If a package needs something it does not
+          # declare, the import below is where that surfaces.
+          /tmp/import-check/bin/pip install --quiet /tmp/dist-check/*.whl
+          /tmp/import-check/bin/python - <<'PY'
+          import importlib, sys
+          failed = []
+          for mod in ("tolap_core", "tolap_store", "tolap_mcp"):
+              try:
+                  importlib.import_module(mod)
+                  print(f"{mod}: imports cleanly")
+              except Exception as exc:
+                  failed.append(f"{mod}: {type(exc).__name__}: {exc}")
+          if failed:
+              print("\n".join(failed))
+              sys.exit("a package is missing a runtime dependency it imports")
+          PY
+
+      # The nine package directories each hold a copy of LICENSE and NOTICE, because all
+      # three packaging systems resolve those paths relative to the manifest rather than
+      # the repository root. Copies drift: someone edits the root NOTICE and the published
+      # packages keep asserting the old text, which is a licensing defect no test would
+      # otherwise catch. Committed copies (rather than staging them in the release
+      # workflow) mean a local `dotnet pack` produces the same compliant artifact CI does.
+      - name: Per-package LICENSE and NOTICE match the root
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys
+          root = {name: pathlib.Path(name).read_bytes() for name in ("LICENSE", "NOTICE")}
+          dirs = [
+              "sdk/python/tolap-core", "sdk/python/tolap-store", "sdk/python/tolap-mcp",
+              "sdk/typescript/packages/core", "sdk/typescript/packages/store",
+              "sdk/typescript/packages/mcp",
+              "sdk/dotnet/src/Tolap.Core", "sdk/dotnet/src/Tolap.Store",
+              "sdk/dotnet/src/Tolap.Mcp",
+          ]
+          bad = []
+          for d in dirs:
+              for name, expected in root.items():
+                  p = pathlib.Path(d) / name
+                  if not p.exists():
+                      bad.append(f"{p}: missing")
+                  elif p.read_bytes() != expected:
+                      bad.append(f"{p}: differs from root {name}")
+          if bad:
+              print("\n".join(bad))
+              sys.exit("per-package license files must match the root; re-copy them")
+          print(f"LICENSE and NOTICE match the root in all {len(dirs)} package directories")
+          PY
+
       - name: Signing fixtures carry their expected values
         run: |
           python - <<'PY'

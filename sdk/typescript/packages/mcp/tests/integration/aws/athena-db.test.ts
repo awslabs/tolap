@@ -50,7 +50,7 @@ import {
   FilterOperator,
   MaskType,
   type EffectivePolicy,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 const ENABLED = process.env["TOLAP_TEST_AWS"] === "1";
 const REGION = process.env["AWS_REGION"] ?? process.env["AWS_DEFAULT_REGION"] ?? "us-east-1";

@@ -51,7 +51,7 @@
  * *declined*, not to be rewritten. Every path is built so that a construct the
  * rewriter cannot handle leaves the query narrower or unchanged, never wider.
  *
- * Zero runtime dependencies, like the rest of `@tolap/core`.
+ * Zero runtime dependencies, like the rest of `@aws/tolap-core`.
  */
 
 import type {
@@ -68,7 +68,7 @@ import { fieldNameMatches } from "./enforcement.js";
 /**
  * A sink for messages explaining why a rewrite step declined to act.
  *
- * A plain callback rather than a logger interface: `@tolap/core` ships zero runtime
+ * A plain callback rather than a logger interface: `@aws/tolap-core` ships zero runtime
  * dependencies and that must not change. Messages may embed policy field names and
  * fragments of the query, so route them with the same handling as query logs.
  */

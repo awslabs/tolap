@@ -16,8 +16,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { PolicyDefinition } from "@tolap/core";
-import { validateFieldAccess } from "@tolap/core";
+import type { PolicyDefinition } from "@aws/tolap-core";
+import { validateFieldAccess } from "@aws/tolap-core";
 import { PostgresPolicyStore } from "../src/db/store.ts";
 import { ADMIN, HAVE_DB, staticIdentity, testDb, type TestDb } from "./helpers/db.ts";
 

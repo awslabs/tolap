@@ -15,7 +15,7 @@ import {
   signPolicy,
   type EffectivePolicy,
   type SecurityContext,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import { SecureMcpToolWrapper, warnIfEnforcementDisabled } from "../src/wrapper.js";
 import { SecureContextToolWrapper } from "../src/context-wrapper.js";
 import { HeaderIdentityExtractor } from "../src/extractors.js";

@@ -15,9 +15,9 @@
     "@mastra/core": "~1.55",
     "@modelcontextprotocol/sdk": "~1.30",
     "@openai/agents": "~0.14",
-    "@tolap/core": "file:../../sdk/typescript/packages/core",
-    "@tolap/mcp": "file:../../sdk/typescript/packages/mcp",
-    "@tolap/store": "file:../../sdk/typescript/packages/store",
+    "@aws/tolap-core": "file:../../sdk/typescript/packages/core",
+    "@aws/tolap-mcp": "file:../../sdk/typescript/packages/mcp",
+    "@aws/tolap-store": "file:../../sdk/typescript/packages/store",
     "ai": "~7.0",
     "zod": "^4.0.0"
   },

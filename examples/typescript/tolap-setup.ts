@@ -20,7 +20,7 @@ import {
   MaskType,
   type EffectivePolicy,
   type SecurityContext,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 export const SIGNING_KEY = "example-signing-key-do-not-use-in-production";
 

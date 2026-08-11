@@ -18,11 +18,11 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@tolap/core": path.resolve(
+      "@aws/tolap-core": path.resolve(
         __dirname,
         "../sdk/typescript/packages/core/src/index.ts",
       ),
-      "@tolap/store": path.resolve(
+      "@aws/tolap-store": path.resolve(
         __dirname,
         "../sdk/typescript/packages/store/src/index.ts",
       ),

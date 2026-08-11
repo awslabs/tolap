@@ -12,7 +12,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import Fastify from "fastify";
-import { parseSourceIdentity } from "@tolap/core";
+import { parseSourceIdentity } from "@aws/tolap-core";
 import { AuthorizationError, requireInstall } from "../auth/guards.ts";
 import { IdentityLookupError } from "../auth/identity-source.ts";
 import type { Keyring } from "../signing/keyring.ts";

@@ -33,7 +33,7 @@ import {
   KbProvider,
   type EffectivePolicy,
   type TagRules,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 const ENABLED = process.env["TOLAP_TEST_AWS"] === "1";
 const KB_ID = process.env["TOLAP_TEST_KB_ID"];

@@ -8,7 +8,7 @@ import type {
   PolicyDefinition,
   PolicyAssignment,
   EffectivePolicy,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 // ---------------------------------------------------------------------------
 // Policy Store

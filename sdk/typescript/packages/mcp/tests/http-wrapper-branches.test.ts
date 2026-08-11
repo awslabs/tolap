@@ -16,7 +16,7 @@ import {
   signContext,
   type EffectivePolicy,
   type SecurityContext,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import { SecureHttpToolWrapper, type FetchLike } from "../src/http-wrapper.js";
 
 const KEY = "http-branch-key";

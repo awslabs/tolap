@@ -37,7 +37,7 @@ import {
   type ObjectRules,
   type PolicyLimits,
   type RowFilter,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import { SecureContextToolWrapper } from "../../src/context-wrapper.js";
 
 const SCHEMA_PATH = resolve(

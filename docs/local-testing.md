@@ -64,7 +64,7 @@ what each one is for.
 Each of these has cost hours, and each produced a *green* suite over code that was not being
 tested.
 
-**1. TypeScript mcp/store resolve `@tolap/core` through `dist`, not source.** After changing
+**1. TypeScript mcp/store resolve `@aws/tolap-core` through `dist`, not source.** After changing
 core, rebuild it or the other packages silently test a stale build:
 
 ```bash

@@ -7,7 +7,7 @@ import type { PolicyAuditEvent } from "../src/types.js";
 import type {
   PolicyDefinition,
   PolicyAssignment,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 const policiesDir = path.resolve(__dirname, "../../../../../fixtures/policies");
 const assignmentsDir = path.resolve(__dirname, "../../../../../fixtures/assignments");

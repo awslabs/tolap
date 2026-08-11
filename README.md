@@ -131,6 +131,15 @@ The agent sees: `J*********` for the name, a SHA-256 hash for the email, no SSN 
 
 The TOLAP SDK ships in three languages, each with three packages:
 
+> **Not yet on the public registries.** The nine packages below are built and verified by
+> [`.github/workflows/publish.yml`](.github/workflows/publish.yml) but have not been pushed
+> to PyPI, npm or NuGet yet, so the install commands in this section do not resolve. Until
+> the first release lands, build from a clone: `pip install ./sdk/python/tolap-core` (and
+> its siblings), `npm ci && npx tsc -p tsconfig.json` per package under
+> `sdk/typescript/packages/`, or `dotnet build sdk/dotnet/Tolap.sln`.
+> [`docs/releasing.md`](docs/releasing.md) describes what has to happen first. **Delete this
+> note when the packages are live.**
+
 ### .NET
 
 ```bash
@@ -162,27 +171,29 @@ pip install tolap-mcp
 ### TypeScript
 
 ```bash
-npm install @tolap/core
-npm install @tolap/store
-npm install @tolap/mcp
+npm install @aws/tolap-core
+npm install @aws/tolap-store
+npm install @aws/tolap-mcp
 ```
 
 | Package | Description |
 |---------|-------------|
-| **@tolap/core** | Policy models, merge algorithm, HMAC signing, enforcement engine. Zero dependencies. |
-| **@tolap/store** | `PolicyStore` interface + in-memory implementation. Pluggable for any backend. |
-| **@tolap/mcp** | Enforcement wrappers for the function your tool layer calls -- MCP servers, agent-framework tools, Lambda handlers. Speaks no wire protocol of its own. |
+| **@aws/tolap-core** | Policy models, merge algorithm, HMAC signing, enforcement engine. Zero dependencies. |
+| **@aws/tolap-store** | `PolicyStore` interface + in-memory implementation. Pluggable for any backend. |
+| **@aws/tolap-mcp** | Enforcement wrappers for the function your tool layer calls -- MCP servers, agent-framework tools, Lambda handlers. Speaks no wire protocol of its own. |
 
 **Core packages have zero external dependencies** in all three languages. Crypto, JSON, and collections use standard library only. The enforcement engine is embeddable anywhere -- MCP servers, Lambda functions, edge workers, Semantic Kernel plugins. [`examples/`](examples/) shows it wired into fourteen agent frameworks; none of the integrations adds a dependency to your enforcement path.
+
+The `store` packages add nothing beyond `core`. One `mcp` package does: **`tolap-mcp` requires `httpx`**, because its HTTP wrapper uses `httpx.URL` for the same-origin check that stops a redirect leaving the policy's host. The TypeScript and .NET wrappers take a caller-supplied fetch function or `HttpClient` instead and so declare no runtime dependency. If you embed only the enforcement engine, depend on `core` and the question does not arise.
 
 ## Quick Start
 
 ### Resolve a policy and sign a context (TypeScript)
 
 ```typescript
-import { merge, signContext, buildSecurityContext } from "@tolap/core";
-import { InMemoryPolicyStore } from "@tolap/store";
-import { SecureMcpToolWrapper } from "@tolap/mcp";
+import { merge, signContext, buildSecurityContext } from "@aws/tolap-core";
+import { InMemoryPolicyStore } from "@aws/tolap-store";
+import { SecureMcpToolWrapper } from "@aws/tolap-mcp";
 
 // 1. Create a policy store and add policies
 const store = new InMemoryPolicyStore();
@@ -474,6 +485,7 @@ full list of what TOLAP does not guarantee.
 - [Canonical Enforcement Spec](docs/canonical-enforcement-spec.md) -- Normative cross-language behavior: canonical signing, enforcement pipeline order, fail-closed rules
 - [Connector Spec](docs/connector-spec.md) -- Normative per-category behavior: which policy fields apply to `db` / `api` / `kb` / `storage`, what an object and a record mean for each, and which fields are advisory rather than enforced
 - [Local Testing](docs/local-testing.md) -- Running the suites against live Postgres/MySQL and the test API server
+- [Releasing](docs/releasing.md) -- Publishing the nine packages to PyPI, npm and NuGet: registry setup, the version-agreement gate, and recovering a partial release
 - [Integration examples](examples/) -- Fourteen integrations across Python, TypeScript and .NET (MCP SDK, Strands, LangChain, Vercel AI, Mastra, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents), each CI-tested to enforce the same policy identically
 - [Threat Model](docs/security/threat-model.md) -- STRIDE analysis per trust boundary, with the defects found and fixed since revision 1
 - [Testing Anti-Patterns](docs/testing-antipatterns.md) -- Six defects that shipped here while the suite was green, and the smell to grep for in each
@@ -534,7 +546,7 @@ tolap/
   sdk/
     dotnet/        Tolap.Core, Tolap.Store, Tolap.Mcp
     python/        tolap-core, tolap-store, tolap-mcp
-    typescript/    @tolap/core, @tolap/store, @tolap/mcp
+    typescript/    @aws/tolap-core, @aws/tolap-store, @aws/tolap-mcp
   server/          Policy server: central store, resolve API, Cognito admin auth
   console/         Admin UI for the policy server
   examples/        14 agent-framework integrations, CI-tested (see below)

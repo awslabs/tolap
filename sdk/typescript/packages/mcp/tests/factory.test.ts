@@ -29,7 +29,7 @@ import {
   SourceCategory,
   type EffectivePolicy,
   type SecurityContext,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 import {
   SecureToolFactory,

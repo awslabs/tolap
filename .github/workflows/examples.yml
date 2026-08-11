@@ -63,8 +63,8 @@ jobs:
         with:
           node-version: "24"
 
-      # The examples resolve @tolap/* through file: references to packages/*, and mcp/store
-      # resolve @tolap/core through its dist — so core must be built before anything else.
+      # The examples resolve @aws/tolap-* through file: references to packages/*, and mcp/store
+      # resolve @aws/tolap-core through its dist — so core must be built before anything else.
       - name: Build the SDK
         working-directory: sdk/typescript
         run: |

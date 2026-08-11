@@ -14,7 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runDotnet } from "./helpers/dotnet.ts";
-import { validateContext, validatePolicy, type EffectivePolicy } from "@tolap/core";
+import { validateContext, validatePolicy, type EffectivePolicy } from "@aws/tolap-core";
 import { Keyring, KeyringError } from "../src/signing/keyring.ts";
 import { buildSignedArtifact, encodeArtifact } from "../src/signing/artifact.ts";
 

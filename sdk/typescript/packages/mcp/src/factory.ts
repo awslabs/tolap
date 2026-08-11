@@ -48,7 +48,7 @@ import {
   validateContext,
   validateExpiry,
   type SecurityContext,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 import {
   SecureContextToolWrapper,
