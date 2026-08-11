@@ -184,6 +184,8 @@ npm install @aws/tolap-mcp
 
 **Core packages have zero external dependencies** in all three languages. Crypto, JSON, and collections use standard library only. The enforcement engine is embeddable anywhere -- MCP servers, Lambda functions, edge workers, Semantic Kernel plugins. [`examples/`](examples/) shows it wired into fourteen agent frameworks; none of the integrations adds a dependency to your enforcement path.
 
+The `store` packages add nothing beyond `core`. One `mcp` package does: **`tolap-mcp` requires `httpx`**, because its HTTP wrapper uses `httpx.URL` for the same-origin check that stops a redirect leaving the policy's host. The TypeScript and .NET wrappers take a caller-supplied fetch function or `HttpClient` instead and so declare no runtime dependency. If you embed only the enforcement engine, depend on `core` and the question does not arise.
+
 ## Quick Start
 
 ### Resolve a policy and sign a context (TypeScript)

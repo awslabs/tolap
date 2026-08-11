@@ -244,6 +244,42 @@ jobs:
       # known-answer fixture that loses its expected values would let those tests pass
       # while checking nothing — the exact defect that let the original signing
       # divergence ship (canonical-enforcement-spec §12).
+      # A package must import with ONLY its declared dependencies installed. The suite
+      # above cannot catch this: it installs httpx, psycopg, PyMySQL and jsonschema for
+      # the tests, so a package that imports one of them without declaring it passes
+      # every test and then fails on `import` for anyone who installs it from PyPI.
+      # That shipped -- tolap-mcp imports httpx at module level in http_wrapper and
+      # factory, both eagerly imported by __init__, and declared no httpx dependency.
+      #
+      # A fresh venv with nothing but the built wheels is the only place the real
+      # dependency surface is visible.
+      - name: Python packages import with only their declared dependencies
+        working-directory: sdk/python
+        run: |
+          python -m pip install --quiet build
+          rm -rf /tmp/dist-check && mkdir -p /tmp/dist-check
+          for pkg in tolap-core tolap-store tolap-mcp; do
+            python -m build --wheel --outdir /tmp/dist-check "$pkg" >/dev/null
+          done
+          python -m venv /tmp/import-check
+          # Installing the wheels by filename, with a plain index available for the
+          # declared third-party dependencies. If a package needs something it does not
+          # declare, the import below is where that surfaces.
+          /tmp/import-check/bin/pip install --quiet /tmp/dist-check/*.whl
+          /tmp/import-check/bin/python - <<'PY'
+          import importlib, sys
+          failed = []
+          for mod in ("tolap_core", "tolap_store", "tolap_mcp"):
+              try:
+                  importlib.import_module(mod)
+                  print(f"{mod}: imports cleanly")
+              except Exception as exc:
+                  failed.append(f"{mod}: {type(exc).__name__}: {exc}")
+          if failed:
+              print("\n".join(failed))
+              sys.exit("a package is missing a runtime dependency it imports")
+          PY
+
       # The nine package directories each hold a copy of LICENSE and NOTICE, because all
       # three packaging systems resolve those paths relative to the manifest rather than
       # the repository root. Copies drift: someone edits the root NOTICE and the published
