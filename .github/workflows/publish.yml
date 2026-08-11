@@ -209,7 +209,12 @@ jobs:
           v="${{ needs.verify-version.outputs.version }}"
           for pkg in tolap_core tolap_store tolap_mcp; do
             echo "::group::upload $pkg to Test PyPI"
-            twine upload --repository-url https://test.pypi.org/legacy/ \
+            # --verbose because PyPI answers a rejected credential with a bare
+            # "403 Forbidden" and no reason. The verbose output carries the server's
+            # own message, which distinguishes a wrong-site token from an unverified
+            # email from a name already owned by someone else -- three very different
+            # fixes behind one status code.
+            twine upload --verbose --repository-url https://test.pypi.org/legacy/ \
               --skip-existing "dist_all/${pkg}-${v}"*
             echo "::endgroup::"
           done
