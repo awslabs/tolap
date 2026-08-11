@@ -649,8 +649,8 @@ class PostgresPolicyStore(PolicyStore):
 
 ```typescript
 import { Pool } from "pg";
-import { merge, type PolicyDefinition } from "@tolap/core";
-import { PolicyStore } from "@tolap/store";
+import { merge, type PolicyDefinition } from "@aws/tolap-core";
+import { PolicyStore } from "@aws/tolap-store";
 
 export class PostgresPolicyStore implements PolicyStore {
   constructor(private pool: Pool) {}

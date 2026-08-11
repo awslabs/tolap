@@ -1,5 +1,5 @@
 /**
- * @tolap/core - TOLAP TypeScript SDK Core Package
+ * @aws/tolap-core - TOLAP TypeScript SDK Core Package
  *
  * Tool-Object Level Access Protocol: enforce data access policies
  * inside AI agent tools at the data-object level.

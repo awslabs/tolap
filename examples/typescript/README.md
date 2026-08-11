@@ -15,7 +15,7 @@ framework expects and routes data access through the same function
 ## Read this before the code
 
 **TOLAP is not an MCP server, and it does not speak the MCP protocol.** It ships no JSON-RPC, no
-stdio transport, no `tools/list`, and declares no MCP dependency. `@tolap/mcp` provides enforcement
+stdio transport, no `tools/list`, and declares no MCP dependency. `@aws/tolap-mcp` provides enforcement
 *around the function your tool layer already calls* — which is why the same substitution works
 across five frameworks, and why nothing here takes a credential.
 

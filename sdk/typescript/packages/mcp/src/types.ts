@@ -4,7 +4,7 @@
  * Types for MCP (Model Context Protocol) tool wrapping with TOLAP enforcement.
  */
 
-import type { EffectivePolicy } from "@tolap/core";
+import type { EffectivePolicy } from "@aws/tolap-core";
 
 // ---------------------------------------------------------------------------
 // Enforcement Mode

@@ -51,7 +51,7 @@ Remaining, and not fixable by us:
 
 **No TOLAP package is affected.** `sdk/typescript` reports `found 0 vulnerabilities`, and the .NET
 and Python SDKs declare no third-party runtime dependencies at all. An integrator installing
-`@tolap/core`, `@tolap/store` or `@tolap/mcp` pulls none of the above.
+`@aws/tolap-core`, `@aws/tolap-store` or `@aws/tolap-mcp` pulls none of the above.
 
 **Scan the whole repository, not just `sdk/`.** The `js-yaml` and `brace-expansion` findings above
 were surfaced by GitHub's Dependabot on push, *not* by the local scan set -- because the local
@@ -68,7 +68,7 @@ dependency drift surfaces there rather than in an integrator's first hour.
 TOLAP's core packages ship **zero runtime dependencies** — verified, not assumed:
 
 - `tolap-core` declares none; `tolap-store` and `tolap-mcp` depend only on `tolap-core`
-- `@tolap/core`, `@tolap/store`, `@tolap/mcp` declare no runtime dependencies
+- `@aws/tolap-core`, `@aws/tolap-store`, `@aws/tolap-mcp` declare no runtime dependencies
 - the .NET core projects carry only framework references
 
 So nearly everything a dependency scanner sees here is **test and build tooling**. That

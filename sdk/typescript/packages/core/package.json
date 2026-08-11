@@ -1,5 +1,5 @@
 {
-  "name": "@tolap/core",
+  "name": "@aws/tolap-core",
   "version": "1.0.0",
   "description": "TOLAP core - policy models, merge algorithm, HMAC signing, enforcement engine",
   "license": "Apache-2.0",

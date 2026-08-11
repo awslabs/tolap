@@ -1,5 +1,5 @@
 /**
- * @tolap/mcp - TOLAP MCP Tool Wrapper Package
+ * @aws/tolap-mcp - TOLAP MCP Tool Wrapper Package
  *
  * Provides secure wrapping for MCP tool calls with TOLAP policy enforcement.
  */

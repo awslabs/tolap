@@ -1,4 +1,4 @@
-# @tolap/core
+# @aws/tolap-core
 
 Part of [TOLAP](https://github.com/awslabs/tolap) -- the Tool-Object Level Access Protocol.
 
@@ -7,7 +7,7 @@ Policy models, the most-restrictive-wins merge algorithm, HMAC signing over a ca
 ## Install
 
 ```
-npm install @tolap/core
+npm install @aws/tolap-core
 ```
 
 ## What TOLAP does

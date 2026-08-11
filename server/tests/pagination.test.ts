@@ -32,8 +32,8 @@
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { PolicyDefinition } from "@tolap/core";
-import { validateFieldAccess } from "@tolap/core";
+import type { PolicyDefinition } from "@aws/tolap-core";
+import { validateFieldAccess } from "@aws/tolap-core";
 import { PostgresPolicyStore } from "../src/db/store.ts";
 import { Keyring } from "../src/signing/keyring.ts";
 import { buildAdminApp } from "../src/routes/admin.ts";

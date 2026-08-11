@@ -1,7 +1,7 @@
 # TOLAP Implementation Guide -- TypeScript / Node.js
 
 This guide shows how to enforce TOLAP in a TypeScript tool layer **using the shipped SDK**.
-Every example is verified against `@tolap/core`, `@tolap/store` and `@tolap/mcp` as published in
+Every example is verified against `@aws/tolap-core`, `@aws/tolap-store` and `@aws/tolap-mcp` as published in
 [`../sdk/typescript/`](../sdk/typescript/).
 
 > **What changed, and why it matters.** An earlier version of this guide walked through
@@ -16,12 +16,12 @@ Every example is verified against `@tolap/core`, `@tolap/store` and `@tolap/mcp`
 
 1. **An authenticated user identity.** TOLAP does not authenticate. Your system supplies a
    verified user ID and tenant ID.
-2. **A policy store.** `@tolap/store` ships `InMemoryPolicyStore` for development and the
+2. **A policy store.** `@aws/tolap-store` ships `InMemoryPolicyStore` for development and the
    `PolicyStore` interface for your own backend.
 3. **A tool layer.** The tools your agents use (MCP servers, LangChain tools, etc.).
 
 ```bash
-npm install @tolap/core @tolap/store @tolap/mcp
+npm install @aws/tolap-core @aws/tolap-store @aws/tolap-mcp
 ```
 
 ## What you write, and what the SDK provides
@@ -39,18 +39,18 @@ Anything in the right column that you find yourself writing by hand is a bug.
 The policy model (`EffectivePolicy`, `ObjectRules`, `RowFilter`, `FieldRules`, `TagRules`,
 `PolicyLimits`, `MaskType`, `FilterOperator`, ...), the resolution engine, the merge algorithm,
 canonical serialization, HMAC signing and verification, the enforcement pipeline, the SQL
-rewriter and the `kb` filter renderers are all shipped from `@tolap/core`. None of them are
+rewriter and the `kb` filter renderers are all shipped from `@aws/tolap-core`. None of them are
 yours to write.
 
 ## Step 1: Policy storage
 
 Policies use the [Policy Definition Schema](../schema/v1.0/policy-definition.schema.json) and
 attach to principals via the [Policy Assignment Schema](../schema/v1.0/policy-assignment.schema.json).
-The types are exported from `@tolap/core`, so a parsed JSON policy is used directly.
+The types are exported from `@aws/tolap-core`, so a parsed JSON policy is used directly.
 
 ```typescript
-import type { PolicyDefinition, PolicyAssignment } from "@tolap/core";
-import { InMemoryPolicyStore, StaticIdentityResolver } from "@tolap/store";
+import type { PolicyDefinition, PolicyAssignment } from "@aws/tolap-core";
+import { InMemoryPolicyStore, StaticIdentityResolver } from "@aws/tolap-store";
 
 // The resolver answers "which groups and roles does this user hold?" -- the input to the
 // merge, and yours because only you know your directory.
@@ -63,7 +63,7 @@ await store.putAssignment(JSON.parse(assignmentJson) as PolicyAssignment);
 ```
 
 For production, implement the `PolicyStore` interface over your own database -- the *storage*,
-not the resolution semantics, which `@tolap/core` supplies.
+not the resolution semantics, which `@aws/tolap-core` supplies.
 
 ## Step 2: Resolve, build, sign
 
@@ -78,8 +78,8 @@ import {
   serializeContext,
   validateContext,
   type SecurityContext,
-} from "@tolap/core";
-import { InMemoryPolicyStore } from "@tolap/store";
+} from "@aws/tolap-core";
+import { InMemoryPolicyStore } from "@aws/tolap-store";
 
 async function issueContext(store: InMemoryPolicyStore, signingKey: string): Promise<string> {
   // Resolution: assignments + definitions -> one effective policy for one source.
@@ -125,7 +125,7 @@ granting one more policy. The full table is in
 
 ```typescript
 // The store does this for you; `resolve` is exposed directly if you assemble the inputs.
-import { resolve } from "@tolap/core";
+import { resolve } from "@aws/tolap-core";
 
 const effective = await resolve(
   "alice",
@@ -154,7 +154,7 @@ The SDK never holds a connection. **You** run the query or the API call; the SDK
 policy on what comes back. That is why nothing here takes a credential.
 
 ```typescript
-import { applyResultPipeline } from "@tolap/core";
+import { applyResultPipeline } from "@aws/tolap-core";
 
 // Row filters, tag filters, the relevance floor, the size ceiling, hidden fields,
 // allowed-field projection, masking, then the result limit -- in that order, which is
@@ -165,7 +165,7 @@ const enforced = applyResultPipeline(rowsYouFetched, policy);
 For `db` sources, push what can be pushed into the SQL, then run the pipeline anyway:
 
 ```typescript
-import { validateAccess, SqlQueryRewriter, SqlDialect } from "@tolap/core";
+import { validateAccess, SqlQueryRewriter, SqlDialect } from "@aws/tolap-core";
 
 function prepare(sql: string, policy: EffectivePolicy): { allowed: boolean; sql: string } {
   // The object check comes first and is separate: a rewrite cannot express
@@ -190,7 +190,7 @@ For `kb` sources, render a provider-native metadata filter so denied chunks are 
 retrieved -- again as an optimization over the normative post pass:
 
 ```typescript
-import { buildKbFilter, renderKbFilter, KbProvider } from "@tolap/core";
+import { buildKbFilter, renderKbFilter, KbProvider } from "@aws/tolap-core";
 
 const rendered = renderKbFilter(
   buildKbFilter(policy, { metadataKeys: ["classification"] }),
@@ -209,13 +209,13 @@ exposed one fail-open each.
 
 ## Step 4: Use the Secure Tool Factory
 
-The SDK ships the factory: `SecureToolFactory` in `@tolap/mcp`. It is the composition root
+The SDK ships the factory: `SecureToolFactory` in `@aws/tolap-mcp`. It is the composition root
 for enforced tools — an agent receives its tools from it and never constructs one, which is
 what makes "the wrapper is the only path to the source" structural rather than a convention
 every call site has to remember.
 
 ```typescript
-import { SecureToolFactory, ToolCreationError } from "@tolap/mcp";
+import { SecureToolFactory, ToolCreationError } from "@aws/tolap-mcp";
 
 const factory = new SecureToolFactory({
   signingKey: SIGNING_KEY,
@@ -281,8 +281,8 @@ Here is the complete flow from request to results:
 ```typescript
 // ── In your request handler / orchestration layer ───────────────────────
 
-import { resolve, buildSecurityContext, signContext } from "@tolap/core";
-import { SecureToolFactory } from "@tolap/mcp";
+import { resolve, buildSecurityContext, signContext } from "@aws/tolap-core";
+import { SecureToolFactory } from "@aws/tolap-mcp";
 
 const SIGNING_KEY = process.env.TOLAP_SIGNING_KEY!;
 
@@ -497,7 +497,7 @@ A signed context is a bearer credential: capture it and it works until it expire
 `ReplayGuard` to `deserializeContext` and it works exactly once.
 
 ```ts
-import { InMemoryReplayGuard, deserializeContext } from "@tolap/core";
+import { InMemoryReplayGuard, deserializeContext } from "@aws/tolap-core";
 
 const guard = new InMemoryReplayGuard();   // process-local; see the warning below
 
@@ -515,7 +515,7 @@ own set, so a context replayed against a *different* worker is not detected. For
 multi-process, implement the one-method interface over a store you already run:
 
 ```ts
-import type { ReplayGuard } from "@tolap/core";
+import type { ReplayGuard } from "@aws/tolap-core";
 
 class RedisReplayGuard implements ReplayGuard {
   constructor(private redis: RedisClient) {}

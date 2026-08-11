@@ -8,7 +8,7 @@ name: Publish
 # against.
 #
 # The nine packages are NOT independently versioned. They ship as a set at one version,
-# because the guarantee they carry is cross-package: a context signed by @tolap/core must
+# because the guarantee they carry is cross-package: a context signed by @aws/tolap-core must
 # verify in tolap-core and Tolap.Core, and the shared fixtures assert byte-identical
 # output across all three languages. Publishing them separately would let a consumer
 # combine versions that were never tested against each other.
@@ -22,11 +22,22 @@ on:
         description: 'Version to publish (must match the manifests, e.g. 1.0.0)'
         required: true
         type: string
-      dry_run:
-        description: 'Build and validate, but do not push to any registry'
-        required: false
-        type: boolean
-        default: true
+      target:
+        description: 'Where to publish'
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          # Build and validate everything, push nothing.
+          - dry-run
+          # Real upload to test.pypi.org only. The rehearsal Amazon's PyPI guidance asks
+          # for: it exercises the credential path and PyPI's own metadata validation
+          # against a registry where a mistake costs nothing. npm and NuGet have no
+          # equivalent sandbox, so they are skipped for this target.
+          - testpypi
+          # The real thing. Normally reached by pushing a tag rather than by hand; this
+          # option exists to re-run after a partial failure.
+          - live
 
 # Two publish runs for the same tag would race on the same registry coordinates.
 # No cancel-in-progress: a half-finished publish that gets killed is worse than one
@@ -53,6 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
+      target: ${{ steps.resolve.outputs.target }}
     steps:
       - uses: actions/checkout@v5
 
@@ -61,9 +73,15 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             version="${{ inputs.version }}"
+            target="${{ inputs.target }}"
           else
             version="${GITHUB_REF_NAME#v}"
+            # A tag push is always the real release. `inputs` does not exist on this
+            # trigger, so the target is decided here once rather than re-derived in
+            # every downstream conditional.
+            target="live"
           fi
+          echo "target=$target" >> "$GITHUB_OUTPUT"
           # Reject anything that is not a bare semver core, optionally with a
           # prerelease suffix. A tag like "v1.0" or "v1.0.0-" would otherwise flow
           # through and produce package versions the three ecosystems disagree about.
@@ -72,7 +90,7 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Releasing $version"
+          echo "Releasing $version to: $target"
 
       - name: All nine manifests and VERSION carry that version
         env:
@@ -172,6 +190,40 @@ jobs:
           print("all wheels carry LICENSE and NOTICE")
           PY
 
+      # The rehearsal Amazon's PyPI guidance asks for. A real upload, so it exercises the
+      # credential path and PyPI's server-side metadata validation -- neither of which a
+      # local build can prove -- against a registry where a wrong version costs nothing.
+      #
+      # Test PyPI is periodically pruned and is not a permanent home; nothing downstream
+      # should ever depend on a package here.
+      - name: Publish to Test PyPI
+        if: ${{ needs.verify-version.outputs.target == 'testpypi' }}
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "::error::TEST_PYPI_API_TOKEN is not set"
+            exit 1
+          fi
+          v="${{ needs.verify-version.outputs.version }}"
+          for pkg in tolap_core tolap_store tolap_mcp; do
+            echo "::group::upload $pkg to Test PyPI"
+            twine upload --repository-url https://test.pypi.org/legacy/ \
+              --skip-existing "dist_all/${pkg}-${v}"*
+            echo "::endgroup::"
+          done
+          {
+            echo "### Test PyPI upload complete"
+            echo
+            echo '```'
+            echo "pip install --index-url https://test.pypi.org/simple/ --no-deps tolap-core==$v"
+            echo '```'
+            echo
+            echo "--no-deps matters: dependencies resolve against Test PyPI too, where"
+            echo "they are usually absent or stale."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Order matters: store and mcp depend on core. Publishing a dependent first leaves
       # a window where `pip install tolap-store` cannot resolve tolap-core.
       #
@@ -179,7 +231,7 @@ jobs:
       # exits non-zero on the package that already uploaded and the remaining ones never
       # go out -- which is precisely the state a re-run exists to repair.
       - name: Publish to PyPI
-        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        if: ${{ needs.verify-version.outputs.target == 'live' }}
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
@@ -196,7 +248,7 @@ jobs:
           done
 
       - name: Dry run summary
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        if: ${{ needs.verify-version.outputs.target == 'dry-run' }}
         run: echo "Dry run - built and validated, published nothing."
 
       - uses: actions/upload-artifact@v4
@@ -221,14 +273,14 @@ jobs:
         working-directory: sdk/typescript
         run: npm ci
 
-      # core first: store and mcp resolve @tolap/core through packages/core/dist, so a
+      # core first: store and mcp resolve @aws/tolap-core through packages/core/dist, so a
       # fresh clone fails with TS6305 if they are built first. Same ordering constraint
       # the CI workflow documents.
       - name: Build
         working-directory: sdk/typescript
         run: |
           for pkg in core store mcp; do
-            echo "::group::tsc @tolap/$pkg"
+            echo "::group::tsc @aws/tolap-$pkg"
             (cd "packages/$pkg" && npx tsc -p tsconfig.json)
             echo "::endgroup::"
           done
@@ -252,10 +304,10 @@ jobs:
               files = [f["path"] for f in json.loads(out)[0]["files"]]
               for f in files:
                   if not (f.startswith("dist/") or f in ("package.json", "README.md", "LICENSE", "NOTICE")):
-                      bad.append(f"@tolap/{pkg}: unexpected {f}")
+                      bad.append(f"@aws/tolap-{pkg}: unexpected {f}")
               for required in ("LICENSE", "NOTICE", "README.md"):
                   if required not in files:
-                      bad.append(f"@tolap/{pkg}: missing {required}")
+                      bad.append(f"@aws/tolap-{pkg}: missing {required}")
           if bad:
               print("\n".join(bad))
               sys.exit("npm tarball contents are wrong")
@@ -268,7 +320,7 @@ jobs:
       # which on a re-run is success, not failure: the package is on the registry at the
       # right version. Anything else is a real error and stops the job.
       - name: Publish to npm
-        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        if: ${{ needs.verify-version.outputs.target == 'live' }}
         working-directory: sdk/typescript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -278,13 +330,13 @@ jobs:
             exit 1
           fi
           for pkg in core store mcp; do
-            echo "::group::publish @tolap/$pkg"
+            echo "::group::publish @aws/tolap-$pkg"
             if out=$(cd "packages/$pkg" && npm publish --access public 2>&1); then
               echo "$out"
             else
               echo "$out"
               if printf '%s' "$out" | grep -q "EPUBLISHCONFLICT\|cannot publish over"; then
-                echo "@tolap/$pkg is already published at this version; continuing"
+                echo "@aws/tolap-$pkg is already published at this version; continuing"
               else
                 exit 1
               fi
@@ -292,9 +344,9 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Dry run summary
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-        run: echo "Dry run - built and validated, published nothing."
+      - name: No-publish summary
+        if: ${{ needs.verify-version.outputs.target != 'live' }}
+        run: echo "target=${{ needs.verify-version.outputs.target }} - built and validated, published nothing (no sandbox registry exists for this ecosystem)."
 
   publish-nuget:
     name: NuGet
@@ -359,7 +411,7 @@ jobs:
       #
       # --skip-duplicate makes re-runs safe, the same property --skip-existing gives twine.
       - name: Publish to NuGet
-        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        if: ${{ needs.verify-version.outputs.target == 'live' }}
         env:
           NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
@@ -377,9 +429,9 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Dry run summary
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-        run: echo "Dry run - built and validated, published nothing."
+      - name: No-publish summary
+        if: ${{ needs.verify-version.outputs.target != 'live' }}
+        run: echo "target=${{ needs.verify-version.outputs.target }} - built and validated, published nothing (no sandbox registry exists for this ecosystem)."
 
       - uses: actions/upload-artifact@v4
         with:
@@ -400,21 +452,32 @@ jobs:
       - name: Report
         run: |
           v="${{ needs.verify-version.outputs.version }}"
+          target="${{ needs.verify-version.outputs.target }}"
           {
-            echo "## TOLAP $v"
+            echo "## TOLAP $v ($target)"
             echo
             echo "| Registry | Result |"
             echo "| --- | --- |"
             echo "| PyPI (tolap-core, tolap-store, tolap-mcp) | ${{ needs.publish-python.result }} |"
-            echo "| npm (@tolap/core, @tolap/store, @tolap/mcp) | ${{ needs.publish-npm.result }} |"
+            echo "| npm (@aws/tolap-core, @aws/tolap-store, @aws/tolap-mcp) | ${{ needs.publish-npm.result }} |"
             echo "| NuGet (Tolap.Core, Tolap.Store, Tolap.Mcp) | ${{ needs.publish-nuget.result }} |"
+            if [ "$target" != "live" ]; then
+              echo
+              echo "Nothing was published to a production registry."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           # A partial release needs a human, so fail the run rather than let a green
-          # check imply all nine packages are live.
+          # check imply all nine packages are live. This applies to every target: on a
+          # dry run the jobs still build, validate and assert artifact contents, so a
+          # failure there is a real failure -- it just is not a half-published release.
           if [ "${{ needs.publish-python.result }}" != "success" ] || \
              [ "${{ needs.publish-npm.result }}" != "success" ] || \
              [ "${{ needs.publish-nuget.result }}" != "success" ]; then
-            echo "::error::Partial release. Re-run this workflow with the same version once the cause is fixed; the publish steps skip anything already on a registry."
+            if [ "$target" = "live" ]; then
+              echo "::error::Partial release. Re-run this workflow with the same version once the cause is fixed; the publish steps skip anything already on a registry."
+            else
+              echo "::error::A build or validation job failed. Nothing was published."
+            fi
             exit 1
           fi

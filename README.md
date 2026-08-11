@@ -171,16 +171,16 @@ pip install tolap-mcp
 ### TypeScript
 
 ```bash
-npm install @tolap/core
-npm install @tolap/store
-npm install @tolap/mcp
+npm install @aws/tolap-core
+npm install @aws/tolap-store
+npm install @aws/tolap-mcp
 ```
 
 | Package | Description |
 |---------|-------------|
-| **@tolap/core** | Policy models, merge algorithm, HMAC signing, enforcement engine. Zero dependencies. |
-| **@tolap/store** | `PolicyStore` interface + in-memory implementation. Pluggable for any backend. |
-| **@tolap/mcp** | Enforcement wrappers for the function your tool layer calls -- MCP servers, agent-framework tools, Lambda handlers. Speaks no wire protocol of its own. |
+| **@aws/tolap-core** | Policy models, merge algorithm, HMAC signing, enforcement engine. Zero dependencies. |
+| **@aws/tolap-store** | `PolicyStore` interface + in-memory implementation. Pluggable for any backend. |
+| **@aws/tolap-mcp** | Enforcement wrappers for the function your tool layer calls -- MCP servers, agent-framework tools, Lambda handlers. Speaks no wire protocol of its own. |
 
 **Core packages have zero external dependencies** in all three languages. Crypto, JSON, and collections use standard library only. The enforcement engine is embeddable anywhere -- MCP servers, Lambda functions, edge workers, Semantic Kernel plugins. [`examples/`](examples/) shows it wired into fourteen agent frameworks; none of the integrations adds a dependency to your enforcement path.
 
@@ -189,9 +189,9 @@ npm install @tolap/mcp
 ### Resolve a policy and sign a context (TypeScript)
 
 ```typescript
-import { merge, signContext, buildSecurityContext } from "@tolap/core";
-import { InMemoryPolicyStore } from "@tolap/store";
-import { SecureMcpToolWrapper } from "@tolap/mcp";
+import { merge, signContext, buildSecurityContext } from "@aws/tolap-core";
+import { InMemoryPolicyStore } from "@aws/tolap-store";
+import { SecureMcpToolWrapper } from "@aws/tolap-mcp";
 
 // 1. Create a policy store and add policies
 const store = new InMemoryPolicyStore();
@@ -544,7 +544,7 @@ tolap/
   sdk/
     dotnet/        Tolap.Core, Tolap.Store, Tolap.Mcp
     python/        tolap-core, tolap-store, tolap-mcp
-    typescript/    @tolap/core, @tolap/store, @tolap/mcp
+    typescript/    @aws/tolap-core, @aws/tolap-store, @aws/tolap-mcp
   server/          Policy server: central store, resolve API, Cognito admin auth
   console/         Admin UI for the policy server
   examples/        14 agent-framework integrations, CI-tested (see below)

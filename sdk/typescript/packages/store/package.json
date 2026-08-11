@@ -1,5 +1,5 @@
 {
-  "name": "@tolap/store",
+  "name": "@aws/tolap-store",
   "version": "1.0.0",
   "description": "TOLAP policy store - interfaces and in-memory implementation",
   "license": "Apache-2.0",
@@ -42,7 +42,7 @@
     "prepublishOnly": "tsc"
   },
   "dependencies": {
-    "@tolap/core": "^1.0.0"
+    "@aws/tolap-core": "^1.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.2",

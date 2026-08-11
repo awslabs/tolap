@@ -1,4 +1,4 @@
-# @tolap/mcp
+# @aws/tolap-mcp
 
 Part of [TOLAP](https://github.com/awslabs/tolap) -- the Tool-Object Level Access Protocol.
 
@@ -9,7 +9,7 @@ Enforcement wrappers for the function your tool layer already calls -- MCP serve
 ## Install
 
 ```
-npm install @tolap/mcp
+npm install @aws/tolap-mcp
 ```
 
 ## What TOLAP does

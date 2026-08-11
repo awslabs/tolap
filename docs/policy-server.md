@@ -395,7 +395,7 @@ SDKs do not advertise: **they do not verify the same thing.**
 Those are HMACs over two different byte strings. The artifact carries both
 signatures — which works because the envelope projection strips `integrity` before
 hashing (§2 rule 1), so the two coexist — and emits both spellings of the same
-instant. `signContext` in `@tolap/core` produces both signatures in one call.
+instant. `signContext` in `@aws/tolap-core` produces both signatures in one call.
 
 Consumers do not need to know any of this: deserialize with your own SDK's function
 and it verifies.

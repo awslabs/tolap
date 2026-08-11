@@ -1,5 +1,5 @@
 {
-  "name": "@tolap/infra",
+  "name": "@amzn/tolap-infra",
   "version": "1.0.0",
   "description": "CDK application deploying the TOLAP Policy Server.",
   "main": "index.js",

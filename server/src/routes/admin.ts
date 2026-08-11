@@ -18,7 +18,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import Fastify from "fastify";
-import { parseSourceIdentity, type PolicyAssignment, type PolicyDefinition } from "@tolap/core";
+import { parseSourceIdentity, type PolicyAssignment, type PolicyDefinition } from "@aws/tolap-core";
 import { AdminAuthError, type AdminPrincipal } from "../auth/cognito.ts";
 import { IdentityLookupError } from "../auth/identity-source.ts";
 import {

@@ -12,7 +12,7 @@ or any tool-based AI agent architecture.
   update the fixtures and all three implementations together.
 - **Core stays dependency-free.** The core packages ship with zero third-party
   runtime dependencies. Do not add runtime dependencies to
-  `Tolap.Core` / `tolap-core` / `@tolap/core`.
+  `Tolap.Core` / `tolap-core` / `@aws/tolap-core`.
 - **Security-sensitive changes** to signing, merging, identity extraction, or
   the enforcement pipeline require extra scrutiny. Note in your change which
   security properties it affects and how you validated them. See

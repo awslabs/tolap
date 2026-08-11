@@ -1,4 +1,4 @@
-# @tolap/store
+# @aws/tolap-store
 
 Part of [TOLAP](https://github.com/awslabs/tolap) -- the Tool-Object Level Access Protocol.
 
@@ -7,7 +7,7 @@ The `PolicyStore` interface and an in-memory implementation. Implement the inter
 ## Install
 
 ```
-npm install @tolap/store
+npm install @aws/tolap-store
 ```
 
 ## What TOLAP does

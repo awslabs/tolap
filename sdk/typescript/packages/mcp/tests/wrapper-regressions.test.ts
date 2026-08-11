@@ -5,7 +5,7 @@
  * These cover the wrapper surfaces specifically: SecureMcpToolWrapper (MCP tool
  * discovery + identity), SecureContextToolWrapper (signed-context callers), and
  * SecureHttpToolWrapper (JSON bodies). The core-level pipeline behaviour is
- * covered in @tolap/core's enforcement-pipeline tests.
+ * covered in @aws/tolap-core's enforcement-pipeline tests.
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -15,7 +15,7 @@ import {
   UnenforceableResultError,
   type EffectivePolicy,
   type SecurityContext,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import {
   SecureMcpToolWrapper,
   warnIfEnforcementDisabled,

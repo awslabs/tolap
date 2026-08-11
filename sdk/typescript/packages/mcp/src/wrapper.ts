@@ -16,7 +16,7 @@ import {
   describeResultShape,
   validatePolicy,
   type EffectivePolicy,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import {
   EnforcementMode,
   type SecureMcpServerOptions,

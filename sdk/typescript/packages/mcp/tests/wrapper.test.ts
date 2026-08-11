@@ -7,7 +7,7 @@ import {
   IdentityExtractionError,
   JwtIdentityExtractor,
 } from "../src/extractors.js";
-import type { EffectivePolicy } from "@tolap/core";
+import type { EffectivePolicy } from "@aws/tolap-core";
 import type { McpToolDefinition, EnforcementDecision } from "../src/types.js";
 
 function createTestPolicy(overrides?: Partial<EffectivePolicy>): EffectivePolicy {

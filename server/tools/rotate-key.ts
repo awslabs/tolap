@@ -33,7 +33,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { validateContext, validatePolicy, type EffectivePolicy } from "@tolap/core";
+import { validateContext, validatePolicy, type EffectivePolicy } from "@aws/tolap-core";
 import { Keyring, type SigningKey } from "../src/signing/keyring.ts";
 import { buildSignedArtifact } from "../src/signing/artifact.ts";
 import { MIN_SIGNING_KEY_LENGTH } from "../src/config.ts";

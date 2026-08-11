@@ -27,7 +27,7 @@ import {
   type SecurityContext,
   type ValidateWriteOptions,
   type WriteOperation,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 
 export interface SecureContextWrapperOptions {
   signingKey: string;

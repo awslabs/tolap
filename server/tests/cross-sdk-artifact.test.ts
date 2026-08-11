@@ -31,7 +31,7 @@ import {
   validateContext,
   validatePolicy,
   type EffectivePolicy,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import { buildSignedArtifact, encodeArtifact } from "../src/signing/artifact.ts";
 
 const KEY = "tolap-cross-sdk-test-key-not-for-production";

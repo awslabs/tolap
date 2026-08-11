@@ -30,7 +30,7 @@ import {
   signContext,
   type EffectivePolicy,
   type SecurityContext,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import {
   MAX_REDIRECTS,
   SecureHttpToolWrapper,

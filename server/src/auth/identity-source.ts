@@ -41,7 +41,7 @@ import {
   UserNotFoundException,
 } from "@aws-sdk/client-cognito-identity-provider";
 
-/** What the store needs. Matches `IdentityResolver` in `@tolap/store`. */
+/** What the store needs. Matches `IdentityResolver` in `@aws/tolap-store`. */
 export interface IdentitySource {
   getGroups(userId: string): Promise<string[]>;
   getRoles(userId: string): Promise<string[]>;

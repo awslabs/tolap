@@ -1,7 +1,7 @@
 /**
  * PostgreSQL-backed policy store.
  *
- * Implements the `PolicyStore` interface from `@tolap/store`, so it is a drop-in
+ * Implements the `PolicyStore` interface from `@aws/tolap-store`, so it is a drop-in
  * replacement for `InMemoryPolicyStore` and the SDK's own `resolve()` does the
  * merging. The server does **not** reimplement resolution or merge order: those
  * rules are normative (canonical-enforcement-spec.md, merge table in
@@ -32,13 +32,13 @@ import type {
   EffectivePolicy,
   PolicyAssignment,
   PolicyDefinition,
-} from "@tolap/core";
-import { resolve } from "@tolap/core";
+} from "@aws/tolap-core";
+import { resolve } from "@aws/tolap-core";
 import type {
   IdentityResolver,
   PolicyAuditEvent,
   PolicyStore,
-} from "@tolap/store";
+} from "@aws/tolap-store";
 import type { Pool } from "pg";
 import type { InstallRecord } from "../auth/guards.ts";
 import type { SourceManifest } from "../catalog/manifest.ts";

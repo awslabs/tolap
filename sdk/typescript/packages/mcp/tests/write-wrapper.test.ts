@@ -24,7 +24,7 @@ import {
   type ObjectRules,
   type PolicyPermissions,
   type SecurityContext,
-} from "@tolap/core";
+} from "@aws/tolap-core";
 import { SecureContextToolWrapper } from "../src/context-wrapper.js";
 import { SecureHttpToolWrapper, type FetchLike } from "../src/http-wrapper.js";
 
