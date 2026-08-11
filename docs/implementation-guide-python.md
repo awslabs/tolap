@@ -20,9 +20,15 @@ example is verified against `tolap-core`, `tolap-store` and `tolap-mcp` as publi
    `InMemoryPolicyStore` for development and the `PolicyStore` protocol for your own backend.
 3. **A tool layer.** The tools your agents use (MCP servers, LangChain tools, etc.).
 
+Build the SDK from source -- it is not distributed through a package registry:
+
 ```bash
-pip install tolap-core tolap-store tolap-mcp
+git clone https://github.com/awslabs/tolap && cd tolap
+./tools/build-local.sh python
 ```
+
+That builds the wheels and installs them into the active environment. To do it by hand:
+`pip install ./sdk/python/tolap-core ./sdk/python/tolap-store ./sdk/python/tolap-mcp`.
 
 ## What you write, and what the SDK provides
 

@@ -25,11 +25,17 @@ example below compiles against `Tolap.Core`, `Tolap.Store` and `Tolap.Mcp` as pu
    `InMemoryPolicyStore` for development and `IPolicyStore` for your own backend.
 3. **A tool layer.** The tools your agents use (MCP servers, Semantic Kernel plugins, etc.).
 
+Build the SDK from source -- it is not distributed through a package registry:
+
 ```bash
-dotnet add package Tolap.Core
-dotnet add package Tolap.Store
-dotnet add package Tolap.Mcp
+git clone https://github.com/awslabs/tolap && cd tolap
+./tools/build-local.sh dotnet
 ```
+
+That writes `.nupkg` files to `dist/nuget`, which you can register as a local feed
+(`dotnet nuget add source "$PWD/dist/nuget" --name tolap-local`) and then reference with
+`dotnet add package Tolap.Core`. Referencing the projects directly with
+`<ProjectReference>` works too.
 
 ## What you write, and what the SDK provides
 

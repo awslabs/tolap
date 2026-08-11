@@ -6,11 +6,17 @@ Enforcement wrappers for the function your tool layer already calls -- MCP serve
 
 **This package is not an MCP server and speaks no MCP protocol.** It ships no JSON-RPC, no stdio transport and no `tools/list`, and declares no MCP dependency. Your code fetches the data; TOLAP decides what may leave.
 
-## Install
+## Build
+
+Not distributed through a package registry -- build it from source:
 
 ```
-npm install @aws/tolap-mcp
+git clone https://github.com/awslabs/tolap
+cd tolap/sdk/typescript && npm ci
+for p in core mcp; do (cd "packages/$p" && npx tsc -p tsconfig.json); done
 ```
+
+`./tools/build-local.sh` builds and installs all nine packages in one step.
 
 ## What TOLAP does
 

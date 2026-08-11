@@ -4,11 +4,17 @@ Part of [TOLAP](https://github.com/awslabs/tolap) -- the Tool-Object Level Acces
 
 The `PolicyStore` interface and an in-memory implementation. Implement the interface against PostgreSQL, DynamoDB, Redis or a REST service to centralize policy storage.
 
-## Install
+## Build
+
+Not distributed through a package registry -- build it from source:
 
 ```
-npm install @aws/tolap-store
+git clone https://github.com/awslabs/tolap
+cd tolap/sdk/typescript && npm ci
+for p in core store; do (cd "packages/$p" && npx tsc -p tsconfig.json); done
 ```
+
+`./tools/build-local.sh` builds and installs all nine packages in one step.
 
 ## What TOLAP does
 

@@ -4,11 +4,16 @@ Part of [TOLAP](https://github.com/awslabs/tolap) -- the Tool-Object Level Acces
 
 The `PolicyStore` protocol and an in-memory implementation. Implement the protocol against PostgreSQL, DynamoDB, Redis or a REST service to centralize policy storage.
 
-## Install
+## Build
+
+Not distributed through a package registry -- build it from source:
 
 ```
-pip install tolap-store
+git clone https://github.com/awslabs/tolap && cd tolap
+pip install ./sdk/python/tolap-store
 ```
+
+`./tools/build-local.sh` builds and installs all nine packages in one step.
 
 ## What TOLAP does
 

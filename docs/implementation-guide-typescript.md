@@ -20,9 +20,16 @@ Every example is verified against `@aws/tolap-core`, `@aws/tolap-store` and `@aw
    `PolicyStore` interface for your own backend.
 3. **A tool layer.** The tools your agents use (MCP servers, LangChain tools, etc.).
 
+Build the SDK from source -- it is not distributed through a package registry:
+
 ```bash
-npm install @aws/tolap-core @aws/tolap-store @aws/tolap-mcp
+git clone https://github.com/awslabs/tolap && cd tolap
+./tools/build-local.sh typescript
 ```
+
+That compiles the three packages and writes tarballs to `dist/npm`. Consuming projects
+reference them by path -- `"@aws/tolap-core": "file:../tolap/sdk/typescript/packages/core"`
+-- which is how [`examples/`](../examples/) and [`server/`](../server/) do it.
 
 ## What you write, and what the SDK provides
 

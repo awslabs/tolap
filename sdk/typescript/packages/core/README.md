@@ -4,11 +4,17 @@ Part of [TOLAP](https://github.com/awslabs/tolap) -- the Tool-Object Level Acces
 
 Policy models, the most-restrictive-wins merge algorithm, HMAC signing over a canonical form, and the enforcement engine. **No runtime dependencies** -- crypto, JSON and collections come from the standard library.
 
-## Install
+## Build
+
+Not distributed through a package registry -- build it from source:
 
 ```
-npm install @aws/tolap-core
+git clone https://github.com/awslabs/tolap
+cd tolap/sdk/typescript && npm ci
+(cd packages/core && npx tsc -p tsconfig.json)
 ```
+
+`./tools/build-local.sh` builds and installs all nine packages in one step.
 
 ## What TOLAP does
 

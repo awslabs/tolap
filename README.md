@@ -129,23 +129,33 @@ The agent sees: `J*********` for the name, a SHA-256 hash for the email, no SSN 
 
 ## SDK Packages
 
-The TOLAP SDK ships in three languages, each with three packages:
+The TOLAP SDK ships in three languages, each with three packages. **Build them from this
+repository** -- they are not distributed through a package registry.
 
-> **Not yet on the public registries.** The nine packages below are built and verified by
-> [`.github/workflows/publish.yml`](.github/workflows/publish.yml) but have not been pushed
-> to PyPI, npm or NuGet yet, so the install commands in this section do not resolve. Until
-> the first release lands, build from a clone: `pip install ./sdk/python/tolap-core` (and
-> its siblings), `npm ci && npx tsc -p tsconfig.json` per package under
-> `sdk/typescript/packages/`, or `dotnet build sdk/dotnet/Tolap.sln`.
-> [`docs/releasing.md`](docs/releasing.md) describes what has to happen first. **Delete this
-> note when the packages are live.**
+```bash
+git clone https://github.com/awslabs/tolap && cd tolap
+./tools/build-local.sh              # all three languages
+./tools/build-local.sh python       # or just one
+./tools/build-local.sh --artifacts  # build only, do not install
+```
+
+That produces the same artifacts a registry would serve -- wheels, npm tarballs and
+`.nupkg` files under `dist/` -- and installs them locally. A language whose toolchain is
+absent is skipped with a note rather than failing the run. The per-language steps are
+below if you would rather run them yourself.
 
 ### .NET
 
 ```bash
-dotnet add package Tolap.Core
-dotnet add package Tolap.Store
-dotnet add package Tolap.Mcp
+dotnet pack sdk/dotnet/src/Tolap.Core/Tolap.Core.csproj -c Release -o dist/nuget
+dotnet nuget add source "$PWD/dist/nuget" --name tolap-local
+```
+
+With that local feed registered, `dotnet add package Tolap.Core` resolves normally. Or
+skip packaging entirely and reference the projects directly:
+
+```xml
+<ProjectReference Include="path/to/tolap/sdk/dotnet/src/Tolap.Core/Tolap.Core.csproj" />
 ```
 
 | Package | Description |
@@ -157,9 +167,7 @@ dotnet add package Tolap.Mcp
 ### Python
 
 ```bash
-pip install tolap-core
-pip install tolap-store
-pip install tolap-mcp
+pip install ./sdk/python/tolap-core ./sdk/python/tolap-store ./sdk/python/tolap-mcp
 ```
 
 | Package | Description |
@@ -171,10 +179,14 @@ pip install tolap-mcp
 ### TypeScript
 
 ```bash
-npm install @aws/tolap-core
-npm install @aws/tolap-store
-npm install @aws/tolap-mcp
+cd sdk/typescript && npm ci
+# core first: store and mcp resolve it through packages/core/dist
+for pkg in core store mcp; do (cd "packages/$pkg" && npx tsc -p tsconfig.json); done
 ```
+
+The three are an npm workspace, so a dependent project can reference them by path
+(`file:../tolap/sdk/typescript/packages/core`), which is how [`examples/`](examples/) and
+[`server/`](server/) consume them.
 
 | Package | Description |
 |---------|-------------|
@@ -485,7 +497,7 @@ full list of what TOLAP does not guarantee.
 - [Canonical Enforcement Spec](docs/canonical-enforcement-spec.md) -- Normative cross-language behavior: canonical signing, enforcement pipeline order, fail-closed rules
 - [Connector Spec](docs/connector-spec.md) -- Normative per-category behavior: which policy fields apply to `db` / `api` / `kb` / `storage`, what an object and a record mean for each, and which fields are advisory rather than enforced
 - [Local Testing](docs/local-testing.md) -- Running the suites against live Postgres/MySQL and the test API server
-- [Releasing](docs/releasing.md) -- Publishing the nine packages to PyPI, npm and NuGet: registry setup, the version-agreement gate, and recovering a partial release
+- [Building locally](tools/build-local.sh) -- Builds and installs all nine SDK packages from source
 - [Integration examples](examples/) -- Fourteen integrations across Python, TypeScript and .NET (MCP SDK, Strands, LangChain, Vercel AI, Mastra, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents), each CI-tested to enforce the same policy identically
 - [Threat Model](docs/security/threat-model.md) -- STRIDE analysis per trust boundary, with the defects found and fixed since revision 1
 - [Testing Anti-Patterns](docs/testing-antipatterns.md) -- Six defects that shipped here while the suite was green, and the smell to grep for in each
