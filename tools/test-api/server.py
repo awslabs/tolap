@@ -152,6 +152,28 @@ STATUS_PATH = re.compile(r"^/status/(\d{3})$")
 # to a denied one must not bypass the endpoint rules (connector-spec.md section 6).
 REDIRECT_PATH = re.compile(r"^/redirect/(30[1278])$")
 
+# A permitted `?to=` value: one leading slash, then path/query/fragment characters
+# from the unreserved and sub-delims sets. CR, LF, NUL and everything else outside
+# that set is excluded by construction rather than by enumeration, which is what makes
+# this checkable -- a denylist is only as good as the character list someone remembered.
+#
+# The second character may not be a slash: `//evil.com` is protocol-relative and would
+# leave this host.
+REDIRECT_TARGET = re.compile(r"/(?!/)[A-Za-z0-9\-._~!$&'()*+,;=:@%/?#]*")
+
+# One exception to host-relative, and it is load-bearing. All three SDK suites assert
+# that a *cross-origin* redirect is refused by the wrapper rather than re-globbed
+# against the policy's path rules -- and they need this server to actually emit one to
+# prove it. Hardening the fixture to host-relative only broke that test in every
+# language: the hop was refused here, so the SDK check under test never ran.
+#
+# Narrowed to loopback on the discard port, which is what those suites use and is
+# unroutable by design, so emitting it cannot reach anything. A general "absolute URLs
+# allowed" exception would reintroduce the open redirect this allowlist exists to close.
+REDIRECT_CROSS_ORIGIN_TEST_TARGET = re.compile(
+    r"http://127\.0\.0\.1:9(/[A-Za-z0-9\-._~/]*)?"
+)
+
 # /redirect-loop bounces to itself, so a wrapper that follows redirects without a hop
 # limit spins rather than failing.
 LOOP_PATH = "/redirect-loop"
@@ -252,17 +274,33 @@ class TestApiHandler(BaseHTTPRequestHandler):
             # permitted endpoint redirecting to one the policy denies.
             target = query.get("to", ["/admin/audit"])[0]
 
-            # A caller-supplied value goes into a response header, so CR and LF have
-            # to be refused: either one lets the caller end the header and write their
-            # own, which is header injection (CodeQL py/http-response-splitting).
+            # A caller-supplied value goes into a response header, so it is validated
+            # against an allowlist before it gets there.
+            #
+            # An allowlist rather than a CR/LF denylist, for two reasons. It is the
+            # stronger check: rejecting anything that is not a host-relative path also
+            # refuses `?to=https://evil.com`, an open redirect that a CR/LF filter
+            # happily forwards. And it is a form the scanner recognises -- a
+            # `any(c in target ...)` guard left py/http-response-splitting firing on
+            # the send_header below, correctly, since nothing proved the guard covered
+            # every injection character.
             #
             # Worth fixing even though this server binds loopback and exists only for
-            # tests. It is the redirect-handling fixture the SDK suites are written
-            # against, and a test fixture that models the vulnerable shape teaches the
-            # shape. Rejected rather than stripped: a sanitized redirect still sends
-            # the caller somewhere they did not ask for.
-            if any(c in target for c in "\r\n"):
-                self._send_json(400, {"error": "redirect target may not contain CR or LF"})
+            # tests: it is the redirect fixture the SDK suites are written against, and
+            # a fixture that models the vulnerable shape teaches the shape. Refused
+            # rather than sanitized -- a rewritten redirect still sends the caller
+            # somewhere they did not ask for.
+            #
+            # Every caller in the suites passes a host-relative path: `/admin/audit`,
+            # `/patients`, or a nested `/redirect/302?to=...` for the loop tests.
+            if not (
+                REDIRECT_TARGET.fullmatch(target)
+                or REDIRECT_CROSS_ORIGIN_TEST_TARGET.fullmatch(target)
+            ):
+                self._send_json(
+                    400,
+                    {"error": "redirect target must be a host-relative path"},
+                )
                 return
 
             body = json.dumps({"redirectedTo": target}).encode("utf-8")
