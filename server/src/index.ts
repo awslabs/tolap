@@ -67,18 +67,25 @@ export async function start(
     auditorGroup: config.auditorGroup,
   });
 
+  // The rate limits are passed here and nowhere else. A test that builds an app
+  // directly gets no in-process limiting, which is what it wants; a server started
+  // through this root always has it, whatever ingress sits in front.
   const admin = buildAdminApp({
     store,
     verifier,
     keyring: config.keyring,
     ttlSeconds: config.ttlSeconds,
     logLevel: config.logLevel,
+    rateLimit: config.adminRateLimit,
+    rateLimitWindowSeconds: config.rateLimitWindowSeconds,
   });
   const resolve = buildResolveApp({
     store,
     keyring: config.keyring,
     ttlSeconds: config.ttlSeconds,
     logLevel: config.logLevel,
+    rateLimit: config.resolveRateLimit,
+    rateLimitWindowSeconds: config.rateLimitWindowSeconds,
   });
 
   const adminUrl = await admin.listen({

@@ -18,6 +18,7 @@
     "@aws-sdk/client-secrets-manager": "^3.1105.0",
     "@aws/tolap-core": "file:../sdk/typescript/packages/core",
     "@aws/tolap-store": "file:../sdk/typescript/packages/store",
+    "@fastify/rate-limit": "^11.2.0",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "fastify": "^5.2.1",

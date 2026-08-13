@@ -19,6 +19,15 @@ on:
   # check them short of pushing an unrelated commit.
   workflow_dispatch:
 
+# Least privilege, stated rather than inherited. Every job here only checks out code and
+# runs tests, so read access to contents is the whole requirement. Without this block the
+# jobs inherit the repository default, which can be read-write for the whole token — and
+# these jobs install seven third-party agent frameworks from public registries, so a
+# compromised release in any one of them would run with whatever the default granted.
+# ci.yml already declares the same thing for the same reason.
+permissions:
+  contents: read
+
 jobs:
   python-examples:
     name: Python — seven frameworks, one policy

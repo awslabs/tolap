@@ -25,6 +25,14 @@ a false claim, so a broken transcript cannot be recorded as evidence.
 """
 
 from __future__ import annotations
+# CodeQL raises py/clear-text-logging-sensitive-data on the before/after prints below,
+# because it sees a field named `ssn` reaching stdout. That is exactly what this file is
+# for: showing that masking changed the value. The inputs are synthetic fixtures seeded by
+# tests/integration/schema.sql (111-22-3333 and friends), the output is a transcript
+# committed as review evidence, and nothing here runs in a deployment or touches real data.
+# The alerts are dismissed as false positives rather than suppressed in code, so the
+# reasoning lives in the alert history where a reviewer will look for it.
+
 
 import json as jsonlib
 import socket

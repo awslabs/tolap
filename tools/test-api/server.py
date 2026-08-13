@@ -251,6 +251,20 @@ class TestApiHandler(BaseHTTPRequestHandler):
             # Defaults to /admin/audit so the common case is the one that matters: a
             # permitted endpoint redirecting to one the policy denies.
             target = query.get("to", ["/admin/audit"])[0]
+
+            # A caller-supplied value goes into a response header, so CR and LF have
+            # to be refused: either one lets the caller end the header and write their
+            # own, which is header injection (CodeQL py/http-response-splitting).
+            #
+            # Worth fixing even though this server binds loopback and exists only for
+            # tests. It is the redirect-handling fixture the SDK suites are written
+            # against, and a test fixture that models the vulnerable shape teaches the
+            # shape. Rejected rather than stripped: a sanitized redirect still sends
+            # the caller somewhere they did not ask for.
+            if any(c in target for c in "\r\n"):
+                self._send_json(400, {"error": "redirect target may not contain CR or LF"})
+                return
+
             body = json.dumps({"redirectedTo": target}).encode("utf-8")
             self.send_response(int(match.group(1)))
             self.send_header("Location", target)

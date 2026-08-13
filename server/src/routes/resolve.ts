@@ -12,6 +12,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import Fastify from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import { parseSourceIdentity } from "@aws/tolap-core";
 import { AuthorizationError, requireInstall } from "../auth/guards.ts";
 import { IdentityLookupError } from "../auth/identity-source.ts";
@@ -34,6 +35,24 @@ export interface ResolveDeps {
    * control. See src/logging.ts.
    */
   readonly logLevel?: LogLevel;
+  /**
+   * Per-IP requests per window, applied in-process. Omitted disables it, which is what
+   * the tests want -- they issue many requests from one address.
+   *
+   * This exists alongside the edge WAF rate-based rule rather than instead of it,
+   * because the two fail differently. WAF sheds a flood before it reaches this process;
+   * in-process limiting cannot, since by the time Fastify counts a request it has
+   * already cost a connection and an event-loop turn. But WAF only protects a
+   * deployment that has WAF, and this server is meant to run behind any ingress --
+   * including none. Without a bound here, those deployments have none.
+   *
+   * It matters more on this port than on the admin one. Every artifact this endpoint
+   * returns is replayable for its whole TTL unless the consuming SDK configures a
+   * replay guard, which this server can neither enforce nor observe. The rate at which
+   * a stolen install credential can harvest signed policy is bounded here or nowhere.
+   */
+  readonly rateLimit?: number;
+  readonly rateLimitWindowSeconds?: number;
 }
 
 interface ResolveQuery {
@@ -155,12 +174,39 @@ export function buildResolveApp(deps: ResolveDeps): FastifyInstance {
       return reply.code(error.status).send({ error: error.message });
     }
 
+    // The rate limiter signals a refusal by throwing, so without this the catch-all
+    // below rewrites every 429 into a 500 -- the limiter would work and report itself
+    // as a server fault. Found by the test that asserts the status code rather than
+    // asserting the plugin is registered.
+    // Narrowed rather than cast: the handler's `error` is `unknown`, and reaching
+    // into it without a check is how a non-error throw becomes a crash in the
+    // handler that exists to prevent crashes.
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { statusCode?: unknown }).statusCode === 429
+    ) {
+      return reply.code(429).send({ error: "too many requests" });
+    }
+
     // Anything else is ours, not the caller's. Log it and say nothing: a stack
     // trace or a database error string in the response body tells an
     // unauthenticated caller about the server's internals.
     app.log.error(error);
     return reply.code(500).send({ error: "internal error" });
   });
+
+  if (deps.rateLimit !== undefined) {
+    void app.register(rateLimit, {
+      max: deps.rateLimit,
+      timeWindow: (deps.rateLimitWindowSeconds ?? 60) * 1000,
+      allowList: (request) => request.url === "/health",
+      // No `errorResponseBuilder` here, deliberately. It replaces the thrown error
+      // with a plain object carrying no `statusCode`, which the error handler below
+      // then cannot recognise as a 429 and rewrites to 500. The handler already owns
+      // response shaping on this port, so the flat body is built there instead.
+    });
+  }
 
   void app.register(resolveRoutes(deps));
   return app;

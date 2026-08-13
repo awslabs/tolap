@@ -29,6 +29,24 @@ const DEFAULT_TTL_SECONDS = 900;
  */
 const MAX_TTL_SECONDS = 3600;
 
+/**
+ * Per-IP request ceilings per window, in-process.
+ *
+ * Set well above any legitimate use and below what a scripted abuse loop wants. The
+ * console is the admin listener's only real client and makes a handful of calls per
+ * screen; 300/minute leaves room for a reviewer clicking quickly through a large
+ * catalog. An install polls `/v1/resolve` at most once per policy TTL -- 15 minutes
+ * by default -- so 60/minute tolerates a fleet behind one NAT address while still
+ * bounding a harvest loop.
+ *
+ * Deliberately not a defense against a distributed source: per-IP counting cannot be.
+ * WAF at the edge is the outer bound, and neither is a substitute for the credential
+ * checks that actually decide access.
+ */
+const DEFAULT_ADMIN_RATE_LIMIT = 300;
+const DEFAULT_RESOLVE_RATE_LIMIT = 60;
+const DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60;
+
 export interface ServerConfig {
   /**
    * How to reach the database.
@@ -63,6 +81,28 @@ export interface ServerConfig {
    * than formatting lines and dropping them, which is what the test suite wants.
    */
   readonly logLevel: LogLevel;
+  /**
+   * Per-IP request ceilings, one per listener, applied in-process.
+   *
+   * These are the inner bound, not the only one: the reference deployment also runs a
+   * WAF rate-based rule at the edge (`infra/lib/edge-stack.ts`). Both exist because
+   * they fail differently. WAF sheds a flood before it reaches this process, which
+   * in-process limiting cannot do -- by the time Fastify counts a request it has
+   * already cost a connection and an event-loop turn. But WAF only protects a
+   * deployment that has WAF, and this server is meant to be runnable behind any
+   * ingress, on a laptop, or in a container with nothing in front of it. Without an
+   * in-process bound those deployments have none at all.
+   *
+   * The resolve limit is the tighter of the two on purpose. That endpoint mints signed
+   * artifacts, and one is replayable for its whole TTL unless the consuming SDK
+   * configures a replay guard -- which this server cannot enforce and cannot verify.
+   * So the rate at which a stolen install credential can harvest policy is bounded
+   * here or nowhere.
+   */
+  readonly adminRateLimit: number;
+  readonly resolveRateLimit: number;
+  /** Window for both ceilings, in seconds. */
+  readonly rateLimitWindowSeconds: number;
 }
 
 /**
@@ -255,10 +295,35 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     );
   }
 
+  // Refused rather than clamped when nonsensical, for the same reason an over-large
+  // pagination limit is refused: a silently corrected security parameter reads as
+  // applied. Zero is rejected explicitly because "no requests allowed" is never what
+  // an operator meant, and it would take the server down in a way that looks like a
+  // bug rather than a setting.
+  const adminRateLimit = integer(env, "TOLAP_ADMIN_RATE_LIMIT", DEFAULT_ADMIN_RATE_LIMIT);
+  const resolveRateLimit = integer(env, "TOLAP_RESOLVE_RATE_LIMIT", DEFAULT_RESOLVE_RATE_LIMIT);
+  const rateLimitWindowSeconds = integer(
+    env,
+    "TOLAP_RATE_LIMIT_WINDOW_SECONDS",
+    DEFAULT_RATE_LIMIT_WINDOW_SECONDS,
+  );
+  for (const [name, value] of [
+    ["TOLAP_ADMIN_RATE_LIMIT", adminRateLimit],
+    ["TOLAP_RESOLVE_RATE_LIMIT", resolveRateLimit],
+    ["TOLAP_RATE_LIMIT_WINDOW_SECONDS", rateLimitWindowSeconds],
+  ] as const) {
+    if (value < 1) {
+      throw new Error(`${name} must be at least 1, got ${value}.`);
+    }
+  }
+
   return {
     database: loadDatabaseConfig(env),
     keyring,
     ttlSeconds,
+    adminRateLimit,
+    resolveRateLimit,
+    rateLimitWindowSeconds,
     port,
     // Loopback by default. A policy server that binds every interface the moment
     // it starts is reachable before an operator has decided it should be.

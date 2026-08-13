@@ -198,8 +198,37 @@ assignments.
 | `HOST` / `RESOLVE_HOST` | no | Default `127.0.0.1` |
 | `LOG_LEVEL` | no | Default `info`. One of `fatal`/`error`/`warn`/`info`/`debug`/`trace`/`silent`. An unrecognized value is rejected rather than defaulted |
 | `DATABASE_POOL_MAX` | no | Default 10, **per task**. Multiplied by the task count against one database — see [Capacity](#capacity-and-the-limit-that-bounds-it) |
+| `TOLAP_ADMIN_RATE_LIMIT` | no | Per-IP requests per window on the admin listener, default 300 |
+| `TOLAP_RESOLVE_RATE_LIMIT` | no | Per-IP requests per window on the resolve listener, default 60 |
+| `TOLAP_RATE_LIMIT_WINDOW_SECONDS` | no | Window for both, default 60 |
 
 \* One of the two signing forms is required.
+
+### Rate limiting sits in two places, and both matter
+
+The server applies a per-IP ceiling **in-process**, and the reference deployment also
+runs a WAF rate-based rule at the edge (`infra/lib/edge-stack.ts`, 2000 requests per 5
+minutes per IP). That is not redundancy; the two fail differently.
+
+WAF sheds a flood *before it reaches this process*, which in-process limiting cannot do
+— by the time Fastify counts a request it has already cost a connection and an
+event-loop turn, and this task also serves policy resolution, so the cost lands on every
+install as a denial. But WAF only protects a deployment that has WAF. This server is
+meant to run behind any ingress, in a container with nothing in front of it, or on a
+laptop; without an in-process bound those deployments have none at all.
+
+**The resolve ceiling is the tighter of the two deliberately.** Every artifact that
+endpoint returns is replayable for its whole TTL unless the consuming SDK configures a
+`ReplayGuard`, which this server can neither enforce nor observe. The rate at which a
+stolen install credential can harvest signed policy is bounded here or nowhere.
+
+`/health` is exempt on both listeners. A load balancer polls it at a frequency unrelated
+to abuse, and counting it means an over-eager health check can mark the task unhealthy
+and remove a server that was working.
+
+Neither bound is a defense against a distributed source — per-IP counting cannot be —
+and neither is a substitute for the credential checks that actually decide access. They
+bound abuse; the guards decide permission.
 
 **The signing key has no development default and the server refuses to start
 without one.** A default would be shared by every deployment that forgot to set

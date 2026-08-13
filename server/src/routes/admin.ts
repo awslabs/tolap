@@ -18,6 +18,7 @@
 
 import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import Fastify from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import { parseSourceIdentity, type PolicyAssignment, type PolicyDefinition } from "@aws/tolap-core";
 import { AdminAuthError, type AdminPrincipal } from "../auth/cognito.ts";
 import { IdentityLookupError } from "../auth/identity-source.ts";
@@ -56,6 +57,17 @@ export interface AdminDeps {
    * The composition root passes the configured level.
    */
   readonly logLevel?: LogLevel;
+  /**
+   * Per-IP requests per window. Omitted disables in-process limiting, which the tests
+   * want: they issue hundreds of requests from one address and would otherwise trip
+   * the ceiling and assert against a 429 instead of the behaviour under test.
+   *
+   * A deployment should set it. The composition root passes the configured value, so
+   * omission here means "a caller constructed this app directly", not "production has
+   * no limit".
+   */
+  readonly rateLimit?: number;
+  readonly rateLimitWindowSeconds?: number;
 }
 
 const actorOf = (principal: AdminPrincipal): Actor => ({
@@ -570,9 +582,34 @@ export function buildAdminApp(deps: AdminDeps): FastifyInstance {
         .code(422)
         .send({ error: "validation failed", errors: error.errors });
     }
+    // See the resolve handler: the rate limiter refuses by throwing, and without this
+    // the catch-all turns every 429 into a 500.
+    // Narrowed rather than cast: the handler's `error` is `unknown`, and reaching
+    // into it without a check is how a non-error throw becomes a crash in the
+    // handler that exists to prevent crashes.
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      (error as { statusCode?: unknown }).statusCode === 429
+    ) {
+      return reply.code(429).send({ error: "too many requests" });
+    }
     app.log.error(error);
     return reply.code(500).send({ error: "internal error" });
   });
+
+  // Registered before the routes so it wraps them. See ResolveDeps.rateLimit for why
+  // this exists alongside the edge WAF rule rather than instead of it.
+  if (deps.rateLimit !== undefined) {
+    void app.register(rateLimit, {
+      max: deps.rateLimit,
+      timeWindow: (deps.rateLimitWindowSeconds ?? 60) * 1000,
+      // `/health` is what a load balancer polls, at a frequency that has nothing to do
+      // with abuse. Rate-limiting it means an over-eager health check can mark the task
+      // unhealthy and take a working server out of service.
+      allowList: (request) => request.url === "/health",
+    });
+  }
 
   void app.register(adminRoutes(deps));
   return app;
