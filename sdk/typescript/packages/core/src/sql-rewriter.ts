@@ -59,7 +59,7 @@ import type {
   RowFilter,
 } from "./types.js";
 import { FilterOperator } from "./types.js";
-import { fieldNameMatches } from "./enforcement.js";
+import { fieldNameMatches, validateAccess } from "./enforcement.js";
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -106,6 +106,84 @@ export enum SqlDialect {
 
 /** What an omitted dialect selects. */
 export const DEFAULT_DIALECT = SqlDialect.Ansi;
+
+/**
+ * Where a database policy is applied: in the query, or only in the results.
+ *
+ * Both modes enforce the same policy and **return the same rows**. The difference is
+ * how much data the database is asked to produce, which is a resource decision rather
+ * than an access-control one. That equality is the whole safety argument for exposing
+ * the choice, and it is asserted against live PostgreSQL and MySQL rather than inferred.
+ *
+ * Deliberately two values, not three. A "rewrite only" mode that skipped the
+ * post-execution pass would be unsafe and is not offered, because two things have no SQL
+ * form at all:
+ *
+ * - **Masking.** No `SELECT` returns `[REDACTED]` or a salted hash, so a masked SSN
+ *   would come back in clear text.
+ * - **`contains`, `startsWith`, `matches`.** Not portably expressible, so the rewriter
+ *   declines to push them and reports them in {@link RewriteResult.unpushableFilters}.
+ *   The post pass is what enforces them.
+ *
+ * An enum with no name for the unsafe option cannot select it by accident.
+ */
+export enum SqlEnforcementMode {
+  /**
+   * Push row filters into `WHERE`, the result limit into `LIMIT`, and hidden columns out
+   * of the `SELECT`, then enforce on the results as well. The default.
+   *
+   * The database returns less data, which is the point — without it a large result set is
+   * fetched and materialized before being trimmed (threat model D2).
+   */
+  RewriteAndPost = "rewriteAndPost",
+  /**
+   * Leave the query untouched, byte for byte, and enforce entirely on the results.
+   *
+   * For integrators who will not have their SQL edited: a statement the rewriter's parser
+   * does not handle, a stored procedure, an ORM that owns its own SQL, or a reviewer who
+   * needs the query that ran to be the query they wrote. The cost is that the database
+   * returns rows and columns the post pass then discards.
+   *
+   * This skips the *rewrite*, not the checks. `canQuery`, `allowedObjects` and the
+   * refusal of a query naming a hidden field all still apply — declining to rewrite must
+   * never relax a denial.
+   */
+  PostOnly = "postOnly",
+}
+
+/**
+ * What an omitted mode selects.
+ *
+ * Rewriting is the better default: it is what the .NET SDK has always done, it reduces
+ * what the database produces, and it is safe because the post-execution pass runs
+ * identically either way.
+ */
+export const DEFAULT_ENFORCEMENT_MODE = SqlEnforcementMode.RewriteAndPost;
+
+/**
+ * Resolve a mode argument, failing closed on an unrecognized one.
+ *
+ * `undefined` means "omitted" and selects {@link DEFAULT_ENFORCEMENT_MODE}. A string is
+ * accepted for callers reading configuration.
+ *
+ * An unrecognized value throws rather than falling back. A typo like `"post-only"`
+ * silently selecting `RewriteAndPost` would rewrite SQL for an integrator who explicitly
+ * asked that it not be touched — the exact surprise this mode exists to prevent. Note
+ * that `dialect` resolution deliberately does the opposite and declines to rewrite,
+ * because there the fail-closed direction is "push nothing"; here it is "do not proceed".
+ */
+export function resolveEnforcementMode(
+  mode: SqlEnforcementMode | string | undefined,
+): SqlEnforcementMode {
+  if (mode === undefined) return DEFAULT_ENFORCEMENT_MODE;
+  if (mode === SqlEnforcementMode.RewriteAndPost || mode === SqlEnforcementMode.PostOnly) {
+    return mode;
+  }
+  const valid = Object.values(SqlEnforcementMode).join(", ");
+  throw new Error(
+    `unrecognized SQL enforcement mode ${JSON.stringify(mode)}; expected one of: ${valid}`,
+  );
+}
 
 /**
  * How a profile spells its row limit. `LIMIT n` is a suffix; `TOP n` is an infix that
@@ -1461,6 +1539,122 @@ export class SqlQueryRewriter {
   private diagnose(message: string): void {
     this.diagnostics?.(message);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Query preparation
+// ---------------------------------------------------------------------------
+
+/** The outcome of preparing a SQL query for execution under a policy. */
+export interface SqlQueryPreparation {
+  /** Whether the query may be executed at all. */
+  allowed: boolean;
+  /**
+   * The text to execute. When {@link allowed} is false this is the caller's original
+   * and MUST NOT be executed.
+   */
+  query: string;
+  denialReason?: string;
+  /** Whether {@link query} differs from the caller's original text. */
+  rewritten: boolean;
+  /**
+   * Row filters the database will NOT apply, which the post-execution pass must.
+   *
+   * In {@link SqlEnforcementMode.PostOnly} this is every filter in the policy, because
+   * none of them reached the database. Reporting only the operators the rewriter cannot
+   * express would tell a post-only caller their filters were pushed when the database
+   * never saw them.
+   */
+  unpushableFilters: RowFilter[];
+}
+
+/** Whether every row filter in the policy reached the database. */
+export function fullyPushedDown(prep: SqlQueryPreparation): boolean {
+  return prep.unpushableFilters.length === 0;
+}
+
+/**
+ * Run the pre-execution checks and, unless the mode says otherwise, rewrite a query.
+ *
+ * The counterpart to Python's `prepare_sql_query` and .NET's `PrepareSqlQuery`, added so
+ * the four steps an integrator needs happen in the same order in every SDK:
+ *
+ * 1. Refuse an empty query and a policy that cannot query at all.
+ * 2. Check the target object against `allowedObjects` / `hiddenObjects`. The name comes
+ *    from the query's own `FROM` clause when `objectName` is not given, so the rule
+ *    applies to the table the query actually reads.
+ * 3. Refuse a query referencing a hidden or non-allowed field, rather than silently
+ *    narrowing it.
+ * 4. Rewrite what remains, reporting the filters that could not be pushed.
+ *
+ * **The post-execution pipeline still MUST run on the results.** This function reduces
+ * what the database produces; it is not the enforcement boundary (spec section 4):
+ *
+ * ```ts
+ * const prep = prepareSqlQuery(sql, policy, { dialect: SqlDialect.Postgres });
+ * if (!prep.allowed) throw new Error(`Access denied: ${prep.denialReason}`);
+ * const rows = await run(prep.query);
+ * return applyResultPipeline(rows, policy);   // still mandatory
+ * ```
+ *
+ * Steps 1 to 3 run in **both** modes; only step 4 is skipped by
+ * {@link SqlEnforcementMode.PostOnly}. Declining to rewrite never relaxes a denial.
+ */
+export function prepareSqlQuery(
+  query: string,
+  policy: EffectivePolicy,
+  options: {
+    objectName?: string;
+    dialect?: SqlDialect | string;
+    mode?: SqlEnforcementMode | string;
+    rewriter?: SqlQueryRewriter;
+  } = {},
+): SqlQueryPreparation {
+  // Resolved first so an unrecognized mode throws before any work, rather than
+  // rewriting a query the caller asked not to be touched.
+  const mode = resolveEnforcementMode(options.mode);
+  const rewriter = options.rewriter ?? new SqlQueryRewriter();
+  const denied = (reason: string): SqlQueryPreparation => ({
+    allowed: false,
+    query,
+    denialReason: reason,
+    rewritten: false,
+    unpushableFilters: [],
+  });
+
+  if (query === undefined || query === null || query.trim() === "") {
+    return denied("query is empty");
+  }
+  if (policy.permissions?.canQuery !== true) {
+    return denied("query not permitted");
+  }
+
+  const target = options.objectName ?? rewriter.extractTableName(query);
+  if (target !== undefined) {
+    const access = validateAccess(target, policy);
+    if (!access.allowed) return denied(access.reason ?? "access denied");
+  }
+
+  if (!rewriter.validateQuery(query, policy)) {
+    return denied("query references fields you do not have permission to access");
+  }
+
+  if (mode === SqlEnforcementMode.PostOnly) {
+    return {
+      allowed: true,
+      query,
+      rewritten: false,
+      unpushableFilters: [...(policy.objectRules?.rowFilters ?? [])],
+    };
+  }
+
+  const result = rewriter.rewriteQuery(query, policy, options.dialect);
+  return {
+    allowed: true,
+    query: result.query,
+    rewritten: result.rewritten,
+    unpushableFilters: result.unpushableFilters,
+  };
 }
 
 // ---------------------------------------------------------------------------

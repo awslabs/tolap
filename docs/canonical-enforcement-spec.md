@@ -217,6 +217,37 @@ An SDK MAY additionally offer SQL query rewriting, which pushes row filters into
 the `SELECT` before the query runs. Rewriting is a **resource optimization, not an
 enforcement mechanism**:
 
+**The choice is named `SqlEnforcementMode` and has exactly two values.** All three SDKs
+expose it with the same wire values and the same default:
+
+| Value | Behaviour |
+|---|---|
+| `rewriteAndPost` | Rewrite, then run the post-execution pipeline. **The default in every SDK.** |
+| `postOnly` | Return the caller's query unchanged, byte for byte; the post-execution pipeline does all the work. |
+
+An SDK MUST NOT offer a third value that skips the post-execution pass. Masking has no SQL
+form, so a masked field would be returned in clear text, and the unpushable operators below
+would stop being enforced entirely. An enum with no name for that option cannot select it by
+accident.
+
+Both modes MUST return **identical results** for the same policy and the same data. An
+implementation whose results differ by mode has made the mode an access-control setting,
+which is the divergence this section exists to prevent; this MUST be tested by comparing the
+two modes against each other rather than by asserting each in isolation.
+
+`postOnly` skips the *rewrite*, not the *checks*. `canQuery`, the `allowedObjects` and
+`hiddenObjects` decision, and the refusal of a query naming a hidden or non-allowed field
+MUST all still apply. Declining to rewrite MUST NOT relax a denial.
+
+In `postOnly` an SDK MUST report **every** row filter as unpushed, not merely the ones it
+could not express: none of them reached the database, and a caller checking whether filters
+were pushed before executing a large query would otherwise be told they were.
+
+An unrecognized mode MUST fail loudly rather than selecting the default. This is the opposite
+of an unrecognized *dialect*, which declines to rewrite: for a dialect, "push nothing" is a
+safe reading, whereas silently rewriting for a caller who asked that their SQL not be touched
+is the exact surprise `postOnly` exists to prevent.
+
 - The post-execution pipeline MUST still run on the results, unchanged. An
   integrator who rewrites a query and skips the post pass is unprotected, because a
   rewriter cannot express every filter (see below) and cannot know whether the query

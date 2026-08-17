@@ -106,6 +106,78 @@ class SqlDialect(Enum):
     sqlserver = "sqlserver"
 
 
+class SqlEnforcementMode(Enum):
+    """Where a database policy is applied: in the query, or only in the results.
+
+    Both modes enforce the same policy and **return the same rows**. The difference is
+    how much data the database is asked to produce, which is a resource decision rather
+    than an access-control one. That equality is the whole safety argument for exposing
+    the choice at all, and it is asserted directly against live PostgreSQL and MySQL
+    rather than inferred -- see ``tests/integration/test_enforcement_mode_parity.py``.
+
+    Deliberately two values, not three. A "rewrite only" mode that skipped the
+    post-execution pass would be unsafe and is not offered, because two things have no
+    SQL form at all:
+
+    * **Masking.** No ``SELECT`` returns ``[REDACTED]`` or a salted hash, so a masked
+      SSN would come back in clear text.
+    * **``contains``, ``startsWith``, ``matches``.** Not portably expressible, so the
+      rewriter declines to push them and reports them in
+      :attr:`SqlQueryPreparation.unpushable_filters`. The post pass is what enforces
+      them.
+
+    An enum with no name for the unsafe option cannot select it by accident.
+    """
+
+    #: Push row filters into ``WHERE``, the result limit into ``LIMIT``, and hidden
+    #: columns out of the ``SELECT``, then enforce on the results as well. The default.
+    #: The database returns less data, which is the point -- without it a large result
+    #: set is fetched and materialized before being trimmed (threat model D2).
+    rewrite_and_post = "rewriteAndPost"
+
+    #: Leave the query untouched, byte for byte, and enforce entirely on the results.
+    #:
+    #: For integrators who will not have their SQL edited: a statement the rewriter's
+    #: parser does not handle, a stored procedure, an ORM that owns its own SQL, or a
+    #: reviewer who needs the query that ran to be the query they wrote. The cost is
+    #: that the database returns rows and columns the post pass then discards.
+    #:
+    #: This skips the *rewrite*, not the checks. ``canQuery``, ``allowedObjects`` and
+    #: the refusal of a query naming a hidden field all still apply -- declining to
+    #: rewrite must never relax a denial.
+    post_only = "postOnly"
+
+
+#: Selected when no mode is named. Rewriting is the better default: it is what the .NET
+#: SDK has always done, it reduces what the database produces, and it is safe because
+#: the post-execution pass runs identically either way.
+DEFAULT_ENFORCEMENT_MODE = SqlEnforcementMode.rewrite_and_post
+
+
+def _coerce_mode(mode: SqlEnforcementMode | str | None) -> SqlEnforcementMode:
+    """Resolve a mode argument, failing closed on an unrecognized one.
+
+    ``None`` means "omitted" and selects :data:`DEFAULT_ENFORCEMENT_MODE`. A string is
+    accepted for callers reading configuration, and matched against the enum values.
+
+    An unrecognized string raises rather than falling back to the default. A typo like
+    ``"post-only"`` (hyphen) silently selecting ``rewrite_and_post`` would rewrite SQL
+    for an integrator who explicitly asked that it not be touched, which is the exact
+    surprise this mode exists to prevent.
+    """
+    if mode is None:
+        return DEFAULT_ENFORCEMENT_MODE
+    if isinstance(mode, SqlEnforcementMode):
+        return mode
+    try:
+        return SqlEnforcementMode(mode)
+    except ValueError:
+        valid = ", ".join(m.value for m in SqlEnforcementMode)
+        raise ValueError(
+            f"unrecognized SQL enforcement mode {mode!r}; expected one of: {valid}"
+        ) from None
+
+
 #: How a profile spells its row limit. ``LIMIT n`` is a suffix; ``TOP n`` is an
 #: infix that binds to a single ``SELECT``, which is a structural difference
 #: rather than a token swap -- see :func:`_clamp_top`.
@@ -1585,6 +1657,7 @@ def prepare_sql_query(
     *,
     object_name: str | None = None,
     dialect: SqlDialect | str | None = None,
+    mode: SqlEnforcementMode | str | None = None,
 ) -> SqlQueryPreparation:
     """Run the pre-execution checks and rewrite a query for execution.
 
@@ -1605,6 +1678,12 @@ def prepare_sql_query(
     reports every filter in :attr:`SqlQueryPreparation.unpushable_filters`. The
     pre-execution *checks* above run either way -- declining to rewrite never
     relaxes a denial.
+
+    ``mode`` selects where the policy is applied. :attr:`SqlEnforcementMode.post_only`
+    returns the query untouched so enforcement happens entirely on the results; the
+    default :attr:`SqlEnforcementMode.rewrite_and_post` also pushes what it can into the
+    SQL. **Both return the same rows** -- the difference is how much data the database
+    produces. Steps 1 to 3 above run in both modes.
 
     **The post-execution pipeline still MUST run on the results.** This function
     reduces what the database produces; it is not the enforcement boundary
@@ -1628,6 +1707,10 @@ def prepare_sql_query(
     # a cycle if that ever changes.
     from tolap_core.enforcement import validate_access
 
+    # Resolved before anything else so an unrecognized mode raises rather than
+    # silently rewriting a query the caller asked not to be touched.
+    resolved_mode = _coerce_mode(mode)
+
     if not query or not query.strip():
         return SqlQueryPreparation.denied("query is empty", query)
 
@@ -1643,6 +1726,20 @@ def prepare_sql_query(
     if not validate_query(query, policy):
         return SqlQueryPreparation.denied(
             "query references fields you do not have permission to access", query
+        )
+
+    # Every check above runs in both modes. Only the rewrite below is optional.
+    if resolved_mode is SqlEnforcementMode.post_only:
+        # The caller's query, byte for byte. `unpushable_filters` reports every filter
+        # rather than the subset the rewriter could not express, because in this mode
+        # none of them reached the database -- an integrator checking
+        # `fully_pushed_down` before executing a large query must get False here.
+        return SqlQueryPreparation(
+            allowed=True,
+            query=query,
+            denial_reason=None,
+            rewritten=False,
+            unpushable_filters=list(policy.object_rules.row_filters),
         )
 
     rewritten = rewrite_query(query, policy, dialect=dialect)

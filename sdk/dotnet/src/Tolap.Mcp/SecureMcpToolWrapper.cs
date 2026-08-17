@@ -170,8 +170,12 @@ public sealed class SecureMcpToolWrapper
         string sql,
         string? objectName = null,
         ISqlQueryRewriter? rewriter = null,
-        SqlDialect? dialect = null)
+        SqlDialect? dialect = null,
+        SqlEnforcementMode? mode = null)
     {
+        // Resolved before any work so an out-of-range mode throws rather than rewriting a
+        // query the caller asked not to be touched.
+        var resolvedMode = SqlEnforcementModes.Resolve(mode);
         rewriter ??= new SqlQueryRewriter();
 
         if (string.IsNullOrWhiteSpace(sql))
@@ -199,6 +203,17 @@ public sealed class SecureMcpToolWrapper
         if (!rewriter.ValidateQuery(sql, policy))
         {
             return Refuse("query references fields you do not have permission to access", sql);
+        }
+
+        // Every check above runs in both modes. Only the rewrite below is optional.
+        if (resolvedMode == SqlEnforcementMode.PostOnly)
+        {
+            return new SqlQueryPreparation(
+                Allowed: true,
+                DenialReason: null,
+                Query: sql,
+                Rewritten: false,
+                UnpushableFilters: policy.ObjectRules?.RowFilters ?? []);
         }
 
         var rewritten = rewriter.RewriteQuery(sql, policy, dialect);
