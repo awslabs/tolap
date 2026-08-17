@@ -540,9 +540,9 @@ identically**. See [`examples/`](examples/).
 
 | Language | Frameworks | Tests |
 | --- | --- | --: |
-| [Python](examples/python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 42 |
-| [TypeScript](examples/typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 30 |
-| [.NET](examples/dotnet/) | MCP SDK, Semantic Kernel | 12 |
+| [Python](examples/python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 44 |
+| [TypeScript](examples/typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 33 |
+| [.NET](examples/dotnet/) | MCP SDK, Semantic Kernel | 17 |
 
 **TOLAP is not an MCP server and does not speak the MCP protocol.** It ships no JSON-RPC, no stdio
 transport, no `tools/list`, and declares no MCP dependency in any package. The `*-mcp` packages

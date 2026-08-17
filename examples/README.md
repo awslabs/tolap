@@ -4,9 +4,14 @@
 
 | Language | Frameworks | Tests |
 | --- | --- | --: |
-| [Python](python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 42 |
-| [TypeScript](typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 30 |
-| [.NET](dotnet/) | MCP SDK, Semantic Kernel | 12 |
+| [Python](python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 44 |
+| [TypeScript](typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 33 |
+| [.NET](dotnet/) | MCP SDK, Semantic Kernel | 17 |
+
+Each language also carries an **enforcement-mode example**, which is not a framework integration:
+it shows `SqlEnforcementMode` -- whether the policy is pushed into your SQL or applied only to the
+results -- and proves the two produce identical rows. Same policy and same output in all three
+languages. See the per-language READMEs.
 
 ## The one thing to understand
 
@@ -44,6 +49,12 @@ and requires the same enforced output, so a broken wiring stands out against its
 All three are mutation-verified — bypassing enforcement in the shared helper fails 30/42 (Python),
 20/30 (TypeScript) and 8/12 (.NET). The survivors are the paired controls, which assert the
 *source* returns more than the policy allows and are correctly insensitive to that change.
+
+Those ratios count the framework suites. The enforcement-mode tests call the mode API rather than
+the shared helper, so they were verified against the same mutation separately: bypassing
+`apply_result_pipeline` fails 14/24 in Python — the 12 framework assertions plus 2 of the 3
+enforcement-mode ones, which detect the bypass through the example's own output rather than merely
+exercising it.
 
 ## The one framework that differs
 
