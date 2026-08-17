@@ -67,7 +67,9 @@ from tolap_core.context import (
 )
 from tolap_core.sql_rewriter import (
     DEFAULT_DIALECT,
+    DEFAULT_ENFORCEMENT_MODE,
     SqlDialect,
+    SqlEnforcementMode,
     SqlQueryPreparation,
     build_condition,
     build_where_clause,
@@ -191,7 +193,9 @@ __all__ = [
     "write_operation_for_method",
     # SQL query rewriting (a resource optimization; never replaces the pipeline)
     "DEFAULT_DIALECT",
+    "DEFAULT_ENFORCEMENT_MODE",
     "SqlDialect",
+    "SqlEnforcementMode",
     "SqlQueryPreparation",
     "build_condition",
     "build_where_clause",

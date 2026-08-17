@@ -172,17 +172,37 @@ const enforced = applyResultPipeline(rowsYouFetched, policy);
 For `db` sources, push what can be pushed into the SQL, then run the pipeline anyway:
 
 ```typescript
-import { validateAccess, SqlQueryRewriter, SqlDialect } from "@aws/tolap-core";
+import { prepareSqlQuery, applyResultPipeline, SqlDialect } from "@aws/tolap-core";
 
-function prepare(sql: string, policy: EffectivePolicy): { allowed: boolean; sql: string } {
-  // The object check comes first and is separate: a rewrite cannot express
-  // "this table is not yours".
-  const decision = validateAccess("patients", policy);
-  if (!decision.allowed) return { allowed: false, sql };
-  const rewriter = new SqlQueryRewriter({ dialect: SqlDialect.Postgres });
-  return { allowed: true, sql: rewriter.rewriteQuery(sql, policy).query };
-}
+// prepareSqlQuery runs the pre-execution checks in order -- canQuery, the object rule, the
+// hidden-field refusal -- and then rewrites unless the mode says otherwise.
+const prep = prepareSqlQuery(sql, policy, { dialect: SqlDialect.Postgres });
+if (!prep.allowed) throw new Error(`Access denied: ${prep.denialReason}`);
+
+const rows = await runOnYourConnection(prep.query);
+return applyResultPipeline(rows, policy);   // still mandatory
 ```
+
+### Choosing where the policy is applied
+
+`SqlEnforcementMode` decides whether TOLAP touches your SQL. `RewriteAndPost` is the default
+and pushes what it can into the query; `PostOnly` leaves it byte for byte and enforces
+entirely on the rows returned:
+
+```typescript
+import { SqlEnforcementMode } from "@aws/tolap-core";
+
+const prep = prepareSqlQuery(sql, policy, {
+  dialect: SqlDialect.Postgres,
+  mode: SqlEnforcementMode.PostOnly,   // my SQL, untouched
+});
+```
+
+**Both modes return the same rows.** Choose `PostOnly` when you will not have your SQL
+edited — a statement the rewriter's parser does not handle, a stored procedure, or an ORM
+that owns its own SQL. The cost is that the database returns rows the post pass then
+discards; `fullyPushedDown(prep)` tells you whether the database is doing all the filtering.
+`PostOnly` skips the rewrite, not the checks.
 
 Pass the dialect explicitly. It is not cosmetic: MySQL reads `"status"` as a *string literal*,
 so a Postgres-quoted filter is always true there and the filter fails **open**.

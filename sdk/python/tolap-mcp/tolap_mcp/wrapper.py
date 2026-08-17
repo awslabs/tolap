@@ -17,6 +17,7 @@ from tolap_core.enforcement import (
 )
 from tolap_core.enums import WriteOperation
 from tolap_core.models import EffectivePolicy, SecurityContext
+from tolap_core.sql_rewriter import SqlDialect, SqlEnforcementMode
 
 from tolap_mcp.options import SecureMcpServerOptions
 
@@ -258,6 +259,71 @@ class SecureMcpToolWrapper:
             return results
 
         return apply_result_pipeline(results, policy, self._options.hash_salt)
+
+    def execute_sql_with_enforcement(
+        self,
+        context: SecurityContext,
+        sql: str,
+        execute: Callable[[str], Any],
+        *,
+        object_name: str | None = None,
+        dialect: SqlDialect | str | None = None,
+        mode: SqlEnforcementMode | str | None = None,
+    ) -> Any:
+        """Run a SQL query under a policy, enforcing before and after execution.
+
+        The SQL-aware counterpart to :meth:`execute_with_enforcement`, which is generic
+        and never touches the query. Added so the enforcement mode is reachable the same
+        way in every SDK: .NET has had ``ExecuteSqlWithEnforcementAsync`` since the first
+        release, and its absence here was why the three SDKs disagreed about whether
+        rewriting happens by default.
+
+        ``execute`` receives the query to run -- rewritten or not, depending on ``mode``
+        -- and returns its rows. TOLAP never holds a connection, so fetching stays yours:
+
+            rows = wrapper.execute_sql_with_enforcement(
+                ctx,
+                "SELECT id, email FROM patients",
+                lambda q: cursor.execute(q).fetchall(),
+                dialect=SqlDialect.postgres,
+            )
+
+        ``mode`` selects where the policy is applied.
+        :attr:`~tolap_core.SqlEnforcementMode.post_only` leaves your query byte-for-byte
+        untouched and enforces entirely on the rows that come back; the default
+        :attr:`~tolap_core.SqlEnforcementMode.rewrite_and_post` also pushes row filters,
+        the limit and the projection into the SQL so the database returns less.
+
+        **Both modes return the same rows.** The post-execution pipeline runs in both and
+        is the enforcement boundary; rewriting only reduces what the database produces.
+
+        Raises ``PermissionError`` if the query is denied -- which happens in either mode,
+        since ``canQuery``, ``allowedObjects`` and the refusal of a query naming a hidden
+        field are checked before the mode is consulted.
+        """
+        # Imported here rather than at module scope so `import tolap_mcp` does not pull
+        # in the rewriter for the many integrators who never query SQL.
+        from tolap_core.sql_rewriter import prepare_sql_query
+
+        # The wrapper's own check, not the bare `validate_context`: this one carries the
+        # signing key and honours `enforce_signatures` / `enforce_expiry`, so a deployment
+        # that has deliberately relaxed either is not silently overridden here. Calling the
+        # module-level function directly also fails outright -- it requires the key.
+        ctx_result = self.validate_security_context(context)
+        if not ctx_result.allowed:
+            raise PermissionError(f"Access denied: {ctx_result.reason}")
+
+        prep = prepare_sql_query(
+            sql,
+            context.effective_policy,
+            object_name=object_name,
+            dialect=dialect,
+            mode=mode,
+        )
+        if not prep.allowed:
+            raise PermissionError(f"Access denied: {prep.denial_reason}")
+
+        return self.post_execute(context, execute(prep.query))
 
     def execute_with_enforcement(
         self,

@@ -143,6 +143,15 @@ export {
   SqlDialect,
   DEFAULT_DIALECT,
   MAX_QUERY_LENGTH,
+  // Which of the two enforcement points a caller wants. Both return the same rows;
+  // the mode decides how much data the database produces. There is deliberately no
+  // rewrite-only value -- see SqlEnforcementMode.
+  SqlEnforcementMode,
+  DEFAULT_ENFORCEMENT_MODE,
+  resolveEnforcementMode,
+  prepareSqlQuery,
+  fullyPushedDown,
+  type SqlQueryPreparation,
   type RewriteResult,
   type RewriteDiagnostics,
   type SqlRewriterOptions,

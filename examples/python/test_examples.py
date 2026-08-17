@@ -156,3 +156,62 @@ class TestEveryFrameworkEnforcesIdentically:
 
         with pytest.raises(error):
             call("encounters")
+
+
+class TestEnforcementModeExample:
+    """The enforcement-mode example, executed rather than trusted.
+
+    An example nothing runs will drift; one that mis-wires enforcement teaches people to
+    bypass it. This runs the script's own functions and asserts the property the script
+    claims -- that the two modes agree -- so a regression in either path fails here rather
+    than in a reader's terminal.
+    """
+
+    def test_both_modes_return_identical_rows(self) -> None:
+        from enforcement_mode_example import (
+            SqlEnforcementMode,
+            SecureMcpServerOptions,
+            SecureMcpToolWrapper,
+            SIGNING_KEY,
+            build_security_context,
+            policy,
+            run,
+            sign_context,
+        )
+
+        context = sign_context(
+            build_security_context("user-123", "tenant-acme", [policy()]), SIGNING_KEY
+        )
+        wrapper = SecureMcpToolWrapper(SecureMcpServerOptions(signing_key=SIGNING_KEY))
+
+        rewritten_prep, rewritten_db, rewritten = run(
+            context, wrapper, SqlEnforcementMode.rewrite_and_post
+        )
+        post_prep, post_db, post_only = run(context, wrapper, SqlEnforcementMode.post_only)
+
+        assert rewritten == post_only, "the example's central claim no longer holds"
+
+        # And the modes really did ask the database for different things -- otherwise the
+        # equality above would hold trivially.
+        assert rewritten_prep.rewritten is True
+        assert post_prep.rewritten is False
+        assert len(rewritten_db) < len(post_db)
+
+    def test_the_example_script_runs_clean(self) -> None:
+        """The script itself exits zero and prints the agreement line.
+
+        It raises SystemExit if the modes disagree, so this also covers that path.
+        """
+        import pathlib
+        import subprocess
+        import sys
+
+        script = pathlib.Path(__file__).parent / "enforcement_mode_example.py"
+        result = subprocess.run(
+            [sys.executable, str(script)], capture_output=True, text=True, timeout=60
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert "Both modes returned the SAME rows" in result.stdout
+        assert "[REDACTED]" in result.stdout
+        assert "ssn" not in result.stdout.split("Note what enforcement did")[0]

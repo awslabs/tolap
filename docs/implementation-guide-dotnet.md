@@ -179,18 +179,37 @@ For `db` sources, push what can be pushed into the SQL, then run the pipeline an
 ```csharp
 using Tolap.Core;
 
-public static (bool Allowed, string Sql) Prepare(string sql, EffectivePolicy policy)
-{
-    // The object check comes first and is separate: a rewrite cannot express "this table is
-    // not yours".
-    var decision = EnforcementEngine.ValidateAccess("patients", policy);
-    if (!decision.Allowed)
-        return (false, sql);
-
-    var rewriter = new SqlQueryRewriter(dialect: SqlDialect.Postgres);
-    return (true, rewriter.RewriteQuery(sql, policy));
-}
+// One call: pre-execution checks, then the rewrite unless the mode says otherwise.
+var rows = await wrapper.ExecuteSqlWithEnforcementAsync(
+    context,
+    new PreExecuteArgs("pg-query"),
+    "SELECT id, email FROM patients",
+    sql => RunOnYourConnection(sql),
+    dialect: SqlDialect.Postgres);
 ```
+
+### Choosing where the policy is applied
+
+`SqlEnforcementMode` decides whether TOLAP touches your SQL. `RewriteAndPost` is the default
+and pushes what it can into the query; `PostOnly` leaves it byte for byte and enforces
+entirely on the rows returned:
+
+```csharp
+var rows = await wrapper.ExecuteSqlWithEnforcementAsync(
+    context, args, sql, execute,
+    dialect: SqlDialect.Postgres,
+    mode: SqlEnforcementMode.PostOnly);   // my SQL, untouched
+```
+
+**Both modes return the same rows.** Choose `PostOnly` when you will not have your SQL
+edited — a statement the rewriter's parser does not handle, a stored procedure, or an ORM
+that owns its own SQL. The cost is that the database returns rows the post pass then
+discards. `PostOnly` skips the rewrite, not the checks: `canQuery`, `allowedObjects` and the
+hidden-field refusal all still apply.
+
+If you need the prepared query rather than the whole execute, `PrepareSqlQuery` takes the
+same `mode` and hands back `SqlQueryPreparation` — check `.Allowed` before executing
+`.Query`, and `.FullyPushedDown` to learn whether the database will do all the filtering.
 
 The rewrite is an **optimization**, never a replacement. It deliberately does not expand
 `SELECT *`, because doing so would require knowing the table's real columns — which needs a

@@ -328,6 +328,13 @@ rows return even when the column never appears in the output.
 out of `SELECT`. A resource optimization governed by enforcement spec §4 — never a
 replacement for the post pass.
 
+Selected with `SqlEnforcementMode`, which has two values in every SDK: `rewriteAndPost`
+(the default) and `postOnly`, which returns the caller's query untouched. Both MUST return
+identical results — the mode decides how much data the source produces, never what the
+caller may see. `postOnly` skips the rewrite, not the pre-execution checks, and MUST report
+every row filter as unpushed since none reached the source. There is no third value that
+skips the post pass; see enforcement spec §4.
+
 ### Write path
 
 - `readOnly` MUST block mutating **statements**, not merely mutating HTTP methods. A tool

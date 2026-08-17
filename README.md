@@ -87,12 +87,35 @@ One policy schema covers all source types. No category-specific schemas.
 Enforcement is applied to results **after** the tool executes — that pass is the
 security boundary and always runs. The agent never receives an excluded row.
 
-For SQL sources the .NET SDK additionally offers **optional query rewriting**, which
-pushes row filters into a `WHERE` clause and the result limit into a `LIMIT` so the
-database returns less data. That is a resource optimization, not the enforcement: the
-post-execution pass still runs, because some filters have no portable SQL form. Without
-rewriting, a large result set is fetched and then trimmed, so push limits into your own
-queries when a collection may be large.
+### For SQL sources, you choose where the policy is applied
+
+All three SDKs can restrict database results in two places, and you pick which with
+`SqlEnforcementMode`:
+
+| Mode | What happens |
+|---|---|
+| **`rewriteAndPost`** (default) | TOLAP pushes row filters into a `WHERE` clause, the result limit into a `LIMIT`, and hidden columns out of the `SELECT`, so the database returns less data. Enforcement still runs on the results. |
+| **`postOnly`** | Your query runs byte for byte as written. Enforcement happens entirely on the rows that come back. |
+
+**Both modes return the same rows.** The mode is a resource decision, not an
+access-control one — which is what makes it safe to expose. It is asserted directly against
+live PostgreSQL and MySQL rather than assumed.
+
+Choose `postOnly` when you will not have your SQL edited: a statement the rewriter's parser
+does not handle, a stored procedure, an ORM that owns its own SQL, or a reviewer who needs
+the query that ran to be the query they wrote. The cost is that the database returns rows
+and columns the post pass then discards, so push limits into your own queries when a
+collection may be large.
+
+**There is deliberately no rewrite-only mode**, because the post-execution pass is the
+enforcement boundary and two things have no SQL form at all. Masking is one — no `SELECT`
+returns `[REDACTED]` or a salted hash. The `contains`, `startsWith` and `matches` operators
+are the other: not portably expressible, so the rewriter declines to push them and reports
+them in `unpushableFilters`. Skipping the post pass would return unmasked values *and* rows
+the policy excludes.
+
+See [`examples/python/enforcement_mode_example.py`](examples/python/enforcement_mode_example.py)
+for a runnable side-by-side comparison.
 
 ## How It Works
 

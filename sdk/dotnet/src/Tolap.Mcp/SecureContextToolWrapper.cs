@@ -255,8 +255,12 @@ public sealed class SecureContextToolWrapper
         PreExecuteArgs args,
         string sql,
         ISqlQueryRewriter? rewriter = null,
-        SqlDialect? dialect = null)
+        SqlDialect? dialect = null,
+        SqlEnforcementMode? mode = null)
     {
+        // Resolved before any work so an out-of-range mode throws rather than rewriting a
+        // query the caller asked not to be touched.
+        var resolvedMode = SqlEnforcementModes.Resolve(mode);
         rewriter ??= new SqlQueryRewriter();
 
         if (string.IsNullOrWhiteSpace(sql))
@@ -287,6 +291,21 @@ public sealed class SecureContextToolWrapper
         {
             return SqlQueryPreparation.Denied(
                 "query references fields you do not have permission to access", sql);
+        }
+
+        // Every check above runs in both modes. Only the rewrite below is optional.
+        if (resolvedMode == SqlEnforcementMode.PostOnly)
+        {
+            // The caller's query, byte for byte. UnpushableFilters reports EVERY filter
+            // rather than the subset the rewriter could not express, because in this mode
+            // none of them reached the database -- a caller checking FullyPushedDown before
+            // executing a large query must get false here.
+            return new SqlQueryPreparation(
+                Allowed: true,
+                DenialReason: null,
+                Query: sql,
+                Rewritten: false,
+                UnpushableFilters: policy.ObjectRules?.RowFilters ?? []);
         }
 
         var rewritten = rewriter.RewriteQuery(sql, policy, dialect);
@@ -325,9 +344,10 @@ public sealed class SecureContextToolWrapper
         string sql,
         Func<string, Task<IReadOnlyList<Dictionary<string, object?>>>> execute,
         ISqlQueryRewriter? rewriter = null,
-        SqlDialect? dialect = null)
+        SqlDialect? dialect = null,
+        SqlEnforcementMode? mode = null)
     {
-        var prep = PrepareSqlQuery(context, args, sql, rewriter, dialect);
+        var prep = PrepareSqlQuery(context, args, sql, rewriter, dialect, mode);
         if (!prep.Allowed)
         {
             throw new UnauthorizedAccessException($"Access denied: {prep.DenialReason}");

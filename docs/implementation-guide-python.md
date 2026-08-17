@@ -206,6 +206,61 @@ service, `from_grammar` means it was written from published documentation and no
 accepted one. Treat `from_grammar` as unproven -- promoting two renderers out of that state
 exposed one fail-open each.
 
+### SQL sources: choosing where the policy is applied
+
+For a `db` source, `execute_sql_with_enforcement` runs the pre-execution checks, prepares the
+query, executes it through a function you supply, and applies the mandatory post pass:
+
+```python
+from tolap_core.sql_rewriter import SqlDialect
+
+rows = wrapper.execute_sql_with_enforcement(
+    context,
+    "SELECT id, email FROM patients",
+    lambda q: cursor.execute(q).fetchall(),
+    dialect=SqlDialect.postgres,
+)
+```
+
+`SqlEnforcementMode` decides whether TOLAP touches your SQL:
+
+| Mode | Behaviour |
+|---|---|
+| `rewrite_and_post` (default) | Pushes row filters into `WHERE`, the limit into `LIMIT`, hidden columns out of `SELECT`. The database returns less. |
+| `post_only` | Your query runs byte for byte; enforcement happens entirely on the rows returned. |
+
+```python
+from tolap_core.sql_rewriter import SqlEnforcementMode
+
+rows = wrapper.execute_sql_with_enforcement(
+    context, sql, execute,
+    dialect=SqlDialect.postgres,
+    mode=SqlEnforcementMode.post_only,   # my SQL, untouched
+)
+```
+
+**Both modes return the same rows** -- asserted against live PostgreSQL and MySQL, not
+assumed. The mode is a resource decision: it changes how much data the database produces,
+never what the caller may see.
+
+Choose `post_only` when you will not have your SQL edited: a statement the rewriter's parser
+does not handle, a stored procedure, an ORM that owns its own SQL, or a reviewer who needs the
+query that ran to be the query they wrote. The cost is that the database returns rows and
+columns the post pass then discards.
+
+`post_only` skips the *rewrite*, not the *checks*. `can_query`, `allowed_objects` and the
+refusal of a query naming a hidden field all still apply.
+
+If you need the prepared query rather than the whole execute, call `prepare_sql_query`
+directly -- it takes the same `mode`, and `prep.fully_pushed_down` tells you whether the
+database will do all the filtering. **The post pass is still mandatory** on whatever it
+returns.
+
+There is no rewrite-only mode. Masking has no SQL form, and `contains` / `starts_with` /
+`matches` cannot be pushed portably, so skipping the post pass would return unmasked values
+and rows the policy excludes. See
+[`examples/python/enforcement_mode_example.py`](../examples/python/enforcement_mode_example.py).
+
 ## Step 4: Use the Secure Tool Factory
 
 The SDK ships the factory: `SecureToolFactory` in `tolap_mcp`. It is the composition
