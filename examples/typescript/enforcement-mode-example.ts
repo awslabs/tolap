@@ -83,10 +83,12 @@ export function buildPolicy(): EffectivePolicy {
 }
 
 export function buildContext(): SecurityContext {
-  return signContext(
-    buildSecurityContext("user-123", "tenant-acme", [buildPolicy()]),
-    SIGNING_KEY,
-  );
+  // A single policy, not an array. The TypeScript SDK takes one and rejects an array
+  // outright, because a context governs exactly one data source -- unlike Python's
+  // `build_security_context`, which takes a list and normalizes it. Worth noting because the
+  // two look interchangeable when porting an example between languages, and only `tsc`
+  // catches the difference: running this file with `tsx` does not typecheck it.
+  return signContext(buildSecurityContext("user-123", "tenant-acme", buildPolicy()), SIGNING_KEY);
 }
 
 /**
