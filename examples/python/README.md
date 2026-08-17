@@ -14,6 +14,25 @@ its framework expects and routes the actual data access through the same functio
 | [`semantic_kernel_example.py`](semantic_kernel_example.py) | Semantic Kernel | `@kernel_function` body |
 | [`bedrock_agent_example.py`](bedrock_agent_example.py) | Bedrock Agents | action-group Lambda handler |
 
+## Not a framework integration: choosing where enforcement happens
+
+[`enforcement_mode_example.py`](enforcement_mode_example.py) is the one example here that is not about a framework. It shows
+`SqlEnforcementMode`, the choice of *where* a database policy is applied:
+
+- **`RewriteAndPost`** (the default) pushes row filters into `WHERE`, the limit into `LIMIT`, and
+  hidden columns out of `SELECT`, so the database returns less data.
+- **`PostOnly`** leaves your query byte for byte untouched and enforces entirely on the rows
+  returned -- for a statement the rewriter's parser does not handle, a stored procedure, an ORM
+  that owns its own SQL, or a reviewer who needs the query that ran to be the query they wrote.
+
+Run it and both modes print the **same single row**, from a database that returned 2 rows in one
+mode and 4 in the other. That equality is the reason the choice is safe to expose: the mode changes
+how much data the source produces, never what the caller may see.
+
+The same example exists in all three languages with the same policy and the same output, so a
+divergence between SDKs shows up as a different result rather than hiding behind
+separately-written expectations.
+
 ## Read this before the code
 
 **TOLAP is not an MCP server, and it does not speak the MCP protocol.** It ships no JSON-RPC, no

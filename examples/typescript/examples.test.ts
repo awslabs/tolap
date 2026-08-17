@@ -88,3 +88,56 @@ describe.each(Object.keys(FRAMEWORKS).sort())("%s", (name) => {
     await expect(async () => rowsFrom(invoke, "encounters")).rejects.toThrow();
   });
 });
+
+describe("enforcement-mode example", () => {
+  // An example nothing runs will drift; one that mis-wires enforcement teaches people to
+  // bypass it. This exercises the example's own functions and asserts the property it claims
+  // -- that the two modes agree -- so a regression in either path fails here rather than in a
+  // reader's terminal.
+
+  it("returns identical rows in both modes", async () => {
+    const mode = await import("./enforcement-mode-example.js");
+    const { SqlEnforcementMode } = await import("@aws/tolap-core");
+    const policy = mode.buildPolicy();
+
+    const rewritten = mode.run(policy, SqlEnforcementMode.RewriteAndPost);
+    const postOnly = mode.run(policy, SqlEnforcementMode.PostOnly);
+
+    expect(postOnly.final).toEqual(rewritten.final);
+
+    // And the modes really did ask the database for different things -- otherwise the equality
+    // above would hold trivially.
+    expect(rewritten.prep.rewritten).toBe(true);
+    expect(postOnly.prep.rewritten).toBe(false);
+    expect(postOnly.prep.query).toBe(mode.QUERY);
+    expect(rewritten.fromDatabase.length).toBeLessThan(postOnly.fromDatabase.length);
+  });
+
+  it("matches the Python example's enforced result", async () => {
+    // The two languages state the same expectation on purpose. A per-language expectation
+    // would let one SDK quietly return something else, because nothing would compare them.
+    const mode = await import("./enforcement-mode-example.js");
+    const { SqlEnforcementMode } = await import("@aws/tolap-core");
+
+    const { final } = mode.run(mode.buildPolicy(), SqlEnforcementMode.RewriteAndPost);
+
+    expect(final).toEqual([
+      { id: 1, name: "Alice Nguyen", region: "us-east", dob: "[REDACTED]" },
+    ]);
+  });
+
+  it("hides ssn and redacts dob in both modes", async () => {
+    const mode = await import("./enforcement-mode-example.js");
+    const { SqlEnforcementMode } = await import("@aws/tolap-core");
+    const policy = mode.buildPolicy();
+
+    for (const m of [SqlEnforcementMode.RewriteAndPost, SqlEnforcementMode.PostOnly]) {
+      const { final, fromDatabase } = mode.run(policy, m);
+      // The fake database really did return ssn, so its absence is enforcement rather than a
+      // fixture that never had it.
+      expect(fromDatabase.some((r) => "ssn" in r)).toBe(true);
+      expect(final.every((r) => !("ssn" in r))).toBe(true);
+      expect(final.every((r) => r["dob"] === "[REDACTED]")).toBe(true);
+    }
+  });
+});

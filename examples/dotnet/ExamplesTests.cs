@@ -1,3 +1,4 @@
+using Tolap.Core;
 using FluentAssertions;
 using Microsoft.SemanticKernel;
 using Xunit;
@@ -109,3 +110,68 @@ public class ExamplesTests
         kernel.Plugins.GetFunction("patients", "query_patients").Should().NotBeNull();
     }
 }
+
+/// <summary>
+/// The enforcement-mode example, executed rather than trusted.
+/// </summary>
+/// <remarks>
+/// An example nothing runs will drift; one that mis-wires enforcement teaches people to bypass it.
+/// These run the example's own methods and assert the property it claims — that the two modes agree
+/// — so a regression in either path fails here rather than in a reader's terminal.
+/// </remarks>
+public class EnforcementModeExampleTests
+{
+    [Fact]
+    public async Task BothModes_ReturnIdenticalRows()
+    {
+        var rewritten = await EnforcementModeExample.RunAsync(SqlEnforcementMode.RewriteAndPost);
+        var postOnly = await EnforcementModeExample.RunAsync(SqlEnforcementMode.PostOnly);
+
+        postOnly.Final.Should().BeEquivalentTo(rewritten.Final);
+
+        // And the modes really did ask the database for different things — otherwise the
+        // equality above would hold trivially.
+        rewritten.Prep.Rewritten.Should().BeTrue();
+        postOnly.Prep.Rewritten.Should().BeFalse();
+        postOnly.Prep.Query.Should().Be(EnforcementModeExample.Query);
+        rewritten.FromDatabase.Count.Should().BeLessThan(postOnly.FromDatabase.Count);
+    }
+
+    [Fact]
+    public async Task MatchesThePythonAndTypeScriptExamples()
+    {
+        // All three languages state the same expectation on purpose. A per-language expectation
+        // would let one SDK quietly return something else, because nothing would compare them.
+        var run = await EnforcementModeExample.RunAsync(SqlEnforcementMode.RewriteAndPost);
+
+        run.Final.Should().HaveCount(1);
+        run.Final[0]["id"].Should().Be(1);
+        run.Final[0]["name"].Should().Be("Alice Nguyen");
+        run.Final[0]["region"].Should().Be("us-east");
+        run.Final[0]["dob"].Should().Be("[REDACTED]");
+    }
+
+    [Theory]
+    [InlineData(SqlEnforcementMode.RewriteAndPost)]
+    [InlineData(SqlEnforcementMode.PostOnly)]
+    public async Task HidesSsnAndRedactsDob_InBothModes(SqlEnforcementMode mode)
+    {
+        var run = await EnforcementModeExample.RunAsync(mode);
+
+        // The fake database really did return ssn, so its absence is enforcement rather than a
+        // fixture that never had it.
+        run.FromDatabase.Should().Contain(r => r.ContainsKey("ssn"));
+        run.Final.Should().OnlyContain(r => !r.ContainsKey("ssn"));
+        run.Final.Should().OnlyContain(r => Equals(r["dob"], "[REDACTED]"));
+    }
+
+    [Fact]
+    public async Task TheExampleRunsCleanAndAgrees()
+    {
+        // RunExampleAsync throws if the modes disagree, so this covers that path too.
+        var act = async () => await EnforcementModeExample.RunExampleAsync();
+
+        await act.Should().NotThrowAsync();
+    }
+}
+
