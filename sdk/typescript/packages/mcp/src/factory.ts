@@ -49,6 +49,9 @@ import {
   validateExpiry,
   type ActionCategoryMap,
   type SecurityContext,
+  type Judge,
+  type JudgeOutcome,
+  type ToolCallHistory,
 } from "@aws/tolap-core";
 
 import {
@@ -138,6 +141,21 @@ export interface SecureToolFactoryOptions {
    * name.
    */
   httpActionCategories?: ActionCategoryMap;
+  /**
+   * Forwarded to {@link SecureContextToolWrapper}. The semantic judge (§15.4); unset, the
+   * wrapper's `preExecuteAsync` returns the deterministic verdict unchanged.
+   */
+  judge?: Judge;
+  /**
+   * Forwarded to {@link SecureContextToolWrapper}. The trajectory the judge reasons over. You
+   * own the instance and therefore its retention.
+   */
+  toolCallHistory?: ToolCallHistory;
+  /**
+   * Forwarded to {@link SecureContextToolWrapper}. Where an ambiguous verdict goes for review;
+   * unset, `escalate` denies.
+   */
+  escalationHandler?: (outcome: JudgeOutcome) => boolean | Promise<boolean>;
 }
 
 /**
@@ -238,6 +256,13 @@ export class SecureToolFactory {
         : {}),
       ...(this.options.toolActionCategories !== undefined
         ? { toolActionCategories: this.options.toolActionCategories }
+        : {}),
+      ...(this.options.judge !== undefined ? { judge: this.options.judge } : {}),
+      ...(this.options.toolCallHistory !== undefined
+        ? { toolCallHistory: this.options.toolCallHistory }
+        : {}),
+      ...(this.options.escalationHandler !== undefined
+        ? { escalationHandler: this.options.escalationHandler }
         : {}),
     };
     return new SecureContextToolWrapper(options);

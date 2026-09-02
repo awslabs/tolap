@@ -19,9 +19,11 @@ the predictable outcome is a deployment where the judge runs with a window and
 thresholds nobody chose, and where the policy's ``model`` is quietly ignored: a
 control the configuration implies and that never runs.
 
-The wrappers deliberately do **not** call any of this. The judge is opt-in glue: it
-needs a network client, an escalation destination and a retention decision about
-tool-call history, none of which a wrapper can assume.
+The wrappers call :func:`evaluate_judge` for you when a judge is configured:
+``pre_execute`` runs the deterministic checks and then the gate, so a policy's judge
+block applies without glue of yours. Call it directly only if you are not using a
+wrapper -- and render the call with ``render_tool_call`` if you do, so your history and
+a wrapper's stay comparable.
 """
 
 from __future__ import annotations

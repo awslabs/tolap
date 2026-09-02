@@ -470,7 +470,7 @@ section is the .NET wiring for them.
 | Resolution filtering | wherever you resolve | `PolicyResolutionEngine.Resolve(..., declaredPurpose)` |
 | Action validation | inside the wrapper, once a map is configured | `ToolActionCategories` / `HttpActionCategories` |
 | Delegation narrowing | before you build a context | `DelegationChainValidator.Validate` |
-| Semantic judge (opt-in) | your own glue, after the three above | `JudgeGate` plus an `IJudge` |
+| Semantic judge (opt-in) | `PreExecuteAsync`, after the three above | `Judge` + optional `ToolCallHistory` / `EscalationHandler` |
 
 The first three are in `Tolap.Core` and need nothing external. The judge needs a model, so it
 is glue you write.
@@ -741,6 +741,25 @@ recent trajectory rather than one call
 deterministic checks have already allowed a call and can only take that allowance away, which
 is what makes a manipulated verdict survivable.
 
+Set `Judge` on the wrapper options and call `PreExecuteAsync` instead of `PreExecute`; the
+wrapper runs the deterministic checks, then the gate, and the policy's `model`,
+`historyWindow`, thresholds and `maxLatencyMs` all apply without glue of yours. `PreExecute`
+stays synchronous and judge-free, so a deployment without one pays nothing.
+
+```csharp
+var wrapper = new SecureContextToolWrapper(new SecureContextWrapperOptions(
+    signingKey,
+    ToolActionCategories: toolMap,
+    Judge: new BedrockJudge(converseClient),
+    ToolCallHistory: history,                 // you own it, and its retention
+    EscalationHandler: async outcome => await ReviewQueue.AskAsync(outcome)));
+
+var pre = await wrapper.PreExecuteAsync(context, new PreExecuteArgs("segment_overlap"));
+```
+
+Without an `EscalationHandler`, `Escalate` denies. That is deliberate: a default of "permit"
+would make "escalate to human review" mean "allow" in every deployment that never built review.
+
 `Tolap.Mcp` keeps its zero runtime dependencies, so `BedrockJudge` talks to a one-method seam
 and you own the transport:
 
@@ -782,7 +801,9 @@ sealed class ConverseClient(IAmazonBedrockRuntime bedrock) : IBedrockConverseCli
 }
 ```
 
-Call it through `JudgeGate` rather than invoking the judge yourself. That is what makes the
+If you are **not** using a wrapper, call the judge through `JudgeGate` rather than invoking it
+yourself, and render the call with `SecureContextToolWrapper.RenderToolCall` so your history
+matches a wrapper's. That is what makes the
 policy's own `historyWindow`, `maxLatencyMs`, thresholds and `model` apply — left to per-call
 glue, the predictable outcome is a judge running with a window and thresholds nobody chose
 while the policy's `model` is quietly ignored:

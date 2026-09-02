@@ -237,6 +237,21 @@ wrapper cannot be forgotten in the factory.
   `removeAdditional: true`, so a typo'd `declaredPurposes` was deleted and the request resolved
   as though no purpose had been declared — deny-all against a purpose-scoped policy set, which
   is the quiet failure the routes already reject a *malformed* purpose to avoid.
+- **The wrappers run the semantic judge.** `JudgeGate` / `evaluate_judge` / `evaluateJudge`
+  had no wrapper call site, so a policy could configure a judge in full -- a model, a history
+  window, two thresholds, a latency budget -- and none of it applied unless the integrator
+  wrote the glue correctly. Set `Judge` / `judge` on the wrapper options and the gate runs
+  after the deterministic checks: `PreExecuteAsync` in .NET, `preExecuteAsync` in TypeScript,
+  and `pre_execute` itself in Python, whose `Judge.evaluate` is synchronous. The judge client,
+  `ToolCallHistory` and an escalation handler are wrapper options, inert when unset; the
+  history instance stays yours, because a tool call can carry the arguments a caller sent and
+  its retention is not a wrapper's decision. `escalate` still denies without a handler, and a
+  call the deterministic checks refused is never offered to the judge.
+- **The factory forwards the three new options**, and the TypeScript factory-parity guard now
+  derives its key tables from source. Its compile-time `Record<keyof Required<T>, true>` check
+  cannot fire, because every package's `tsconfig.json` excludes `tests` -- so the tables went
+  stale, the runtime assertions compared one stale table against another, and .NET's
+  reflective equivalent was what caught the dropped forwarding.
 - **`appliesToAll` has a control in the console.** It was the one schema field with no input,
   and it round-tripped invisibly. Because it short-circuits `sourcePatterns`, an author read the
   pattern list as the scope while the policy applied everywhere.

@@ -48,10 +48,12 @@ public sealed record JudgeOutcome(
 /// where the judge runs with a window and thresholds nobody chose, and where the policy's
 /// <c>model</c> is quietly ignored. That is a control the configuration implies and that never
 /// runs.</para>
-/// <para>The wrappers deliberately do <b>not</b> call this. The judge is opt-in glue: it needs a
-/// network client, an escalation destination and a retention decision about tool-call history,
-/// none of which a wrapper can assume. What this class provides is the part that would otherwise
-/// be re-derived, and got wrong, in every integration.</para>
+/// <para>The wrappers call this for you when a judge is configured:
+/// <see cref="SecureContextToolWrapper.PreExecuteAsync"/> runs the deterministic checks and
+/// then this, so a policy's judge block applies without any glue of yours. Call it directly
+/// only if you are not using a wrapper — and use
+/// <see cref="SecureContextToolWrapper.RenderToolCall"/> for the call string if you do, so your
+/// history and a wrapper's remain comparable.</para>
 /// <para>Strictly subtractive, like the judge itself. Every path returns
 /// <see cref="JudgeDisposition.Allow"/> only when the policy asked for a judge and the judge
 /// confidently agreed; everything else denies or escalates. It never permits a call the

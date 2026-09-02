@@ -58,12 +58,17 @@ GATED_FILES: tuple[str, ...] = (
     "judge.py",
     "history.py",
     "bedrock_judge.py",
+    # The judge's call string. In scope because it decides what a model is shown about a
+    # call, and because the wrapper and a hand-wired integration must render identically or
+    # their histories are not comparable.
+    "tool_call.py",
     # TypeScript
     "delegation.ts",
     "purpose-action.ts",
     "judge.ts",
     "history.ts",
     "bedrock-judge.ts",
+    "tool-call.ts",
 )
 
 

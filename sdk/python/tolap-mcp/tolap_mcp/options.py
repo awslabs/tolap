@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from tolap_core.history import ToolCallHistory
+    from tolap_core.judge import Judge, JudgeOutcome
+
 from dataclasses import dataclass, field
 
 from tolap_core.enums import SigningAlgorithm
@@ -66,4 +72,41 @@ class SecureMcpServerOptions:
 
     Consulted on every redirect hop, like every other rule there: a 307 to
     ``/export/all.csv`` is a different action from the ``GET`` that started the chain.
+    """
+
+    judge: "Judge | None" = None
+    """The semantic judge, enabling ``pre_execute`` to apply a policy's ``purposeProfile.judge``
+    block (spec section 15.4).
+
+    Unset, ``pre_execute`` behaves exactly as before -- a policy that asks for a judge with none
+    configured is **not** an error, because the deterministic checks have already run and the
+    judge can only subtract. Set it and the policy's ``model``, ``history_window``, thresholds
+    and ``max_latency_ms`` take effect without any glue of yours; a mismatch between the
+    policy's model and ``judge.model_id`` escalates before the call is issued.
+
+    Wired into ``pre_execute`` itself rather than a separate async entry point, unlike .NET and
+    TypeScript: :meth:`Judge.evaluate` is synchronous here, so there is nothing to await and a
+    second method would differ from this one only in name.
+    """
+
+    tool_call_history: "ToolCallHistory | None" = None
+    """The trajectory the judge reasons over.
+
+    **You** own the instance, and therefore its retention: tool calls can carry the arguments a
+    caller passed, so how long they live and where they are stored is a decision the wrapper
+    must not make for you. Trimmed to the policy's ``history_window`` on each call regardless of
+    how large it grows.
+
+    Unset, the judge sees only the current call -- enough for an obviously off-purpose request,
+    and not enough for drift, where each step is individually defensible and the sequence is
+    not.
+    """
+
+    escalation_handler: "Callable[[JudgeOutcome], bool] | None" = None
+    """Where an ambiguous verdict goes for review. Returns whether the call may proceed.
+
+    Unset, ``escalate`` is a **denial**. That is the point of the disposition: if escalation
+    defaulted to permitting, "escalate to human review" would silently mean "allow" in every
+    deployment that never built a review path -- a fail-open on exactly the cases the judge
+    exists to surface.
     """

@@ -86,7 +86,10 @@ public sealed record SecureToolFactoryOptions(
     bool AllowUnenforceableShapes = false,
     string? HashSalt = null,
     IReadOnlyDictionary<string, string>? ToolActionCategories = null,
-    IReadOnlyDictionary<string, string>? HttpActionCategories = null);
+    IReadOnlyDictionary<string, string>? HttpActionCategories = null,
+    IJudge? Judge = null,
+    ToolCallHistory? ToolCallHistory = null,
+    Func<JudgeOutcome, Task<bool>>? EscalationHandler = null);
 
 /// <summary>
 /// Secure Tool Factory — the composition root for policy-enforced tools
@@ -221,7 +224,10 @@ public sealed class SecureToolFactory
             AllowedTools: _options.AllowedTools,
             AllowUnenforceableShapes: _options.AllowUnenforceableShapes,
             HashSalt: _options.HashSalt,
-            ToolActionCategories: _options.ToolActionCategories));
+            ToolActionCategories: _options.ToolActionCategories,
+            Judge: _options.Judge,
+            ToolCallHistory: _options.ToolCallHistory,
+            EscalationHandler: _options.EscalationHandler));
 
     /// <summary>
     /// The HTTP wrapper for <c>api</c> sources. Requires a client.

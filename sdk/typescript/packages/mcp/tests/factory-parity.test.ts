@@ -30,6 +30,8 @@
  *    satisfies a denial assertion via the unclassified-tool rule, for the wrong reason.
  */
 
+import { readFileSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -61,6 +63,14 @@ const SALT = "deployment-salt-not-a-policy-field";
 // drift from the types they mirror without breaking the build -- which is the point.
 // A hand-written string array would silently go stale, which is how the two bugs above
 // survived.
+//
+// With one caveat that matters: a compile-time guard needs something to compile it, and
+// every package's `tsconfig.json` excludes `tests`. So when the judge options were added,
+// the tables went stale, the runtime assertions below compared one stale table against
+// another and passed, and .NET's reflective equivalent was what caught the dropped
+// forwarding. `optionNamesDeclaredIn` below closes that: it reads the option names out of
+// the source text, so staleness is a *runtime* failure here and does not depend on anyone
+// typechecking this file.
 
 const CONTEXT_WRAPPER_KEYS: Record<keyof Required<SecureContextWrapperOptions>, true> = {
   signingKey: true,
@@ -70,6 +80,9 @@ const CONTEXT_WRAPPER_KEYS: Record<keyof Required<SecureContextWrapperOptions>, 
   hashSalt: true,
   allowUnenforceableShapes: true,
   toolActionCategories: true,
+  judge: true,
+  toolCallHistory: true,
+  escalationHandler: true,
 };
 
 const HTTP_WRAPPER_KEYS: Record<keyof Required<SecureHttpWrapperOptions>, true> = {
@@ -92,6 +105,9 @@ const FACTORY_KEYS: Record<keyof Required<SecureToolFactoryOptions>, true> = {
   hashSalt: true,
   toolActionCategories: true,
   httpActionCategories: true,
+  judge: true,
+  toolCallHistory: true,
+  escalationHandler: true,
 };
 
 /**
@@ -102,6 +118,52 @@ const FACTORY_KEYS: Record<keyof Required<SecureToolFactoryOptions>, true> = {
  * keeps the parity assertion below strict: any other extra key is a finding.
  */
 const FACTORY_ONLY_KEYS = ["fetchFn"];
+
+/**
+ * The optional-property names declared on an interface, read from the source text.
+ *
+ * TypeScript interfaces do not exist at runtime, so the tables above are hand-written and
+ * kept honest by the compiler — which only helps if something compiles this file, and
+ * nothing does. Reading the names from source turns "the table went stale" into a failing
+ * test rather than a silent pass.
+ *
+ * Deliberately crude: it matches `name?:` and `name:` at one level of indentation inside the
+ * named interface block. That is the shape every option in these three interfaces has, and a
+ * parser sophisticated enough to handle shapes they do not use would be a parser with its own
+ * bugs and no test.
+ */
+function optionNamesDeclaredIn(file: string, interfaceName: string): string[] {
+  const source = readFileSync(resolvePath(__dirname, "..", "src", file), "utf-8");
+  const start = source.indexOf(`export interface ${interfaceName} {`);
+  if (start === -1) throw new Error(`${interfaceName} not found in ${file}`);
+
+  // The interface ends at the first line that is exactly "}" — the closing brace of the
+  // block, since nested object literals in these interfaces are indented.
+  const body = source.slice(start);
+  const end = body.indexOf("\n}\n");
+  if (end === -1) throw new Error(`unterminated ${interfaceName} in ${file}`);
+
+  const names = new Set<string>();
+  for (const line of body.slice(0, end).split("\n")) {
+    const match = /^ {2}([a-zA-Z][A-Za-z0-9]*)\??:/.exec(line);
+    if (match?.[1] !== undefined) names.add(match[1]);
+  }
+  return [...names].sort();
+}
+
+describe("the key tables mirror the interfaces they claim to", () => {
+  // Guards the guard. Every assertion below this file's tables is only as good as the
+  // tables, and nothing typechecks them.
+  it.each([
+    ["SecureContextWrapperOptions", "context-wrapper.ts", CONTEXT_WRAPPER_KEYS],
+    ["SecureHttpWrapperOptions", "http-wrapper.ts", HTTP_WRAPPER_KEYS],
+    ["SecureToolFactoryOptions", "factory.ts", FACTORY_KEYS],
+  ] as const)("%s", (interfaceName, file, table) => {
+    expect(optionNamesDeclaredIn(file, interfaceName)).toEqual(
+      Object.keys(table).sort(),
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures

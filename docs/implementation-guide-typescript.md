@@ -412,7 +412,7 @@ section is the TypeScript wiring for them.
 | Resolution filtering | wherever you resolve | `resolve(..., declaredPurpose)` |
 | Action validation | inside the wrapper, once a map is configured | `toolActionCategories` / `httpActionCategories` |
 | Delegation narrowing | before you build a context | `validateDelegationChain` |
-| Semantic judge (opt-in) | your own glue, after the three above | `evaluateJudge` plus a `Judge` |
+| Semantic judge (opt-in) | `preExecuteAsync`, after the three above | `judge` + optional `toolCallHistory` / `escalationHandler` |
 
 The first three are in `@aws/tolap-core` and need nothing external. The judge needs a model, so
 it is glue you write.
@@ -784,7 +784,29 @@ writable by administrators, and a caller-supplied template would let the subject
 write its own. Agent-influenced text -- the tool call and the history -- is fenced and labelled
 as data by the prompt builder.
 
-Run it through `evaluateJudge` rather than calling `judge.evaluate` yourself. That is what makes
+Set `judge` on the wrapper options and call `preExecuteAsync` instead of `preExecute`; the
+wrapper runs the deterministic checks, then the gate, and the policy's `model`, `historyWindow`,
+thresholds and `maxLatencyMs` all apply without glue of yours. `preExecute` stays synchronous
+and judge-free, so a deployment without one pays nothing.
+
+```typescript
+const wrapper = new SecureContextToolWrapper({
+  signingKey,
+  toolActionCategories: toolMap,
+  judge: new BedrockJudge(converseClient),
+  toolCallHistory: history,              // you own it, and its retention
+  escalationHandler: (outcome) => reviewQueue.ask(outcome),
+});
+
+const pre = await wrapper.preExecuteAsync(context, { toolName: "segment_overlap" });
+```
+
+Without an `escalationHandler`, `escalate` denies — a default of "permit" would make "escalate
+to human review" mean "allow" in every deployment that never built review.
+
+If you are **not** using a wrapper, run the judge through `evaluateJudge` rather than calling
+`judge.evaluate` yourself, and render the call with `renderToolCall` so your history matches a
+wrapper's. That is what makes
 the policy's own `historyWindow`, `maxLatencyMs`, thresholds and `model` apply -- left to
 per-call glue, the predictable outcome is a judge running with a window and thresholds nobody
 chose while the policy's `model` is quietly ignored:

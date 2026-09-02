@@ -432,7 +432,7 @@ section is the Python wiring for them.
 | Resolution filtering | wherever you resolve | `resolve(..., declared_purpose=...)` |
 | Action validation | inside the wrapper, once a map is configured | `tool_action_categories` / `http_action_categories` |
 | Delegation narrowing | before you build a context | `validate_delegation_chain` |
-| Semantic judge (opt-in) | your own glue, after the three above | `evaluate_judge` plus a `Judge` |
+| Semantic judge (opt-in) | `pre_execute`, after the three above | `judge` + optional `tool_call_history` / `escalation_handler` |
 
 The first three are in `tolap-core` and need nothing external. The judge needs a model, so it
 is glue you write.
@@ -784,7 +784,31 @@ caller-supplied: a policy is writable by administrators, and a caller-supplied t
 let the subject of the check write its own. Agent-influenced text -- the tool call and the
 history -- is fenced and labelled as data by the prompt builder.
 
-Run it through `evaluate_judge` rather than calling `judge.evaluate` yourself. That is what makes
+Set `judge` on the wrapper options and `pre_execute` runs it for you, after the deterministic
+checks; the policy's `model`, `history_window`, thresholds and `max_latency_ms` all apply
+without glue of yours. Unlike .NET and TypeScript there is no separate async entry point,
+because `Judge.evaluate` is synchronous here.
+
+```python
+wrapper = SecureMcpToolWrapper(
+    SecureMcpServerOptions(
+        signing_key=signing_key,
+        tool_action_categories=tool_map,
+        judge=BedrockJudge(converse_client),
+        tool_call_history=history,          # you own it, and its retention
+        escalation_handler=review_queue.ask,
+    )
+)
+
+result = wrapper.pre_execute(context, "segment_overlap")
+```
+
+Without an `escalation_handler`, `escalate` denies -- a default of "permit" would make
+"escalate to human review" mean "allow" in every deployment that never built review.
+
+If you are **not** using a wrapper, run the judge through `evaluate_judge` rather than calling
+`judge.evaluate` yourself, and render the call with `render_tool_call` so your history matches a
+wrapper's. That is what makes
 the policy's own `history_window`, `max_latency_ms`, thresholds and `model` apply -- left to
 per-call glue, the predictable outcome is a judge running with a window and thresholds nobody
 chose while the policy's `model` is quietly ignored:

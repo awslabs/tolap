@@ -1201,6 +1201,29 @@ no model accepts any judge, since model ids differ per account and region.
 Two policies naming different models cannot be merged and resolve to deny-all
 (§15.5): a verdict is only meaningful against the model that produced it.
 
+#### Where the judge MUST be invoked
+
+An implementation MUST offer an enforcement entry point that, when a judge is configured,
+runs the deterministic checks of §15.1–§15.3 and then the judge, applying the resolved
+policy's judge configuration. The judge MUST NOT be reachable only through glue an
+integrator writes: a control whose effect depends on every integration re-deriving the same
+sequence is a control the configuration implies and that does not reliably run.
+
+The sequence is normative. The judge MUST be consulted **only** for a call the deterministic
+checks allowed, and its verdict MUST NOT be able to permit one they refused. Consulting it
+about a refused call would make a persuasive prompt a privilege escalation, since the tool
+call and the history are agent-influenced text.
+
+Whether a judge is configured at all is a **deployment** decision, not a policy one: a policy
+that asks for a judge where none is wired MUST resolve to the deterministic verdict rather
+than an error, because those checks have already run and a judge could only have subtracted.
+A judge MUST NOT be invoked for a policy whose profile does not ask for one, so enabling a
+judge for one policy does not begin judging every other.
+
+Ownership of tool-call history MUST remain with the integrator: a call can carry the arguments
+a caller sent, so retention is theirs to decide. An implementation MUST accept a history
+rather than creating one it keeps.
+
 #### Conformance
 
 The judge is the one component here that **cannot** be pinned by the shared fixture

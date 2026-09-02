@@ -17,8 +17,10 @@ from tolap_core.enforcement import (
     validate_write,
 )
 from tolap_core.enums import WriteOperation
+from tolap_core.judge import JudgeDisposition, evaluate_judge
 from tolap_core.models import EffectivePolicy, SecurityContext
 from tolap_core.purpose_action import validate_tool_action
+from tolap_mcp.tool_call import render_tool_call
 from tolap_core.sql_rewriter import SqlDialect, SqlEnforcementMode
 
 from tolap_mcp.options import SecureMcpServerOptions
@@ -125,7 +127,72 @@ class SecureMcpToolWrapper:
         endpoint_path: str | None = None,
         endpoint_method: str | None = None,
     ) -> AccessResult:
-        """Pre-execution enforcement check."""
+        """Pre-execution enforcement check, then the semantic judge if one is configured.
+
+        The judge runs **only** if the deterministic checks allowed the call, so it can
+        only ever withdraw an allowance -- it is never asked to permit something the rules
+        refused. That is what makes prompt injection through the tool call survivable
+        rather than critical: the worst a manipulated verdict achieves is an allow that was
+        already granted.
+        """
+        deterministic = self._pre_execute_deterministic(
+            context,
+            tool_name,
+            object_name,
+            fields,
+            endpoint_path,
+            endpoint_method,
+        )
+
+        rendered = render_tool_call(
+            tool_name, object_name, fields, endpoint_path, endpoint_method
+        )
+        # Recorded whether or not the call is permitted. A refused call is part of the
+        # trajectory -- an agent probing for what it can reach is precisely the pattern the
+        # judge is meant to notice, and a history that kept only successes would hide it.
+        if self._options.tool_call_history is not None:
+            self._options.tool_call_history.record(rendered)
+
+        if not deterministic.allowed or self._options.judge is None:
+            return deterministic
+
+        return self._apply_judge(context, rendered)
+
+    def _apply_judge(self, context: SecurityContext, rendered: str) -> AccessResult:
+        """Consult the judge for a call the deterministic checks already allowed."""
+        assert self._options.judge is not None  # guarded by the caller
+        outcome = evaluate_judge(
+            context.effective_policy,
+            self._options.judge,
+            rendered,
+            self._options.tool_call_history,
+        )
+
+        if outcome.disposition is JudgeDisposition.allow:
+            return AccessResult(allowed=True)
+
+        # A review path exists, so the ambiguous case is its decision rather than a flat
+        # denial. Only ``escalate`` is routed there: sending a confident block to a review
+        # handler would let a deployment approve away the judge's clearest refusals.
+        if (
+            outcome.disposition is JudgeDisposition.escalate
+            and self._options.escalation_handler is not None
+        ):
+            if self._options.escalation_handler(outcome):
+                return AccessResult(allowed=True)
+
+        return AccessResult(allowed=False, reason=outcome.reason)
+
+    def _pre_execute_deterministic(
+        self,
+        context: SecurityContext,
+        tool_name: str,
+        object_name: str | None,
+        fields: list[str] | None,
+        endpoint_path: str | None,
+        endpoint_method: str | None,
+    ) -> AccessResult:
+        """The checks that need no network call, in their required order."""
         # Validate security context first
         ctx_result = self.validate_security_context(context)
         if not ctx_result.allowed:

@@ -569,4 +569,14 @@ class TestUnenforceableModeWarning:
             # the tool. Neither has a value that grants access a policy did not.
             "tool_action_categories",
             "http_action_categories",
+            # The semantic judge and its two companions (section 15.4). All three only ever
+            # *subtract*: unset, `pre_execute` returns the deterministic verdict unchanged;
+            # set, the judge is consulted only after that verdict was already an allow, and
+            # can only withdraw it. `escalation_handler` is the one to look at twice -- it
+            # can turn an `escalate` into an allow, but only for a call the deterministic
+            # rules permitted and only through a review path the deployment built on
+            # purpose. Absent it, `escalate` denies.
+            "judge",
+            "tool_call_history",
+            "escalation_handler",
         }

@@ -19,12 +19,13 @@
  * thresholds nobody chose and where the policy's `model` is quietly ignored: a
  * control the configuration implies and that never runs.
  *
- * The wrappers deliberately do **not** call this. A judge needs a network client, an
- * escalation destination, and a retention decision about tool-call history, none of
- * which a wrapper can assume. This module is the part that would otherwise be
- * re-derived, and got wrong, in every integration. An implementation that calls a
- * model lives in `@aws/tolap-mcp` (see `BedrockJudge`); `@aws/tolap-core` ships with
- * no runtime dependencies and a judge needs a transport.
+ * The wrappers call `evaluateJudge` for you when a judge is configured: `preExecuteAsync`
+ * runs the deterministic checks and then the gate, so a policy's judge block applies
+ * without glue of yours. Call it directly only if you are not using a wrapper — and render
+ * the call with `renderToolCall` if you do, so your history and a wrapper's stay
+ * comparable. An implementation that calls a model lives in `@aws/tolap-mcp` (see
+ * `BedrockJudge`); `@aws/tolap-core` ships with no runtime dependencies and a judge needs a
+ * transport.
  */
 
 import type {

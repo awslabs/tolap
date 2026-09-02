@@ -31,7 +31,20 @@ from tolap_core.models import (
 from tolap_core.purpose_action import UNDECLARED_CATEGORY_REASON
 from tolap_mcp.http_wrapper import SecureHttpToolWrapper
 from tolap_mcp.options import SecureMcpServerOptions
+from tolap_core.history import ToolCallHistory
+from tolap_core.judge import Judge, JudgeRequest, JudgeResult
 from tolap_mcp.wrapper import SecureMcpToolWrapper
+
+
+class _StubJudge(Judge):
+    """A judge that is never invoked; it exists so the option has a non-default value."""
+
+    @property
+    def model_id(self) -> str:
+        return "stub-model"
+
+    def evaluate(self, request: JudgeRequest) -> JudgeResult:  # pragma: no cover - unused
+        raise AssertionError("this stub must not be invoked")
 
 
 KEY = "purpose-wrapper-key"
@@ -434,6 +447,9 @@ class TestTheFactoryForwardsEveryOption:
             allow_unenforceable_shapes=True,
             tool_action_categories=TOOL_MAP,
             http_action_categories=HTTP_MAP,
+            judge=_StubJudge(),
+            tool_call_history=ToolCallHistory(max_size=4),
+            escalation_handler=lambda _outcome: False,
         )
         # Every field set to something distinguishable from its default, or a dropped option
         # would still compare equal.

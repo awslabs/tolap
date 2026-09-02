@@ -203,9 +203,15 @@ comparison is exact: `claude-sonnet` and `claude-sonnet-5` are different models,
 prefix rule would let a deployment satisfy a policy demanding one by wiring the other.
 
 A gate helper reads `historyWindow`, `maxLatencyMs` and the thresholds from the resolved
-policy. It is a helper rather than wrapper-integrated because a judge needs a network
-client, an escalation destination and a retention decision about tool-call history, none of
-which a wrapper can assume.
+policy, and the wrappers call it: `PreExecuteAsync` / `pre_execute` / `preExecuteAsync` run
+the deterministic checks and then the gate. The judge client, the tool-call history and an
+escalation handler are wrapper options, inert when unset — the same shape as `hashSalt` and the
+action-category maps, which is the argument against the earlier "a wrapper cannot assume a
+network client": it does not have to assume one, it takes one.
+
+Retention stays the integrator's: `ToolCallHistory` is an instance *they* own and pass in,
+because a tool call can carry the arguments a caller sent and how long that lives is not a
+decision a wrapper should make. `escalate` still denies unless a handler is wired.
 
 ### The envelope got the schema it never had
 
@@ -336,9 +342,11 @@ and the earlier draft of this section named four.
 - **Verifying that a declared purpose is honest.** Out of reach by construction: the caller
   asserts it. What is in reach, and done, is making the assertion tamper-evident and checking
   it against the policy set.
-- **Wrapper-integrated judging.** The judge stays opt-in glue behind a helper, because a
-  wrapper cannot assume a network client, an escalation destination, or a retention policy
-  for tool-call history.
+- **A judge on by default.** Wiring is a deployment decision: a judge adds a paid,
+  third-party round trip to the authorization path, so the wrapper runs one only when a
+  `judge` is configured *and* the policy asks for it. What is **not** out of scope any more is
+  the wiring itself — `JudgeGate` had no wrapper call site, which made a policy's judge block
+  depend on every integrator writing the same glue correctly.
 - **Inferring an action category from a path or a tool name.** The same reasoning
   connector-spec §6 gives for refusing to derive a resource name from a route: unspecified
   inference in an access-control decision. An administrator states the mapping.
