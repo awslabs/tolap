@@ -92,9 +92,8 @@ public static class DelegationChainValidator
     /// <c>campaign-x</c> admits <c>campaign-x-overlap</c> but <b>not</b>
     /// <c>campaign-xyz-evil</c>.</item>
     /// </list>
-    /// <para>The third rule exists because a plain prefix test — which is the obvious
-    /// implementation and what an earlier draft of this feature specified — accepts
-    /// <c>campaign-xyz-evil</c> under <c>campaign-x</c>. The two purposes are unrelated;
+    /// <para>The third rule exists because a plain prefix test — the obvious
+    /// implementation — accepts <c>campaign-xyz-evil</c> under <c>campaign-x</c>. The two purposes are unrelated;
     /// one merely starts with the other's characters. Requiring the boundary makes the
     /// prefix mean what a reader assumes it means.</para>
     /// <para>Case-sensitive, matching the purpose comparison at resolution, and unlike the

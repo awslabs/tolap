@@ -566,9 +566,8 @@ public sealed class SecureHttpToolWrapper
             }
         }
         // The delegation chain, if the context carries one (spec section 15.3). See
-        // SecureContextToolWrapper.ValidateSecurityContext for why this is here rather than
-        // left to the integrator: the validator had no call site at all, and the signature
-        // proves only that the chain was not modified, not that it is valid.
+        // SecureContextToolWrapper.ValidateSecurityContext for why the check belongs on the
+        // consuming side and after the signature.
         var chainResult = DelegationChainValidator.Validate(context.DelegationChain);
         if (!chainResult.Allowed)
         {

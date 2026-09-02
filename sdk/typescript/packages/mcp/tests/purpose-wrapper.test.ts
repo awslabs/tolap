@@ -580,10 +580,9 @@ describe("the two wrappers reach the same decision for the same category", () =>
 // ---------------------------------------------------------------------------
 
 /**
- * The defect this closes: `validateDelegationChain` had no call site outside its own tests,
- * so a context could be built, signed and accepted with a hop holding more authority than
- * the hop that delegated to it. The validator passed every test it had and enforced nothing
- * — testing-antipatterns.md §4, a gate that does not exist.
+ * Through the wrappers, not the validator: a validator nobody calls passes all of its own
+ * tests while enforcing nothing (testing-antipatterns.md §4). What is asserted here is that a
+ * context carrying a widened hop is actually refused at the point a call is made.
  */
 const WIDENING: DelegationHop[] = [
   { principalId: "analyst@example.test", principalType: PrincipalType.User, declaredPurpose: "campaign-x" },

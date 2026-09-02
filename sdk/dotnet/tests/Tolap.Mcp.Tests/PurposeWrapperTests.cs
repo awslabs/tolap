@@ -376,10 +376,10 @@ public class PurposeWrapperTests
     [Fact]
     public void ValidateSecurityContext_AWideningChain_IsDenied()
     {
-        // The defect this closes: `DelegationChainValidator` had no call site outside its own
-        // tests, so a context could be built, signed and accepted with a hop holding more
-        // authority than the hop that delegated to it. The validator passed every test it had
-        // and enforced nothing — testing-antipatterns.md section 4, a gate that does not exist.
+        // Through the wrapper, not the validator: a validator nobody calls passes all of its
+        // own tests while enforcing nothing (testing-antipatterns.md section 4). What is
+        // asserted here is that a context carrying a widened hop is actually refused at the
+        // point a call is made.
         var result = ContextWrapper(null).ValidateSecurityContext(SignedWithChain(WideningChain()));
 
         result.Allowed.Should().BeFalse();

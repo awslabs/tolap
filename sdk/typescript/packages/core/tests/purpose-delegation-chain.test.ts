@@ -9,7 +9,7 @@
  * plain prefix test.
  *
  * The mid-segment rule is the security-relevant one. A prefix test — the obvious
- * implementation, and what an earlier draft of this feature specified — lets
+ * implementation — lets
  * `campaign-x` authorize `campaign-xyz-evil`, two unrelated purposes one of which
  * merely starts with the other's characters.
  */

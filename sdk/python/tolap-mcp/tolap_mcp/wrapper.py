@@ -102,14 +102,14 @@ class SecureMcpToolWrapper:
 
                 # The delegation chain, if the context carries one (spec section 15.3).
         #
-        # Here rather than left to the integrator, because the validator had no call site at
-        # all: ``build_security_context`` *records* a chain and does not check one, so a context
-        # could be built, signed and accepted with a hop that widened its parent's purpose. The
-        # signature proved only that the chain had not been *modified* in transit, which is a
-        # different and weaker claim than the chain being valid.
+        # Validated here rather than in ``build_security_context``: a builder that validated
+        # would have to either raise -- making issuing brittle -- or drop the chain, which
+        # emits a context that looks delegated and is not. And the check is only meaningful
+        # *after* the signature, since the signature proves the chain was not modified in
+        # transit rather than that it is valid, and an unsigned chain can be rewritten by the
+        # principal it constrains.
         #
-        # After the signature deliberately: validating an unsigned chain checks the attacker's
-        # own arithmetic. Backward compatible -- an absent chain, or a single hop, is allowed.
+        # Backward compatible: an absent chain, or a single hop, is allowed.
         chain_result = validate_delegation_chain(context.delegation_chain)
         if not chain_result.allowed:
             return chain_result

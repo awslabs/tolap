@@ -99,17 +99,17 @@ public sealed class SecureContextToolWrapper
 
         // The delegation chain, if the context carries one (spec section 15.3).
         //
-        // Here rather than left to the integrator, because the validator had no call site at
-        // all: `SecurityContextBuilder` *records* a chain and does not check one, so a context
-        // could be built, signed and accepted with a hop that widened its parent's purpose. The
-        // signature proved only that the chain had not been *modified* in transit — which is a
-        // different claim from the chain being valid, and the weaker one.
+        // Validated here rather than left to the integrator, and here rather than in
+        // `SecurityContextBuilder`, for two reasons that pull the same way. A builder that
+        // validated would have to either throw -- making issuing brittle -- or drop the chain,
+        // which emits a context that looks delegated and is not; so the builder records and
+        // this side checks. And the check is only meaningful *after* the signature: the
+        // signature proves the chain was not modified in transit, which is a different and
+        // weaker claim than the chain being valid, and an unsigned chain can be rewritten by
+        // the principal it constrains.
         //
-        // After the signature deliberately. Validating an unsigned chain checks the attacker's
-        // own arithmetic, so the order is what makes this worth doing rather than theatre.
-        //
-        // Backward compatible: a context with no chain, or a single hop, is allowed, so every
-        // context predating this feature is unaffected.
+        // Backward compatible: a context with no chain, or a single hop, is allowed, so a
+        // caller that does not delegate is unaffected.
         var chainResult = DelegationChainValidator.Validate(context.DelegationChain);
         if (!chainResult.Allowed)
         {

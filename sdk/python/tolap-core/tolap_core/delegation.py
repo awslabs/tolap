@@ -86,7 +86,7 @@ def _is_within_scope(child_purpose: str, parent_purpose: str) -> bool:
        admits ``campaign-x-overlap`` but **not** ``campaign-xyz-evil``.
 
     The third rule exists because a plain prefix test -- the obvious implementation,
-    and what an earlier draft of this feature specified -- accepts
+    -- accepts
     ``campaign-xyz-evil`` under ``campaign-x``. The two purposes are unrelated; one
     merely starts with the other's characters. Requiring the boundary makes the prefix
     mean what a reader assumes it means.

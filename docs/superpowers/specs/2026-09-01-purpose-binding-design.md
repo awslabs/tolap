@@ -139,13 +139,12 @@ unclassifiable. The two arrays read in opposite directions, per §3.
 
 ### The chain is validated where it is used, not where it is built
 
-The validator shipped, was fixture-pinned in all three SDKs, and was correct — and had **no
-call site outside its own tests**. A context could be built, signed and accepted with a hop
-holding more authority than the hop that delegated to it. That is `testing-antipatterns.md`
-§4, a gate that silently does not exist, and it is the worst version of it: the tests all
-passed, so nothing looked wrong.
+A validator that nothing calls is `testing-antipatterns.md` §4 — a gate that silently does
+not exist — and it is the worst version of it, because its own tests all pass and nothing
+looks wrong. So the question of *where* the call goes is part of the design rather than a
+detail left to the integrator.
 
-The check went into every wrapper's context validation, beside the signature and expiry
+The check goes into every wrapper's context validation, beside the signature and expiry
 checks, rather than into the builder. Two reasons, pulling the same way:
 
 - A builder that validated would have to do something with an invalid chain. Throwing makes
@@ -163,9 +162,8 @@ The mutation check is what makes the wiring tests worth having: disabling the ca
 exactly three tests in each of the three SDKs, and the four allow-cases keep passing. A
 wrapper that denied every chain would satisfy the denial tests alone.
 
-This moved threat-model **E6** from *integrator responsibility* back to *Mitigated*, and
-replaced the "nothing calls the validator for you" limitation in all three implementation
-guides. The one residual is unchanged: chain depth is unbounded.
+Threat-model **E6** is *Mitigated* on this basis. The one residual: chain depth is
+unbounded.
 
 ### The judge can only subtract
 
@@ -189,11 +187,11 @@ confident allow.
 ### The policy's judge block has to actually apply
 
 `purposeProfile.judge` names a `model`, a `historyWindow`, a `maxLatencyMs` and two
-thresholds. In the first cut, none of them were read: the model came from whatever client
-the deployment injected, and the rest took effect only if the integrator's own glue happened
-to pass them through. A policy author could configure a judge in full and get a judge
-configured entirely differently, with no error — the same bug class as the HTTP map, found
-the same way.
+thresholds. Declaring them is not the same as applying them: without something that reads
+them, the model would come from whatever client a deployment injected and the rest would take
+effect only if the integrator's own glue happened to pass them through. A policy author could
+configure a judge in full and get a judge configured entirely differently, with no error —
+the same shape of problem as a tool-name-keyed HTTP map.
 
 So `IJudge` declares the model it invokes, and a mismatch against the policy's `model`
 escalates **before** the call. Invoking the wrong model and noticing afterwards has already
