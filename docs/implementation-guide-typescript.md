@@ -715,12 +715,11 @@ chain widens, whether or not you called the validator when you built it. Calling
 `validateDelegationChain` yourself, as shown above, buys you an early failure at the issuing end
 rather than a late one at the consuming end; it is not what makes the control effective.
 
-One limit to know:
-
-- **Chain depth is unbounded.** The validator walks whatever it is handed pairwise; neither it,
-  nor `DelegationHop`, nor `security-context.schema.json` caps the hop count. The only implicit
-  bound is the size of signed context you are willing to transport. Cap it yourself if the number
-  of hops is influenced by anything you do not control.
+Chain depth is **bounded** at `MAX_DELEGATION_HOPS` (10) hops, and the same ceiling is declared
+as `maxItems` on `delegationChain` in `security-context.schema.json`, so the schema and
+the validator agree rather than one standing in for the other. A longer chain is refused
+on its length before any hop is walked. Ten leaves generous room for an orchestrator or
+two: delegation depth is a property of your topology, not of a request.
 
 ### The judge, if you want one
 

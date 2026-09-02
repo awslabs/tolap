@@ -1089,6 +1089,15 @@ An absent, empty, or single-hop chain is allowed: there is no parent to widen ag
 This is what makes the requirement backward compatible — every context predating this
 section carries no chain.
 
+A chain MUST carry at most **10 hops**, and an implementation MUST refuse a longer one on
+its length **before** walking its hops, so an oversized structure costs one comparison
+rather than a traversal. The same ceiling is declared as `maxItems` on `delegationChain` in
+`security-context.schema.json`; the two MUST agree, and §14 checks that they do. Ten is
+chosen because delegation depth is a property of a deployment's topology rather than of a
+request, and real topologies are shallow — a human delegates to an agent, which delegates to
+a sub-agent — so ten leaves room for an orchestrator or two while still bounding what an
+issuer can put in a signed context.
+
 A hop's shape is pinned by a published schema:
 [`security-context.schema.json`](../schema/v1.0/security-context.schema.json) declares
 `$defs/delegationHop`, and the `principalType` enumeration inside it gets the same

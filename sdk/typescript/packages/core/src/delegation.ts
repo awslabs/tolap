@@ -140,10 +140,37 @@ function isSubset(child: string[], parent: string[]): boolean {
  * An allow, or a denial naming the offending hop by index. The reason strings are
  * part of the contract; integrators log and branch on them.
  */
+/**
+ * Most hops a chain may carry. A longer chain is refused rather than walked.
+ *
+ * Delegation depth is a property of the deployment's topology, not of the request, and real
+ * topologies are shallow: a human delegates to an agent, which delegates to a sub-agent. Ten
+ * leaves generous room for an orchestrator or two and still bounds the structure.
+ *
+ * Bounded because the hop count reaches this validator from the signed context, and therefore
+ * from whoever issued it. Without a limit the only ceiling is the size of context a transport
+ * will carry, which is not a security boundary — and every hop is a nested object that must be
+ * canonicalised and hashed on each verification. The same ceiling is declared as `maxItems` in
+ * `schema/v1.0/security-context.schema.json`, so the schema and the validator agree rather
+ * than one standing in for the other.
+ */
+export const MAX_DELEGATION_HOPS = 10;
+
 export function validateDelegationChain(
   chain: DelegationHop[] | undefined,
 ): AccessResult {
   if (chain === undefined || chain.length <= 1) return { allowed: true };
+
+  // Length before content: a chain too long to be a real topology is refused rather than
+  // walked, so an oversized structure cannot cost more than one comparison.
+  if (chain.length > MAX_DELEGATION_HOPS) {
+    return {
+      allowed: false,
+      reason:
+        `delegation chain has ${chain.length} hops, more than the maximum of ` +
+        `${MAX_DELEGATION_HOPS}`,
+    };
+  }
 
   for (let i = 0; i < chain.length - 1; i++) {
     const parent = chain[i];

@@ -162,8 +162,11 @@ The mutation check is what makes the wiring tests worth having: disabling the ca
 exactly three tests in each of the three SDKs, and the four allow-cases keep passing. A
 wrapper that denied every chain would satisfy the denial tests alone.
 
-Threat-model **E6** is *Mitigated* on this basis. The one residual: chain depth is
-unbounded.
+Threat-model **E6** is *Mitigated* on this basis, with no residual: depth is capped at ten
+hops in the validator and as `maxItems` in the envelope schema, and the length is checked
+before the hops are walked. Ten is a topology property rather than a request property, so a
+fixed ceiling is the right shape of limit — an unbounded one would leave the size of a signed
+context as the only constraint, and that is not a security boundary.
 
 ### The judge can only subtract
 
@@ -310,7 +313,7 @@ and the earlier draft of this section named four.
 **Guides and reference:**
 
 - **Three implementation guides** — the feature in each language's idiom, plus the
-  limitations that had no home: unbounded delegation-chain depth, the validator having no
+  limitations that had no home: the delegation-chain depth ceiling, the validator having no
   wrapper call site, `ToolCallHistory`'s retention properties, and the unenforceable-shape
   denial and its named opt-out.
 - **architecture.md** — the envelope's real field set (an earlier revision showed a

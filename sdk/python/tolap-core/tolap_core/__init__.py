@@ -110,7 +110,7 @@ from tolap_core.enforcement import (
     validate_write,
     write_operation_for_method,
 )
-from tolap_core.delegation import validate_delegation_chain
+from tolap_core.delegation import MAX_DELEGATION_HOPS, validate_delegation_chain
 from tolap_core.purpose_action import (
     UNDECLARED_CATEGORY_REASON,
     validate_http_action,
@@ -223,6 +223,7 @@ __all__ = [
     # Purpose binding (canonical spec section 15)
     "UNDECLARED_CATEGORY_REASON",
     "validate_action",
+    "MAX_DELEGATION_HOPS",
     "validate_delegation_chain",
     "validate_http_action",
     "validate_tool_action",

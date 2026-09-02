@@ -52,6 +52,7 @@ import {
   SigningAlgorithm,
   UNKNOWN_MASK_RESTRICTIVENESS,
 } from "../src/types.js";
+import { MAX_DELEGATION_HOPS } from "../src/delegation.js";
 import { applyMask, writeOperationForMethod } from "../src/enforcement.js";
 import {
   buildSecurityContext,
@@ -524,3 +525,18 @@ describe("allowedMethods matches the schema", () => {
     }
   });
 });
+
+describe("the delegation hop ceiling", () => {
+  it("matches the envelope schema's maxItems", () => {
+    // Spec §15.3 states the ceiling twice — once as `MAX_DELEGATION_HOPS`, once as `maxItems`
+    // on `delegationChain` — and §14 requires the two to agree. Without this, one could be
+    // raised and the other left behind: a chain the validator accepts and the schema rejects,
+    // or worse, one the schema accepts and the validator walks.
+    const schema = JSON.parse(
+      readFileSync(resolvePath(SCHEMA_DIR, "security-context.schema.json"), "utf-8"),
+    ) as { properties: { delegationChain: { maxItems: number } } };
+
+    expect(schema.properties.delegationChain.maxItems).toBe(MAX_DELEGATION_HOPS);
+  });
+});
+

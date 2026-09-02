@@ -314,6 +314,27 @@ public class SecurityContextSchemaConformanceTests
             "a cross-file $ref would need a resolver in all four validators");
     }
 
+    [Fact]
+    public void TheHopCeilingMatchesTheSchema()
+    {
+        // Spec section 15.3 states the ceiling twice -- once as `MaxHops`, once as `maxItems`
+        // on `delegationChain` -- and section 14 requires the two to agree. Without this, one
+        // could be raised and the other left behind: a chain the validator accepts and the
+        // schema rejects, or worse, one the schema accepts and the validator walks.
+        var raw = File.ReadAllText(
+            Path.Combine(SchemaRootForAssertion(), "security-context.schema.json"));
+        using var document = JsonDocument.Parse(raw);
+
+        var maxItems = document.RootElement
+            .GetProperty("properties")
+            .GetProperty("delegationChain")
+            .GetProperty("maxItems")
+            .GetInt32();
+
+        maxItems.Should().Be(DelegationChainValidator.MaxHops,
+            "the validator's ceiling and the schema's maxItems are the same rule stated twice");
+    }
+
     private static string SchemaRootForAssertion()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

@@ -111,15 +111,13 @@ model for the full list):
   classified cannot be shown to serve the purpose, and the alternative is the fail-open.
   The fix for that denial is to classify the tool, not to widen the policy.
   *(Threat E5 / spec §15.2.)*
-- **Bound the depth of a delegation chain you do not fully control.** Every wrapper
-  validates the chain itself, after the signature check, so a context whose hop widens its
-  parent's purpose is refused wherever it is used — the context *builders* still only
-  *record* a chain, because a builder that silently dropped an invalid one would produce a
-  context that looked delegated and was not. What is **not** bounded is the hop count:
-  neither the validator, the model, nor `security-context.schema.json` caps it, and the
-  only implicit limit is the size of signed context you will transport. Cap it yourself if
-  anything you do not control influences how many hops there are.
-  *(Threat E6 / spec §15.3.)*
+- **A delegation chain is validated for you, and bounded.** Every wrapper validates the
+  chain after the signature check, so a context whose hop widens its parent's purpose is
+  refused wherever it is used, and depth is capped at 10 hops in both the validator and
+  `security-context.schema.json`. The context *builders* only *record* a chain, because a
+  builder that silently dropped an invalid one would produce a context that looked
+  delegated and was not — so if you issue contexts, nothing is required of you here beyond
+  not exceeding the cap. *(Threat E6 / spec §15.3.)*
 - **`Permissive` enforcement mode disables denials.** Use it only for staged
   rollout/observability, never in production. *(Threat I5.)*
 - **Use a real, access-controlled policy store in production.** The in-memory

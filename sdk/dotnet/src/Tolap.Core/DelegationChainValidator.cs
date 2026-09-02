@@ -27,6 +27,24 @@ public static class DelegationChainValidator
     private static readonly TimeSpan RegexMatchTimeout = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
+    /// Most hops a chain may carry. A longer chain is refused rather than walked.
+    /// </summary>
+    /// <remarks>
+    /// <para>Delegation depth is a property of the deployment's topology, not of the request,
+    /// and real topologies are shallow: a human delegates to an agent, which delegates to a
+    /// sub-agent. Ten leaves generous room for an orchestrator or two and still bounds the
+    /// structure.</para>
+    /// <para>Bounded because the hop count reaches this validator from the signed context, and
+    /// therefore from whoever issued it. Without a limit the only ceiling is the size of
+    /// context a transport will carry, which is not a security boundary — and every hop is a
+    /// nested object that must be canonicalised and hashed on each verification. The same
+    /// ceiling is declared as <c>maxItems</c> in
+    /// <c>schema/v1.0/security-context.schema.json</c>, so the schema and the validator agree
+    /// rather than one standing in for the other.</para>
+    /// </remarks>
+    public const int MaxHops = 10;
+
+    /// <summary>
     /// Validates a delegation chain.
     /// </summary>
     /// <param name="chain">
@@ -43,6 +61,14 @@ public static class DelegationChainValidator
     {
         if (chain is null || chain.Length <= 1)
             return new AccessResult(true);
+
+        // Length before content: a chain too long to be a real topology is refused rather
+        // than walked, so an oversized structure cannot cost more than one comparison.
+        if (chain.Length > MaxHops)
+        {
+            return new AccessResult(false,
+                $"delegation chain has {chain.Length} hops, more than the maximum of {MaxHops}");
+        }
 
         for (var i = 0; i < chain.Length - 1; i++)
         {

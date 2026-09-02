@@ -5,12 +5,16 @@
     {
       "name": "null-chain-allowed",
       "chain": null,
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "empty-chain-allowed",
       "chain": [],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "single-hop-allowed",
@@ -21,7 +25,9 @@
           "declaredPurpose": "campaign-x-overlap"
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "exact-purpose-match-allowed",
@@ -37,7 +43,9 @@
           "declaredPurpose": "campaign-x-overlap"
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "glob-parent-narrowing-allowed",
@@ -53,7 +61,9 @@
           "declaredPurpose": "campaign-x-overlap"
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "segment-boundary-extension-allowed",
@@ -69,7 +79,9 @@
           "declaredPurpose": "campaign-x-overlap"
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "mid-segment-extension-denied",
@@ -142,7 +154,9 @@
           "declaredPurpose": "campaign-x-overlap"
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "child-purpose-absent-parent-set-allowed",
@@ -157,7 +171,9 @@
           "principalType": "agent"
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "narrowing-scope-subset-allowed",
@@ -165,15 +181,22 @@
         {
           "principalId": "user-marketing-001",
           "principalType": "user",
-          "scopeNarrowing": ["read", "aggregate"]
+          "scopeNarrowing": [
+            "read",
+            "aggregate"
+          ]
         },
         {
           "principalId": "agent-overlap",
           "principalType": "agent",
-          "scopeNarrowing": ["read"]
+          "scopeNarrowing": [
+            "read"
+          ]
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "identical-scope-allowed",
@@ -181,15 +204,21 @@
         {
           "principalId": "user-marketing-001",
           "principalType": "user",
-          "scopeNarrowing": ["read"]
+          "scopeNarrowing": [
+            "read"
+          ]
         },
         {
           "principalId": "agent-overlap",
           "principalType": "agent",
-          "scopeNarrowing": ["read"]
+          "scopeNarrowing": [
+            "read"
+          ]
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "widening-scope-denied",
@@ -197,12 +226,17 @@
         {
           "principalId": "user-marketing-001",
           "principalType": "user",
-          "scopeNarrowing": ["read"]
+          "scopeNarrowing": [
+            "read"
+          ]
         },
         {
           "principalId": "agent-overlap",
           "principalType": "agent",
-          "scopeNarrowing": ["read", "write"]
+          "scopeNarrowing": [
+            "read",
+            "write"
+          ]
         }
       ],
       "expected": {
@@ -216,7 +250,9 @@
         {
           "principalId": "user-marketing-001",
           "principalType": "user",
-          "scopeNarrowing": ["read"]
+          "scopeNarrowing": [
+            "read"
+          ]
         },
         {
           "principalId": "agent-overlap",
@@ -224,7 +260,9 @@
           "scopeNarrowing": []
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "empty-parent-scope-denies-any-child-scope",
@@ -237,7 +275,9 @@
         {
           "principalId": "agent-overlap",
           "principalType": "agent",
-          "scopeNarrowing": ["read"]
+          "scopeNarrowing": [
+            "read"
+          ]
         }
       ],
       "expected": {
@@ -255,10 +295,15 @@
         {
           "principalId": "agent-overlap",
           "principalType": "agent",
-          "scopeNarrowing": ["read", "write"]
+          "scopeNarrowing": [
+            "read",
+            "write"
+          ]
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "three-hop-chain-narrowing-allowed",
@@ -267,22 +312,33 @@
           "principalId": "user-marketing-001",
           "principalType": "user",
           "declaredPurpose": "campaign-*",
-          "scopeNarrowing": ["read", "aggregate", "export"]
+          "scopeNarrowing": [
+            "read",
+            "aggregate",
+            "export"
+          ]
         },
         {
           "principalId": "orchestrator-01",
           "principalType": "service",
           "declaredPurpose": "campaign-x-*",
-          "scopeNarrowing": ["read", "aggregate"]
+          "scopeNarrowing": [
+            "read",
+            "aggregate"
+          ]
         },
         {
           "principalId": "agent-overlap",
           "principalType": "agent",
           "declaredPurpose": "campaign-x-overlap",
-          "scopeNarrowing": ["read"]
+          "scopeNarrowing": [
+            "read"
+          ]
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
     },
     {
       "name": "four-hop-chain-widening-at-the-last-hop-denied",
@@ -329,7 +385,133 @@
           "delegatedAt": "2026-09-01T10:00:00.123456Z"
         }
       ],
-      "expected": { "allowed": true }
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "ten-hops-at-the-ceiling-allowed",
+      "comment": "The paired control for the case below: a chain narrowing correctly at every hop is allowed right up to the limit, so the depth check cannot pass by rejecting long chains that were invalid anyway.",
+      "chain": [
+        {
+          "principalId": "analyst@example.test",
+          "principalType": "user",
+          "declaredPurpose": "campaign-x"
+        },
+        {
+          "principalId": "agent-1",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1"
+        },
+        {
+          "principalId": "agent-2",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2"
+        },
+        {
+          "principalId": "agent-3",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3"
+        },
+        {
+          "principalId": "agent-4",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4"
+        },
+        {
+          "principalId": "agent-5",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5"
+        },
+        {
+          "principalId": "agent-6",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5-s6"
+        },
+        {
+          "principalId": "agent-7",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5-s6-s7"
+        },
+        {
+          "principalId": "agent-8",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5-s6-s7-s8"
+        },
+        {
+          "principalId": "agent-9",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5-s6-s7-s8-s9"
+        }
+      ],
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "eleven-hops-over-the-ceiling-denied",
+      "comment": "Every hop narrows correctly, so the ONLY reason to refuse is the depth bound. Refused on length before the hops are walked.",
+      "chain": [
+        {
+          "principalId": "analyst@example.test",
+          "principalType": "user",
+          "declaredPurpose": "campaign-x"
+        },
+        {
+          "principalId": "agent-1",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1"
+        },
+        {
+          "principalId": "agent-2",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2"
+        },
+        {
+          "principalId": "agent-3",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3"
+        },
+        {
+          "principalId": "agent-4",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4"
+        },
+        {
+          "principalId": "agent-5",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5"
+        },
+        {
+          "principalId": "agent-6",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5-s6"
+        },
+        {
+          "principalId": "agent-7",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5-s6-s7"
+        },
+        {
+          "principalId": "agent-8",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5-s6-s7-s8"
+        },
+        {
+          "principalId": "agent-9",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5-s6-s7-s8-s9"
+        },
+        {
+          "principalId": "agent-10",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-s1-s2-s3-s4-s5-s6-s7-s8-s9-s10"
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "delegation chain has 11 hops, more than the maximum of 10"
+      }
     }
   ]
 }

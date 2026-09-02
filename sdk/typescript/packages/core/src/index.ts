@@ -102,6 +102,7 @@ export {
 // validation, and -- optionally, and only ever subtractively -- the semantic judge.
 export {
   validateDelegationChain,
+  MAX_DELEGATION_HOPS,
 } from "./delegation.js";
 export {
   UNDECLARED_CATEGORY_REASON,

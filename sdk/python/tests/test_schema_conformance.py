@@ -481,3 +481,18 @@ class TestSigningAlgorithm:
 
             assert signed.signature
             assert signed.algorithm == algorithm
+
+
+def test_the_hop_ceiling_matches_the_schema() -> None:
+    """The validator's cap and the envelope schema's ``maxItems`` are one rule, stated twice.
+
+    Spec section 15.3 states the ceiling in both places and section 14 requires them to agree.
+    Without this check one could be raised and the other left behind: a chain the validator
+    accepts and the schema rejects, or worse, one the schema accepts and the validator walks.
+    """
+    from tolap_core.delegation import MAX_DELEGATION_HOPS
+
+    max_items = SECURITY_CONTEXT["properties"]["delegationChain"]["maxItems"]
+
+    assert max_items == MAX_DELEGATION_HOPS
+

@@ -19,6 +19,20 @@ from tolap_core.enforcement import AccessResult
 from tolap_core.models import DelegationHop
 
 
+#: Most hops a chain may carry. A longer chain is refused rather than walked.
+#:
+#: Delegation depth is a property of the deployment's topology, not of the request, and real
+#: topologies are shallow: a human delegates to an agent, which delegates to a sub-agent. Ten
+#: leaves generous room for an orchestrator or two and still bounds the structure.
+#:
+#: Bounded because the hop count reaches this validator from the signed context, and therefore
+#: from whoever issued it. Without a limit the only ceiling is the size of context a transport
+#: will carry, which is not a security boundary -- and every hop is a nested object that must
+#: be canonicalised and hashed on each verification. The same ceiling is declared as
+#: ``maxItems`` in ``schema/v1.0/security-context.schema.json``.
+MAX_DELEGATION_HOPS = 10
+
+
 def validate_delegation_chain(chain: list[DelegationHop] | None) -> AccessResult:
     """Validate a delegation chain, oldest hop first.
 
@@ -31,6 +45,17 @@ def validate_delegation_chain(chain: list[DelegationHop] | None) -> AccessResult
     """
     if chain is None or len(chain) <= 1:
         return AccessResult(allowed=True)
+
+    # Length before content: a chain too long to be a real topology is refused rather than
+    # walked, so an oversized structure cannot cost more than one comparison.
+    if len(chain) > MAX_DELEGATION_HOPS:
+        return AccessResult(
+            allowed=False,
+            reason=(
+                f"delegation chain has {len(chain)} hops, more than the maximum "
+                f"of {MAX_DELEGATION_HOPS}"
+            ),
+        )
 
     for index in range(len(chain) - 1):
         parent = chain[index]
