@@ -89,12 +89,23 @@ public sealed class SecureMcpToolWrapper
         var policy = await _options.PolicyStore.ResolveEffectivePolicyAsync(
             userId, tenantId, resolvedSourceId,
             _ => groups,
-            _ => roles);
+            _ => roles,
+            _options.DeclaredPurpose);
 
         // Pre-execution: validate query permission
         if (!policy.Permissions.CanQuery)
         {
             return HandleDenial("query permission denied");
+        }
+
+        // Pre-execution: purpose-bound action validation (section 15.2). Same position as in
+        // SecureContextToolWrapper -- after the read gate, before the object rules -- so the two
+        // wrapper families report the same reason when both would deny.
+        var actionResult = PurposeActionResolver.ValidateTool(
+            policy, toolName, _options.ToolActionCategories);
+        if (!actionResult.Allowed)
+        {
+            return HandleDenial(actionResult.Reason ?? "action denied");
         }
 
         // Pre-execution: validate object access
@@ -249,7 +260,8 @@ public sealed class SecureMcpToolWrapper
         return await _options.PolicyStore.ResolveEffectivePolicyAsync(
             userId, tenantId, resolvedSourceId,
             _ => groups,
-            _ => roles);
+            _ => roles,
+            _options.DeclaredPurpose);
     }
 
     /// <summary>
@@ -268,7 +280,8 @@ public sealed class SecureMcpToolWrapper
         var policy = await _options.PolicyStore.ResolveEffectivePolicyAsync(
             userId, tenantId, resolvedSourceId,
             _ => groups,
-            _ => roles);
+            _ => roles,
+            _options.DeclaredPurpose);
 
         return EnforcementEngine.ValidateFieldAccess(fields, policy);
     }
@@ -290,7 +303,8 @@ public sealed class SecureMcpToolWrapper
         var policy = await _options.PolicyStore.ResolveEffectivePolicyAsync(
             userId, tenantId, resolvedSourceId,
             _ => groups,
-            _ => roles);
+            _ => roles,
+            _options.DeclaredPurpose);
 
         return EnforcementEngine.ValidateEndpoint(path, method, policy);
     }

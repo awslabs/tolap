@@ -1,0 +1,36 @@
+{
+  "description": "A purpose-agnostic policy merged with a purpose-scoped one -- the profile survives into the effective policy. Without this, purposeProfile would be readable on a definition and invisible to enforcement, which only ever sees an EffectivePolicy.",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "scoped",
+      "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "purposeProfile": {
+        "purposeId": "campaign-x-overlap",
+        "description": "Identify overlapping opted-in customer segments for Campaign X.",
+        "allowedActions": ["aggregate_overlap", "count_segments"],
+        "prohibitedActions": ["export_pii"]
+      },
+      "limits": { "maxResults": 10000 }
+    },
+    {
+      "version": "1.0",
+      "name": "agnostic",
+      "priority": 50,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "limits": { "maxResults": 2000 }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["scoped", "agnostic"],
+    "permissions": { "canQuery": true, "readOnly": true },
+    "purposeProfile": {
+      "purposeId": "campaign-x-overlap",
+      "description": "Identify overlapping opted-in customer segments for Campaign X.",
+      "allowedActions": ["aggregate_overlap", "count_segments"],
+      "prohibitedActions": ["export_pii"]
+    },
+    "limits": { "maxResults": 2000 }
+  }
+}

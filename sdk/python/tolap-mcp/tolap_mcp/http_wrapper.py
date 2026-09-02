@@ -32,6 +32,7 @@ from typing import Any
 import httpx
 
 from tolap_core.context import validate_context, validate_expiry
+from tolap_core.delegation import validate_delegation_chain
 from tolap_core.enforcement import (
     TARGET_ROW_UNKNOWN,
     AccessResult,
@@ -48,6 +49,7 @@ from tolap_core.enforcement import (
     validate_http_write,
 )
 from tolap_core.models import EffectivePolicy, SecurityContext
+from tolap_core.purpose_action import validate_http_action
 
 from tolap_mcp.options import SecureMcpServerOptions
 
@@ -403,6 +405,20 @@ class SecureHttpToolWrapper:
             expiry_reason = validate_expiry(context)
             if expiry_reason is not None:
                 return AccessResult(allowed=False, reason=expiry_reason)
+                # The delegation chain, if the context carries one (spec section 15.3).
+        #
+        # Validated here rather than in ``build_security_context``: a builder that validated
+        # would have to either raise -- making issuing brittle -- or drop the chain, which
+        # emits a context that looks delegated and is not. And the check is only meaningful
+        # *after* the signature, since the signature proves the chain was not modified in
+        # transit rather than that it is valid, and an unsigned chain can be rewritten by the
+        # principal it constrains.
+        #
+        # Backward compatible: an absent chain, or a single hop, is allowed.
+        chain_result = validate_delegation_chain(context.delegation_chain)
+        if not chain_result.allowed:
+            return chain_result
+
         return AccessResult(allowed=True)
 
     def _validate_hop(
@@ -441,6 +457,21 @@ class SecureHttpToolWrapper:
             return AccessResult(allowed=False, reason=shape_denial)
 
         policy_path = path.split("?", 1)[0]
+
+        # Purpose-bound action validation, before the endpoint and write checks. Ordered
+        # first among the policy checks because it answers the broadest question -- does
+        # this operation serve the purpose the context was issued for -- and because that
+        # is the reason an operator most needs to see when several rules would deny.
+        # Matched on the path with the query stripped, so a category cannot be dodged by
+        # appending one.
+        #
+        # Running it here, inside the per-hop validator, is what makes the category check
+        # apply to redirect targets as well as to the original request.
+        action_result = validate_http_action(
+            policy, method, policy_path, self._options.http_action_categories
+        )
+        if not action_result.allowed:
+            return action_result
 
         # Endpoint rules and, for a write method, the section 4 write checks. Both
         # halves run: an endpoint allow-list is not a write grant, and a write

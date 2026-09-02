@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tolap.dev/schema/v1.0/security-context.schema.json",
+  "title": "TOLAP Security Context (canonical signing projection)",
+  "description": "The envelope a TOLAP security context projects into before signing, as specified normatively by docs/canonical-enforcement-spec.md sections 1 and 2. This describes the SIGNED SHAPE ONLY -- not any SDK's native context type, and NOT the artifact a server puts on the wire. Validate a canonical payload against this schema; validating a transported artifact against it will fail, correctly. The three SDKs deliberately keep different public models (.NET carries a policies array, Python and TypeScript a single effective policy) and converge only at this form, which is why the projection rather than any model is what has a schema. Fields a wire artifact carries and this schema therefore excludes: `signature`, `algorithm` and `integrity` (a signature cannot cover itself), `resolvedAt` (the TypeScript spelling of `issuedAt`), `effectivePolicy` (the single-policy spelling of `policies`), and `kid` (a key hint that sits outside the signed bytes precisely so it cannot change them -- see docs/policy-server.md on rotation). `additionalProperties` is false because the signed bytes are exhaustively specified: an unrecognized key in a canonical payload is either an unsigned field someone believed was signed, or a signed one the other SDKs do not produce. Optional properties are OMITTED entirely when absent rather than emitted as null, which is what makes each of them a backward-compatible addition -- see section 2 rule 6.",
+  "type": "object",
+  "required": [
+    "version",
+    "userId",
+    "tenantId",
+    "issuedAt",
+    "expiresAt",
+    "policies"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for validation tooling."
+    },
+    "version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "TOLAP schema version. Inside the signed payload, so it cannot be rewritten."
+    },
+    "userId": {
+      "type": "string",
+      "description": "The principal this context was issued for."
+    },
+    "tenantId": {
+      "type": "string",
+      "description": "Tenant context."
+    },
+    "issuedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the context was issued. UTC with a 'Z' suffix, truncated to millisecond precision (section 2 rule 5)."
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the context expires. Inside the signed payload, so an expiry cannot be extended without the key. A missing or unparseable value is rejected rather than treated as 'never expires'."
+    },
+    "policies": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object"
+      },
+      "description": "The effective policy, with its integrity block stripped. Validate each entry against effective-policy.schema.json in FRAGMENT mode -- a signed payload necessarily omits `integrity`, since a signature cannot cover itself. Deliberately not a cross-file $ref: no schema in this directory uses one (effective-policy duplicates maskingRule rather than referencing policy-definition's), because the four validators in this repository -- Python's jsonschema, the server's Ajv, and the two native SDK readers -- would each need a resolver configured with a local store, and one of them silently not having it would mean a schema that validates nothing. Section 14 handles the resulting duplication with equality tests instead. An array because that is the wire shape section 2 rule 3 mandates, but a context governs exactly one data source: every enforcement path reads only the first element, so a context carrying two would sign both and enforce one, and all three SDKs refuse that. An EMPTY array is valid -- it grants nothing, which is safe -- whereas two is the ambiguity worth refusing."
+    },
+    "jti": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Unique context identifier for replay detection (section 13.1). Signed when present, so a replay guard cannot be defeated by stripping it. An empty string normalizes to absent, so '' and omitted cannot yield two different signatures -- hence minLength 1: an empty value must never appear in a canonical payload."
+    },
+    "declaredPurpose": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+      "description": "The purpose this context was resolved for (section 15.1). Matched against a policy's purposeProfile.purposeId exactly and case-sensitively. Signed when present, so a purpose-scoped context cannot be repurposed by swapping it or stripping it. Empty normalizes to absent. Records the purpose the caller ASSERTED; TOLAP checks that assertion against the policy set, not the caller's honesty about it (section 13)."
+    },
+    "delegationChain": {
+      "type": "array",
+      "minItems": 1,
+        "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/delegationHop"
+      },
+      "description": "How authority reached the principal making the call, oldest hop first (section 15.3). Signed hop for hop: appending, mutating, reordering or removing a hop invalidates the signature, which is the precondition for validating the chain at all -- an unsigned chain can be rewritten by the principal it constrains. An EMPTY chain normalizes to absent, hence minItems 1: it carries no hops and so asserts nothing. Note this is the opposite of the null-versus-empty rule for allow-lists (section 3), because that rule concerns restrictions and this concerns claims."
+    }
+  },
+  "$defs": {
+    "delegationHop": {
+      "type": "object",
+      "required": [
+        "principalId",
+        "principalType"
+      ],
+      "additionalProperties": false,
+      "description": "One hop in a delegation chain. Each hop may hold less authority than its parent and never more.",
+      "properties": {
+        "principalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Identifier of the principal at this hop."
+        },
+        "principalType": {
+          "type": "string",
+          "enum": [
+            "user",
+            "agent",
+            "service"
+          ],
+          "description": "Kind of principal. user: a human, only ever the first hop. agent: an autonomous agent acting on a principal's behalf. service: a non-agent component such as an orchestrator passing work along. A closed set, so an unrecognized value is refused at deserialization rather than reaching chain validation as a value no narrowing rule covers."
+        },
+        "declaredPurpose": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z0-9*][a-z0-9*-]*$",
+          "description": "The purpose in force at this hop. May be a glob, so a parent can delegate a family of purposes ('campaign-*'); this is why the pattern is looser than the envelope's declaredPurpose, which is a concrete assertion rather than a delegable scope. A child purpose must equal its parent, be matched by its parent glob, or extend it on a '-' segment boundary -- a plain prefix test would let 'campaign-x' authorize 'campaign-xyz-evil'. Comparison is case-sensitive. Absent on either side of a comparison adds no constraint."
+        },
+        "delegatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the hop was created. Part of the signed bytes, so it is truncated to millisecond precision like every other timestamp (section 2 rule 5) -- the three runtimes do not agree below that. Recorded for the audit trail; narrowing does not consider it."
+        },
+        "scopeNarrowing": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "description": "The scopes still IN FORCE at this hop -- not the scopes this hop removed. Each hop's set must be a subset of its parent's, so an empty set leaves nothing for a child to claim (section 3). Named for its effect rather than its contents, which is the reading the subset rule requires. Absent on either side adds no constraint."
+        }
+      }
+    }
+  }
+}

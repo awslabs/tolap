@@ -51,6 +51,7 @@ public static class CanonicalJson
         options.Converters.Add(new MaskTypeJsonConverter());
         options.Converters.Add(new SigningAlgorithmJsonConverter());
         options.Converters.Add(new AssigneeTypeJsonConverter());
+        options.Converters.Add(new PrincipalTypeJsonConverter());
         options.Converters.Add(new CanonicalMaskingParametersJsonConverter());
         options.Converters.Add(new CanonicalTimestampJsonConverter());
         options.Converters.Add(new CanonicalNullableTimestampJsonConverter());

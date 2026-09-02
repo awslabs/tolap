@@ -15,19 +15,28 @@ import {
   classifyResultShape,
   describeResultShape,
   validateAccess,
+  validateDelegationChain,
+  evaluateJudge,
+  JudgeDisposition,
+  type Judge,
+  type JudgeOutcome,
+  type ToolCallHistory,
   validateContext,
   validateEndpoint,
   validateExpiry,
   validateFieldAccess,
+  validateToolAction,
   validateWrite,
   SqlQueryRewriter,
   SqlDialect,
   type AccessResult,
+  type ActionCategoryMap,
   type RowFilter,
   type SecurityContext,
   type ValidateWriteOptions,
   type WriteOperation,
 } from "@aws/tolap-core";
+import { renderToolCall } from "./tool-call.js";
 
 export interface SecureContextWrapperOptions {
   signingKey: string;
@@ -57,6 +66,53 @@ export interface SecureContextWrapperOptions {
    */
   hashSalt?: string | Buffer;
   allowUnenforceableShapes?: boolean;
+  /**
+   * Tool name to semantic action category, for purpose-bound action validation
+   * (canonical spec §15.2).
+   *
+   * Set this alongside {@link allowedTools} whenever any policy the wrapper may
+   * resolve carries a `purposeProfile` that constrains actions.
+   *
+   * Configuration rather than a caller argument, deliberately: an agent that can name
+   * its own action category can name a permitted one, which reduces the check to a
+   * formality. Unset, a purpose-agnostic policy behaves exactly as before — and a
+   * purpose-bound one that constrains actions denies every call, because a tool the
+   * map does not classify cannot be shown to serve the purpose.
+   */
+  toolActionCategories?: ActionCategoryMap;
+  /**
+   * The semantic judge, enabling {@link SecureContextToolWrapper.preExecuteAsync} to apply a
+   * policy's `purposeProfile.judge` block (§15.4).
+   *
+   * Unset, `preExecuteAsync` behaves exactly as `preExecute` — a policy that asks for a judge
+   * with none configured is **not** an error, because the deterministic checks have already
+   * run and the judge can only subtract. Set it and the policy's `model`, `historyWindow`,
+   * thresholds and `maxLatencyMs` take effect without any glue of yours; a mismatch between the
+   * policy's model and {@link Judge.modelId} escalates before the call is issued.
+   */
+  judge?: Judge;
+  /**
+   * The trajectory the judge reasons over.
+   *
+   * **You** own the instance, and therefore its retention: tool calls can carry the arguments a
+   * caller passed, so how long they live and where they are stored is a decision the wrapper
+   * must not make for you. Trimmed to the policy's `historyWindow` on each call regardless of
+   * how large it grows.
+   *
+   * Unset, the judge sees only the current call — enough for an obviously off-purpose request,
+   * and not enough for drift, where each step is individually defensible and the sequence is
+   * not.
+   */
+  toolCallHistory?: ToolCallHistory;
+  /**
+   * Where an ambiguous verdict goes for review. Returns whether the call may proceed.
+   *
+   * Unset, `escalate` is a **denial**. That is the point of the disposition: if escalation
+   * defaulted to permitting, "escalate to human review" would silently mean "allow" in every
+   * deployment that never built a review path — a fail-open on exactly the cases the judge
+   * exists to surface.
+   */
+  escalationHandler?: (outcome: JudgeOutcome) => boolean | Promise<boolean>;
 }
 
 export interface PreExecuteArgs {
@@ -142,6 +198,19 @@ export class SecureContextToolWrapper {
         return { allowed: false, reason: expiryReason };
       }
     }
+        // The delegation chain, if the context carries one (§15.3).
+    //
+    // Validated here rather than in `buildSecurityContext`: a builder that validated would
+    // have to either throw — making issuing brittle — or drop the chain, which emits a
+    // context that looks delegated and is not. And the check is only meaningful *after* the
+    // signature, since the signature proves the chain was not modified in transit rather than
+    // that it is valid, and an unsigned chain can be rewritten by the principal it
+    // constrains.
+    //
+    // Backward compatible: an absent chain, or a single hop, is allowed.
+    const chainResult = validateDelegationChain(context.delegationChain);
+    if (!chainResult.allowed) return chainResult;
+
     return { allowed: true };
   }
 
@@ -157,6 +226,19 @@ export class SecureContextToolWrapper {
     if (!policy.permissions.canQuery) {
       return { allowed: false, reason: "query not permitted" };
     }
+
+    // Purpose-bound action validation, after the read gate and before the object
+    // rules. The ordering matters in both directions: after `canQuery`, because a
+    // policy that grants no reads should say so rather than complain about a category;
+    // before the object rules, because "this action does not serve the declared
+    // purpose" is the more specific answer when both would deny, and it is the one
+    // that tells an operator what actually went wrong.
+    const actionResult = validateToolAction(
+      policy,
+      args.toolName,
+      this.options.toolActionCategories,
+    );
+    if (!actionResult.allowed) return actionResult;
 
     if (args.objectName) {
       const r = validateAccess(args.objectName, policy);
@@ -174,6 +256,61 @@ export class SecureContextToolWrapper {
       if (!r.allowed) return r;
     }
     return { allowed: true };
+  }
+
+  /**
+   * The deterministic checks, then the semantic judge (§15.1–§15.4).
+   *
+   * Separate from {@link preExecute} rather than replacing it, because a judge makes a network
+   * call and `preExecute` is synchronous. Both are supported: a deployment with no judge keeps
+   * the synchronous path and pays nothing.
+   *
+   * Order is not negotiable. The deterministic checks run first and the judge is consulted only
+   * if they *allowed* the call, so the judge can only ever withdraw an allowance — it is never
+   * asked to permit something the rules refused. This is what makes prompt injection through
+   * the tool call survivable rather than critical: the worst a manipulated verdict achieves is
+   * an allow that was already granted.
+   *
+   * The call is recorded in {@link SecureContextWrapperOptions.toolCallHistory} whether or not
+   * it is permitted. A refused call is part of the trajectory — an agent probing for what it can
+   * reach is precisely the pattern the judge is meant to notice, and a history that kept only
+   * successes would hide it.
+   */
+  async preExecuteAsync(
+    context: SecurityContext,
+    args: PreExecuteArgs,
+    signal?: AbortSignal,
+  ): Promise<AccessResult> {
+    const deterministic = this.preExecute(context, args);
+
+    const rendered = renderToolCall(args);
+    this.options.toolCallHistory?.record(rendered);
+
+    if (!deterministic.allowed) return deterministic;
+    const judge = this.options.judge;
+    if (judge === undefined) return deterministic;
+
+    const outcome = await evaluateJudge(
+      context.effectivePolicy,
+      judge,
+      rendered,
+      this.options.toolCallHistory,
+      signal,
+    );
+
+    if (outcome.disposition === JudgeDisposition.Allow) return { allowed: true };
+
+    // A review path exists, so the ambiguous case is its decision rather than a flat denial.
+    // Only `escalate` is routed there: sending a confident block to a review handler would let
+    // a deployment approve away the judge's clearest refusals.
+    if (
+      outcome.disposition === JudgeDisposition.Escalate &&
+      this.options.escalationHandler !== undefined
+    ) {
+      if (await this.options.escalationHandler(outcome)) return { allowed: true };
+    }
+
+    return { allowed: false, reason: outcome.reason };
   }
 
   /**

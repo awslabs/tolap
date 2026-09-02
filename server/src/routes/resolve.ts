@@ -15,6 +15,11 @@ import Fastify from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import { parseSourceIdentity } from "@aws/tolap-core";
 import { AuthorizationError, requireInstall } from "../auth/guards.ts";
+import {
+  isValidationError,
+  normalizeDeclaredPurpose,
+  validationErrorBody,
+} from "./purpose-query.ts";
 import { IdentityLookupError } from "../auth/identity-source.ts";
 import type { Keyring } from "../signing/keyring.ts";
 import type { PostgresPolicyStore } from "../db/store.ts";
@@ -59,18 +64,61 @@ interface ResolveQuery {
   userId?: string;
   tenantId?: string;
   sourceConnectionId?: string;
+  /**
+   * The purpose the caller declares for this resolution (canonical-enforcement-spec §15.1).
+   *
+   * Optional, and omitting it is not the same as declaring nothing went wrong: a policy
+   * carrying a `purposeProfile` will not resolve, and a policy set that is entirely
+   * purpose-scoped resolves to deny-all. That is the specified behaviour, not a fault, which
+   * is why it is not an error to omit -- but it is why a caller that means to use a
+   * purpose-bound policy has to send this.
+   */
+  declaredPurpose?: string;
 }
+
+/**
+ * The `purposeId` pattern from `schema/v1.0/policy-definition.schema.json`.
+ *
+ * Restated here rather than read from the schema because this port is deliberately small and
+ * has no schema loader; `src/validation.ts` owns document validation and a declared purpose is
+ * a query parameter, not a document. Kept in step by
+ * `tests/resolve-purpose.test.ts`, which reads the schema and asserts the two agree.
+ */
 
 export const resolveRoutes =
   (deps: ResolveDeps): FastifyPluginAsync =>
   async (app) => {
-    app.get<{ Querystring: ResolveQuery }>("/v1/resolve", async (request, reply) => {
+    // A querystring schema, so Fastify hands the handler strings rather than whatever the
+    // default parser inferred. Without it a REPEATED key yields an ARRAY, and the handler's
+    // `.trim()` throws a TypeError before any validation runs -- turning
+    // `?declaredPurpose=a&declaredPurpose=b` into a 500. Contained (the catch-all returns a
+    // flat error and logs the cause, and `requireInstall` gates the route first) but wrong:
+    // a malformed request is a 400. Declared for all four parameters, because the pattern
+    // pre-dated `declaredPurpose` for the other three and fixing one would have left three.
+    //
+    // The schema alone was not enough, and the 400 this comment asserted was not what the
+    // port returned: a validation error reaches `setErrorHandler`, which had no branch for
+    // it and fell through to the catch-all. The schema rejected the request correctly and
+    // the response blamed the server. `isValidationError` in the handler is the other half,
+    // and there is now a test for the status code rather than a comment claiming it.
+    const querystring = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        userId: { type: "string" },
+        tenantId: { type: "string" },
+        sourceConnectionId: { type: "string" },
+        declaredPurpose: { type: "string" },
+      },
+    } as const;
+
+    app.get<{ Querystring: ResolveQuery }>("/v1/resolve", { schema: { querystring } }, async (request, reply) => {
       const install = await requireInstall(
         request.headers.authorization,
         deps.store,
       );
 
-      const { userId, tenantId, sourceConnectionId } = request.query;
+      const { userId, tenantId, sourceConnectionId, declaredPurpose } = request.query;
 
       // All three are required. Defaulting any of them would resolve a policy for
       // a principal or a source the caller did not name -- and since resolution
@@ -109,10 +157,20 @@ export const resolveRoutes =
         });
       }
 
+      // A malformed purpose is rejected rather than ignored, and an empty one normalizes to
+      // absent. Both rules live in `purpose-query.ts` so this route and
+      // `GET /v1/resolve/preview` cannot disagree about them -- they already did once, which
+      // is why the helper exists.
+      const { purpose, error: purposeError } = normalizeDeclaredPurpose(declaredPurpose);
+      if (purposeError !== undefined) {
+        return reply.code(400).send({ error: purposeError });
+      }
+
       const policy = await deps.store.resolvePolicy(
         userId!,
         tenantId!,
         sourceConnectionId!,
+        purpose,
       );
 
       const artifact = buildSignedArtifact(
@@ -124,11 +182,22 @@ export const resolveRoutes =
       // Record who pulled what. This is the row that answers "which install has
       // this policy?" during an incident, so it is written before the response
       // rather than fire-and-forget.
+      // The declared purpose is recorded because it is half of what was authorized: the same
+      // user and source under two purposes are two different grants, and an incident review
+      // that cannot tell them apart cannot answer what an agent was permitted to do. Recorded
+      // as resolved (empty normalized to absent) rather than as sent, so the log matches the
+      // artifact.
       await deps.store.record(
         { id: install.id, kind: "install" },
         "policy.resolve",
         { kind: "source", id: sourceConnectionId! },
-        { userId, tenantId, canQuery: policy.permissions.canQuery },
+        {
+          userId,
+          tenantId,
+          canQuery: policy.permissions.canQuery,
+          declaredPurpose: purpose ?? null,
+          purposeId: policy.purposeProfile?.purposeId ?? null,
+        },
       );
       await deps.store.touchInstall(install.id);
 
@@ -153,6 +222,15 @@ export const resolveRoutes =
 export function buildResolveApp(deps: ResolveDeps): FastifyInstance {
   const app = Fastify({
     logger: loggerOptions({ level: deps.logLevel ?? "silent", app: "resolve" }),
+    // Unknown query/body properties are REJECTED, not silently stripped. Fastify's ajv
+    // defaults to `removeAdditional: true`, which deletes anything a schema's
+    // `additionalProperties: false` does not allow and then proceeds -- so a typo'd
+    // `declaredPurposes` was dropped and the request resolved as though no purpose had been
+    // declared. Against a purpose-scoped policy set that is deny-all: a request that looks
+    // like it worked and simply granted nothing, which is the failure this port already
+    // rejects a *malformed* purpose to avoid. Stripping and denying is the same mistake
+    // wearing a 200.
+    ajv: { customOptions: { removeAdditional: false } },
   });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -172,6 +250,13 @@ export function buildResolveApp(deps: ResolveDeps): FastifyInstance {
       // whether the secret was wrong must be indistinguishable, or this endpoint
       // becomes an oracle for enumerating installs.
       return reply.code(error.status).send({ error: error.message });
+    }
+
+    // A schema-validation failure is the caller's fault, not the server's. Without this
+    // branch the querystring schema below works and reports itself as a 500, because
+    // `setErrorHandler` replaces the default 400 response wholesale.
+    if (isValidationError(error)) {
+      return reply.code(400).send(validationErrorBody(error));
     }
 
     // The rate limiter signals a refusal by throwing, so without this the catch-all

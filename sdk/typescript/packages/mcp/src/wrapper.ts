@@ -9,6 +9,7 @@
 
 import {
   validateAccess,
+  validateToolAction,
   validateFieldAccess,
   validateEndpoint,
   applyResultPipeline,
@@ -136,6 +137,7 @@ export class SecureMcpToolWrapper {
       userId,
       tenantId,
       sourceConnectionId,
+      this.options.declaredPurpose,
     );
 
     // Validate policy signature if signing key is provided
@@ -192,6 +194,16 @@ export class SecureMcpToolWrapper {
     tool: McpToolDefinition,
     policy: EffectivePolicy,
   ): { allowed: boolean; reason?: string } {
+    // Purpose-bound action validation (§15.2). First among the policy checks, matching the
+    // position the context wrapper and the .NET/Python families use, so all of them report the
+    // same reason when more than one rule would deny.
+    const action = validateToolAction(
+      policy,
+      tool.name,
+      this.options.toolActionCategories,
+    );
+    if (!action.allowed) return action;
+
     // Object access check
     if (tool.objectName) {
       const result = validateAccess(tool.objectName, policy);

@@ -1,0 +1,63 @@
+{
+  "description": "Two policies bound to the SAME purpose -- allowedActions intersect, prohibitedActions union, and prohibited wins on any category present in both. The judge config merges toward more escalation: enabled ORs, thresholds and historyWindow take the maximum, maxLatencyMs the minimum.",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "overlap-broad",
+      "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "purposeProfile": {
+        "purposeId": "campaign-x-overlap",
+        "description": "Broad grant for the campaign purpose.",
+        "allowedActions": ["aggregate_overlap", "count_segments", "inspect_account"],
+        "prohibitedActions": ["export_pii"],
+        "judge": {
+          "enabled": false,
+          "model": "claude-sonnet",
+          "historyWindow": 5,
+          "confidenceThreshold": 0.8,
+          "escalationThreshold": 0.5,
+          "maxLatencyMs": 2500
+        }
+      }
+    },
+    {
+      "version": "1.0",
+      "name": "overlap-narrow",
+      "priority": 20,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "purposeProfile": {
+        "purposeId": "campaign-x-overlap",
+        "description": "Narrower grant for the same purpose.",
+        "allowedActions": ["aggregate_overlap", "count_segments", "train_model"],
+        "prohibitedActions": ["count_segments", "join_external_data"],
+        "judge": {
+          "enabled": true,
+          "model": "claude-sonnet",
+          "historyWindow": 12,
+          "confidenceThreshold": 0.9,
+          "escalationThreshold": 0.7,
+          "maxLatencyMs": 1500
+        }
+      }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["overlap-broad", "overlap-narrow"],
+    "permissions": { "canQuery": true, "readOnly": true },
+    "purposeProfile": {
+      "purposeId": "campaign-x-overlap",
+      "description": "Broad grant for the campaign purpose.",
+      "allowedActions": ["aggregate_overlap", "count_segments"],
+      "prohibitedActions": ["export_pii", "count_segments", "join_external_data"],
+      "judge": {
+        "enabled": true,
+        "model": "claude-sonnet",
+        "historyWindow": 12,
+        "confidenceThreshold": 0.9,
+        "escalationThreshold": 0.7,
+        "maxLatencyMs": 1500
+      }
+    }
+  }
+}

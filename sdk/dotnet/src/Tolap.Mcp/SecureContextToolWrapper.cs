@@ -25,13 +25,61 @@ namespace Tolap.Mcp;
 /// changing it changes every masked value.
 /// </para>
 /// </param>
+/// <param name="ToolActionCategories">
+/// Tool name to semantic action category, for purpose-bound action validation
+/// (canonical-enforcement-spec.md section 15.2). Set this alongside
+/// <paramref name="AllowedTools"/> whenever any policy the wrapper may resolve carries a
+/// <c>purposeProfile</c> that constrains actions.
+/// <para>
+/// Configuration rather than a caller argument, deliberately: an agent that can name its own
+/// action category can name a permitted one, which reduces the check to a formality. Unset,
+/// a purpose-agnostic policy behaves exactly as before — and a purpose-bound one that
+/// constrains actions denies every call, because a tool the map does not classify cannot be
+/// shown to serve the purpose.
+/// </para>
+/// </param>
+/// <param name="Judge">
+/// The semantic judge, enabling <see cref="SecureContextToolWrapper.PreExecuteAsync"/> to
+/// apply a policy's <c>purposeProfile.judge</c> block (spec section 15.4).
+/// <para>
+/// Unset, <c>PreExecuteAsync</c> behaves exactly as <c>PreExecute</c> — a policy that asks for
+/// a judge with none configured is <b>not</b> an error, because the deterministic checks have
+/// already run and the judge can only subtract. Set it and the policy's <c>model</c>,
+/// <c>historyWindow</c>, thresholds and <c>maxLatencyMs</c> take effect without any glue of
+/// yours; a mismatch between the policy's model and <see cref="IJudge.ModelId"/> escalates
+/// before the call is issued.
+/// </para>
+/// </param>
+/// <param name="ToolCallHistory">
+/// The trajectory the judge reasons over. <b>You</b> own the instance, and therefore its
+/// retention: tool calls can carry the arguments a caller passed, so how long they live and
+/// where they are stored is a decision the wrapper must not make for you. Trimmed to the
+/// policy's <c>historyWindow</c> on each call regardless of how large it grows.
+/// <para>Unset, the judge sees only the current call — which is enough for an obviously
+/// off-purpose request and not enough for drift, where each step is individually defensible
+/// and the sequence is not.</para>
+/// </param>
+/// <param name="EscalationHandler">
+/// Where an ambiguous verdict goes for review. Receives the outcome and returns whether the
+/// call may proceed.
+/// <para>
+/// Unset, <c>Escalate</c> is a <b>denial</b>. That is the whole point of the disposition: if
+/// escalation defaulted to permitting, "escalate to human review" would silently mean "allow"
+/// in every deployment that never built a review path — a fail-open on exactly the cases the
+/// judge exists to surface.
+/// </para>
+/// </param>
 public sealed record SecureContextWrapperOptions(
     string SigningKey,
     bool EnforceSignatures = true,
     bool EnforceExpiry = true,
     string[]? AllowedTools = null,
     bool AllowUnenforceableShapes = false,
-    string? HashSalt = null);
+    string? HashSalt = null,
+    IReadOnlyDictionary<string, string>? ToolActionCategories = null,
+    IJudge? Judge = null,
+    ToolCallHistory? ToolCallHistory = null,
+    Func<JudgeOutcome, Task<bool>>? EscalationHandler = null);
 
 /// <summary>
 /// Pre-execution arguments describing what the tool is about to do.
@@ -83,6 +131,25 @@ public sealed class SecureContextToolWrapper
             }
         }
 
+        // The delegation chain, if the context carries one (spec section 15.3).
+        //
+        // Validated here rather than left to the integrator, and here rather than in
+        // `SecurityContextBuilder`, for two reasons that pull the same way. A builder that
+        // validated would have to either throw -- making issuing brittle -- or drop the chain,
+        // which emits a context that looks delegated and is not; so the builder records and
+        // this side checks. And the check is only meaningful *after* the signature: the
+        // signature proves the chain was not modified in transit, which is a different and
+        // weaker claim than the chain being valid, and an unsigned chain can be rewritten by
+        // the principal it constrains.
+        //
+        // Backward compatible: a context with no chain, or a single hop, is allowed, so a
+        // caller that does not delegate is unaffected.
+        var chainResult = DelegationChainValidator.Validate(context.DelegationChain);
+        if (!chainResult.Allowed)
+        {
+            return chainResult;
+        }
+
         return new AccessResult(true);
     }
 
@@ -109,6 +176,16 @@ public sealed class SecureContextToolWrapper
             return new AccessResult(false, "query not permitted");
         }
 
+        // Purpose-bound action validation, after the read gate and before the object rules.
+        // The ordering matters in both directions: after canQuery, because a policy that
+        // grants no reads should say so rather than complain about a category; before the
+        // object rules, because "this action does not serve the declared purpose" is the more
+        // specific answer when both would deny, and it is the one that tells an operator what
+        // actually went wrong.
+        var actionResult = PurposeActionResolver.ValidateTool(
+            policy, args.ToolName, _options.ToolActionCategories);
+        if (!actionResult.Allowed) return actionResult;
+
         if (args.ObjectName is not null)
         {
             var r = EnforcementEngine.ValidateAccess(args.ObjectName, policy);
@@ -132,6 +209,85 @@ public sealed class SecureContextToolWrapper
         }
 
         return new AccessResult(true);
+    }
+
+    /// <summary>
+    /// The deterministic checks, then the semantic judge (spec sections 15.1-15.4).
+    /// </summary>
+    /// <remarks>
+    /// <para>Separate from <see cref="PreExecute"/> rather than replacing it, because a judge
+    /// makes a network call and <c>PreExecute</c> is synchronous. Both are supported: a
+    /// deployment with no judge keeps the synchronous path and pays nothing.</para>
+    /// <para>Order is not negotiable. The deterministic checks run first and the judge is
+    /// consulted only if they <i>allowed</i> the call, so the judge can only ever withdraw an
+    /// allowance. It is never asked to permit something the rules refused. This is what makes
+    /// prompt injection through the tool call survivable rather than critical: the worst a
+    /// manipulated verdict achieves is an allow that was already granted.</para>
+    /// <para>The call is recorded in <see cref="SecureContextWrapperOptions.ToolCallHistory"/>
+    /// whether or not it is permitted. A refused call is part of the trajectory — an agent
+    /// probing for what it can reach is precisely the pattern the judge is meant to notice, and
+    /// a history that kept only successes would hide it.</para>
+    /// </remarks>
+    public async Task<AccessResult> PreExecuteAsync(
+        SecurityContext context,
+        PreExecuteArgs args,
+        CancellationToken ct = default)
+    {
+        var deterministic = PreExecute(context, args);
+
+        var rendered = RenderToolCall(args);
+        _options.ToolCallHistory?.Record(rendered);
+
+        if (!deterministic.Allowed) return deterministic;
+        if (_options.Judge is null) return deterministic;
+
+        var policy = context.Policies.FirstOrDefault();
+        if (policy is null) return new AccessResult(false, "no policy in context");
+
+        var outcome = await JudgeGate.EvaluateAsync(
+            policy, _options.Judge, rendered, _options.ToolCallHistory, ct);
+
+        if (outcome.Disposition == JudgeDisposition.Allow) return new AccessResult(true);
+
+        if (outcome.Disposition == JudgeDisposition.Escalate
+            && _options.EscalationHandler is not null)
+        {
+            // A review path exists, so the ambiguous case is its decision rather than a flat
+            // denial. Everything else about the outcome is still reported to it.
+            return await _options.EscalationHandler(outcome)
+                ? new AccessResult(true)
+                : new AccessResult(false, outcome.Reason);
+        }
+
+        return new AccessResult(false, outcome.Reason);
+    }
+
+    /// <summary>
+    /// Renders a call as the one line the judge reasons over.
+    /// </summary>
+    /// <remarks>
+    /// Deterministic and includes only what the wrapper was given: the tool name, and the
+    /// object, fields and endpoint when present. Field <i>names</i> appear because "which
+    /// columns" is most of what makes a read on-purpose or not; field <i>values</i> never reach
+    /// here, so no row data is sent to a model by this path.
+    /// </remarks>
+    /// <remarks>
+    /// Public because it is what a deployment sees in its judge's audit trail, and because an
+    /// integrator wiring <see cref="JudgeGate"/> directly needs the same rendering the wrapper
+    /// uses — two renderings of one call would make the wrapper's history and a hand-rolled
+    /// one incomparable.
+    /// </remarks>
+    public static string RenderToolCall(PreExecuteArgs args)
+    {
+        var parts = new List<string>();
+        if (args.ObjectName is { Length: > 0 }) parts.Add($"object={args.ObjectName}");
+        if (args.Fields is { Length: > 0 }) parts.Add($"fields=[{string.Join(",", args.Fields)}]");
+        if (args.EndpointPath is { Length: > 0 })
+            parts.Add($"endpoint={args.EndpointMethod ?? "GET"} {args.EndpointPath}");
+
+        return parts.Count == 0
+            ? $"{args.ToolName}()"
+            : $"{args.ToolName}({string.Join(" ", parts)})";
     }
 
     /// <summary>

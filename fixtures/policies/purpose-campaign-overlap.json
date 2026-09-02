@@ -1,0 +1,42 @@
+{
+  "version": "1.0",
+  "name": "campaign-x-overlap-agent",
+  "description": "Segment overlap analysis for Campaign X. Purpose-scoped: resolves only for a caller declaring campaign-x-overlap.",
+  "priority": 10,
+  "appliesToAll": false,
+  "sourcePatterns": ["db:marketing:*"],
+  "permissions": {
+    "canQuery": true,
+    "readOnly": true
+  },
+  "purposeProfile": {
+    "purposeId": "campaign-x-overlap",
+    "description": "Identify overlapping opted-in customer segments for Campaign X.",
+    "allowedActions": ["aggregate_overlap", "count_segments"],
+    "prohibitedActions": ["export_pii", "enumerate_individuals", "join_external_data"]
+  },
+  "objectRules": {
+    "allowedObjects": ["customer_segments", "campaign_assignments"],
+    "hiddenObjects": ["billing_internal", "support_tickets"],
+    "fieldRules": {
+      "hiddenFields": ["customer_segments.ssn"],
+      "maskedFields": [
+        {
+          "field": "customer_segments.email",
+          "maskType": "hash",
+          "parameters": { "algorithm": "sha256" }
+        }
+      ]
+    },
+    "rowFilters": [
+      {
+        "field": "consent_status",
+        "operator": "equals",
+        "value": "opted_in"
+      }
+    ]
+  },
+  "limits": {
+    "maxResults": 10000
+  }
+}

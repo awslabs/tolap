@@ -34,6 +34,27 @@ The guarantees that matter most:
 - **Ambiguity fails closed.** Missing/unparseable expiry, an unknown mask type,
   a row missing a filtered field, and an unenforceable result shape all deny
   rather than pass data through.
+- **A purpose-bound context cannot be repurposed.** The mechanism is worth stating
+  precisely, because it is not the one the phrase suggests: **no wrapper reads
+  `SecurityContext.declaredPurpose` at enforcement time.** What binds the context is
+  that the *policy inside it is already purpose-scoped*. A definition carrying a
+  `purposeProfile` resolves only for a caller declaring a matching `purposeId` (§15.1),
+  and that filter runs before the merge — so the effective policy sealed into the
+  envelope is the narrow one, and there is nothing wider in there to reach. Because the
+  whole envelope is signed, neither that policy, nor the recorded `declaredPurpose`, nor
+  a delegation hop can be altered without invalidating the signature, so a sub-agent
+  cannot append a hop granting itself wider authority. A captured context is therefore
+  good only for the access its purpose-scoped policy already grants. Opt-in, and the
+  purpose is caller-*asserted* — see Known limitations.
+- **An unclassified call is denied under a purpose that constrains actions.** When the
+  resolved profile has a non-null `allowedActions` or a non-empty `prohibitedActions`,
+  a call the wrapper cannot classify is refused with
+  `action category not declared for tool` (§15.2). Prohibited is checked before allowed,
+  so a category in both lists is denied and reports the more specific reason. The
+  deny-list half is the less obvious and more important one: a purpose declaring only
+  `prohibitedActions: ["export_pii"]` means "anything but exporting PII", and an
+  unclassified tool might be exactly that — permitting the unclassified while forbidding
+  the classified cannot be what the author meant.
 
 ## Security-relevant usage guidance
 
@@ -75,6 +96,28 @@ model for the full list):
   `allowUnenforceableShapes` / `allow_unenforceable_shapes`, which is off by
   default and logs a warning whenever it lets a result through — do not enable
   it in production. *(Threat I4 / remediation R-3 — resolved.)*
+- **The action category is your configuration, and omitting it denies everything.**
+  §15.2's category MUST come from administrator-supplied wrapper configuration and never
+  from the caller — an agent that can name its own action category can name a permitted
+  one, which reduces the check to a formality. There are two maps, because the wrapper
+  families identify a call differently: tool-name-keyed
+  (`ToolActionCategories` / `tool_action_categories` / `toolActionCategories`) for the
+  MCP/context wrappers, and `"METHOD path-glob"`-keyed (`HttpActionCategories` / …) for
+  HTTP, since an HTTP request carries a method and a path and no tool name. A name-keyed
+  map alone would leave this check permanently inert for `api` sources. Both are carried
+  and forwarded by `SecureToolFactory`, so configure them at the composition root rather
+  than per wrapper. Adding a purpose-bound policy that constrains actions to a wrapper
+  with **no** map configured denies every call — loudly, and deliberately: a tool nobody
+  classified cannot be shown to serve the purpose, and the alternative is the fail-open.
+  The fix for that denial is to classify the tool, not to widen the policy.
+  *(Threat E5 / spec §15.2.)*
+- **A delegation chain is validated for you, and bounded.** Every wrapper validates the
+  chain after the signature check, so a context whose hop widens its parent's purpose is
+  refused wherever it is used, and depth is capped at 10 hops in both the validator and
+  `security-context.schema.json`. The context *builders* only *record* a chain, because a
+  builder that silently dropped an invalid one would produce a context that looked
+  delegated and was not — so if you issue contexts, nothing is required of you here beyond
+  not exceeding the cap. *(Threat E6 / spec §15.3.)*
 - **`Permissive` enforcement mode disables denials.** Use it only for staged
   rollout/observability, never in production. *(Threat I5.)*
 - **Use a real, access-controlled policy store in production.** The in-memory
@@ -119,6 +162,18 @@ reasoning behind each:
   end users, and TOLAP enforces the policy you wrote rather than judging whether it
   is correct — `hiddenFields: ["ssn"]` protects nothing when the column is
   `ssn_number`.
+- **Purpose is asserted, not proved.** TOLAP checks a declared purpose against the
+  policy set and checks a delegation chain for internal consistency; it cannot check
+  that the caller was honest. Purpose binding bounds an agent that drifts off-task or
+  is compromised mid-task, and bounds what a stolen context is good for. It is not a
+  control against an integrator that declares one purpose and pursues another — that
+  case falls under trusted policy authors above.
+- **The LLM judge is advisory and non-deterministic.** It can only withdraw an
+  allowance the deterministic checks already granted, never widen one, so a
+  prompt-injected verdict cannot escalate. But it also cannot be relied on to catch a
+  given case, and its verdict is the one behaviour in this project not pinned by a
+  shared cross-language fixture. Treat it as detection over the deterministic checks,
+  never as one of them.
 - **One deployment of the reference server serves one tenant.** Any authenticated
   administrator sees every policy; `scope.tenantId` narrows which assignments apply,
   not who can read them.

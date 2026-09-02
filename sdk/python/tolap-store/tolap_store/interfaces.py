@@ -41,8 +41,27 @@ class PolicyStore(Protocol):
         user_id: str,
         tenant_id: str,
         source_connection_id: str,
+        *,
+        declared_purpose: str | None = None,
     ) -> EffectivePolicy:
-        """Resolve the effective policy for a user, tenant, and source."""
+        """Resolve the effective policy for a user, tenant, and source.
+
+        ``declared_purpose`` is the purpose the caller declares, or ``None`` to declare
+        none. ``None`` resolves exactly the policies it did before purpose binding
+        existed.
+
+        It is threaded through rather than left to the caller to apply afterwards,
+        because purpose filtering has to happen BEFORE the merge: a policy scoped to a
+        purpose the caller did not declare must not fold its rules into the effective
+        policy at all (canonical-enforcement-spec.md section 15.1). A store that dropped
+        the parameter would resolve a policy nobody asked for, and there would be no
+        later point at which to undo it.
+
+        Keyword-only with a default so every existing call site keeps compiling and
+        keeps its meaning. An external implementor of this protocol does have to add the
+        parameter; there is no way to extend a resolution contract without that, and
+        silently ignoring a declared purpose is the outcome worth breaking a build over.
+        """
         ...
 
 

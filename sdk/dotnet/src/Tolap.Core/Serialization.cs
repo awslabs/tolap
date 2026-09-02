@@ -28,6 +28,9 @@ public static class TolapJsonOptions
         options.Converters.Add(new MaskTypeJsonConverter());
         options.Converters.Add(new SigningAlgorithmJsonConverter());
         options.Converters.Add(new AssigneeTypeJsonConverter());
+        options.Converters.Add(new PrincipalTypeJsonConverter());
+        options.Converters.Add(new UtcAssumingDateTimeOffsetJsonConverter());
+        options.Converters.Add(new UtcAssumingNullableDateTimeOffsetJsonConverter());
         options.Converters.Add(new MaskingParametersJsonConverter());
         return options;
     }
@@ -47,6 +50,79 @@ public static class TolapJsonOptions
     {
         return JsonSerializer.Deserialize<T>(json, s_options)
             ?? throw new JsonException($"Failed to deserialize JSON to {typeof(T).Name}");
+    }
+}
+
+/// <summary>
+/// Reads a timestamp that carries no UTC offset as UTC rather than as local time.
+/// </summary>
+/// <remarks>
+/// <para>System.Text.Json's default reader treats <c>"2026-09-01T09:58:00"</c> — an ISO 8601
+/// string with no offset and no <c>Z</c> — as <b>local</b> time. That makes the deserialized
+/// instant, and therefore the canonical signing bytes, depend on the host's timezone: the same
+/// JSON signed to <c>09:58:00Z</c> on a UTC host, <c>13:58:00Z</c> on <c>EST5EDT</c> and
+/// <c>16:58:00Z</c> on <c>America/Los_Angeles</c>. That is a divergence between two
+/// <i>deployments of the same SDK</i>, which is worse than a cross-SDK one and which no
+/// fixture pinning a single host could detect.</para>
+/// <para>Python already assumed UTC, so assuming it here aligns .NET with the only
+/// host-independent reading available. Spec section 2 rule 4 mandates normalizing to UTC
+/// before signing but is silent on what an offset-less value means; this converter is what
+/// makes the answer not depend on where the process happens to run.</para>
+/// <para>A value that <i>does</i> carry an offset is unaffected — <c>+02:00</c> and <c>Z</c>
+/// both parse to the instant they name, and rule 4 folds them to the same bytes. Writing is
+/// left to the default writer, because transport bytes are not signed; only the reading side
+/// could move an instant.</para>
+/// </remarks>
+public sealed class UtcAssumingDateTimeOffsetJsonConverter : JsonConverter<DateTimeOffset>
+{
+    public override DateTimeOffset Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var text = reader.GetString()
+                   ?? throw new JsonException("Expected a string for DateTimeOffset");
+
+        // AssumeUniversal is the whole point; AdjustToUniversal keeps the returned offset at
+        // zero so a later ToUniversalTime is a no-op rather than a second conversion.
+        if (!DateTimeOffset.TryParse(
+                text,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal
+                    | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out var parsed))
+        {
+            throw new JsonException($"Could not parse timestamp: {text}");
+        }
+
+        return parsed;
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer, DateTimeOffset value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value);
+}
+
+/// <inheritdoc cref="UtcAssumingDateTimeOffsetJsonConverter"/>
+/// <remarks>
+/// The nullable companion. Registered separately because System.Text.Json does not derive a
+/// <c>T?</c> converter from a <c>T</c> one for value types, and every optional timestamp in the
+/// model — <c>expiresAt</c>, <c>revokedAt</c>, <c>delegatedAt</c> — is nullable, so omitting
+/// this would leave the bug in place for exactly the fields this feature added.
+/// </remarks>
+public sealed class UtcAssumingNullableDateTimeOffsetJsonConverter : JsonConverter<DateTimeOffset?>
+{
+    private static readonly UtcAssumingDateTimeOffsetJsonConverter Inner = new();
+
+    public override DateTimeOffset? Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        => reader.TokenType == JsonTokenType.Null
+            ? null
+            : Inner.Read(ref reader, typeof(DateTimeOffset), options);
+
+    public override void Write(
+        Utf8JsonWriter writer, DateTimeOffset? value, JsonSerializerOptions options)
+    {
+        if (value is null) writer.WriteNullValue();
+        else writer.WriteStringValue(value.Value);
     }
 }
 
@@ -197,6 +273,45 @@ public sealed class AssigneeTypeJsonConverter : JsonConverter<AssigneeType>
             AssigneeType.Role => "role",
             AssigneeType.ServiceAccount => "serviceAccount",
             _ => throw new JsonException($"Unknown AssigneeType: {value}")
+        };
+        writer.WriteStringValue(str);
+    }
+}
+
+/// <summary>
+/// Converts PrincipalType enum to/from the lowercase JSON string values a delegation hop
+/// carries on the wire.
+/// </summary>
+/// <remarks>
+/// Modelled on <see cref="AssigneeTypeJsonConverter"/>, and fail-closed for the same reason:
+/// an unrecognized principal type throws at deserialization rather than arriving in
+/// <see cref="DelegationChainValidator"/> as a value no narrowing rule covers. It must be
+/// registered in <b>both</b> option factories — <see cref="TolapJsonOptions"/> for transport
+/// and <see cref="CanonicalJson"/> for signing — because a converter missing from the
+/// canonical writer produces bytes that disagree with the other two SDKs.
+/// </remarks>
+public sealed class PrincipalTypeJsonConverter : JsonConverter<PrincipalType>
+{
+    public override PrincipalType Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var value = reader.GetString() ?? throw new JsonException("Expected a string for PrincipalType");
+        return value switch
+        {
+            "user" => PrincipalType.User,
+            "agent" => PrincipalType.Agent,
+            "service" => PrincipalType.Service,
+            _ => throw new JsonException($"Unknown PrincipalType value: {value}")
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, PrincipalType value, JsonSerializerOptions options)
+    {
+        var str = value switch
+        {
+            PrincipalType.User => "user",
+            PrincipalType.Agent => "agent",
+            PrincipalType.Service => "service",
+            _ => throw new JsonException($"Unknown PrincipalType: {value}")
         };
         writer.WriteStringValue(str);
     }

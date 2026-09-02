@@ -4,6 +4,7 @@ import logging
 from typing import Any, Callable
 
 from tolap_core.context import validate_context, validate_expiry
+from tolap_core.delegation import validate_delegation_chain
 from tolap_core.enforcement import (
     TARGET_ROW_UNKNOWN,
     AccessResult,
@@ -16,7 +17,10 @@ from tolap_core.enforcement import (
     validate_write,
 )
 from tolap_core.enums import WriteOperation
+from tolap_core.judge import JudgeDisposition, evaluate_judge
 from tolap_core.models import EffectivePolicy, SecurityContext
+from tolap_core.purpose_action import validate_tool_action
+from tolap_mcp.tool_call import render_tool_call
 from tolap_core.sql_rewriter import SqlDialect, SqlEnforcementMode
 
 from tolap_mcp.options import SecureMcpServerOptions
@@ -98,6 +102,20 @@ class SecureMcpToolWrapper:
             if expiry_reason is not None:
                 return AccessResult(allowed=False, reason=expiry_reason)
 
+                # The delegation chain, if the context carries one (spec section 15.3).
+        #
+        # Validated here rather than in ``build_security_context``: a builder that validated
+        # would have to either raise -- making issuing brittle -- or drop the chain, which
+        # emits a context that looks delegated and is not. And the check is only meaningful
+        # *after* the signature, since the signature proves the chain was not modified in
+        # transit rather than that it is valid, and an unsigned chain can be rewritten by the
+        # principal it constrains.
+        #
+        # Backward compatible: an absent chain, or a single hop, is allowed.
+        chain_result = validate_delegation_chain(context.delegation_chain)
+        if not chain_result.allowed:
+            return chain_result
+
         return AccessResult(allowed=True)
 
     def pre_execute(
@@ -109,7 +127,72 @@ class SecureMcpToolWrapper:
         endpoint_path: str | None = None,
         endpoint_method: str | None = None,
     ) -> AccessResult:
-        """Pre-execution enforcement check."""
+        """Pre-execution enforcement check, then the semantic judge if one is configured.
+
+        The judge runs **only** if the deterministic checks allowed the call, so it can
+        only ever withdraw an allowance -- it is never asked to permit something the rules
+        refused. That is what makes prompt injection through the tool call survivable
+        rather than critical: the worst a manipulated verdict achieves is an allow that was
+        already granted.
+        """
+        deterministic = self._pre_execute_deterministic(
+            context,
+            tool_name,
+            object_name,
+            fields,
+            endpoint_path,
+            endpoint_method,
+        )
+
+        rendered = render_tool_call(
+            tool_name, object_name, fields, endpoint_path, endpoint_method
+        )
+        # Recorded whether or not the call is permitted. A refused call is part of the
+        # trajectory -- an agent probing for what it can reach is precisely the pattern the
+        # judge is meant to notice, and a history that kept only successes would hide it.
+        if self._options.tool_call_history is not None:
+            self._options.tool_call_history.record(rendered)
+
+        if not deterministic.allowed or self._options.judge is None:
+            return deterministic
+
+        return self._apply_judge(context, rendered)
+
+    def _apply_judge(self, context: SecurityContext, rendered: str) -> AccessResult:
+        """Consult the judge for a call the deterministic checks already allowed."""
+        assert self._options.judge is not None  # guarded by the caller
+        outcome = evaluate_judge(
+            context.effective_policy,
+            self._options.judge,
+            rendered,
+            self._options.tool_call_history,
+        )
+
+        if outcome.disposition is JudgeDisposition.allow:
+            return AccessResult(allowed=True)
+
+        # A review path exists, so the ambiguous case is its decision rather than a flat
+        # denial. Only ``escalate`` is routed there: sending a confident block to a review
+        # handler would let a deployment approve away the judge's clearest refusals.
+        if (
+            outcome.disposition is JudgeDisposition.escalate
+            and self._options.escalation_handler is not None
+        ):
+            if self._options.escalation_handler(outcome):
+                return AccessResult(allowed=True)
+
+        return AccessResult(allowed=False, reason=outcome.reason)
+
+    def _pre_execute_deterministic(
+        self,
+        context: SecurityContext,
+        tool_name: str,
+        object_name: str | None,
+        fields: list[str] | None,
+        endpoint_path: str | None,
+        endpoint_method: str | None,
+    ) -> AccessResult:
+        """The checks that need no network call, in their required order."""
         # Validate security context first
         ctx_result = self.validate_security_context(context)
         if not ctx_result.allowed:
@@ -124,6 +207,18 @@ class SecureMcpToolWrapper:
         # Check query permission
         if not policy.permissions.can_query:
             return AccessResult(allowed=False, reason="query not permitted")
+
+        # Purpose-bound action validation, after the read gate and before the object
+        # rules. The ordering matters in both directions: after can_query, because a
+        # policy that grants no reads should say so rather than complain about a
+        # category; before the object rules, because "this action does not serve the
+        # declared purpose" is the more specific answer when both would deny, and it is
+        # the one that tells an operator what actually went wrong.
+        action_result = validate_tool_action(
+            policy, tool_name, self._options.tool_action_categories
+        )
+        if not action_result.allowed:
+            return action_result
 
         # Object-level access check
         if object_name is not None:

@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "policyName": "campaign-x-overlap-judged",
+  "assignee": {
+    "type": "user",
+    "identifier": "user-marketing-001"
+  },
+  "scope": {
+    "tenantId": "tenant-acme-retail"
+  },
+  "active": true,
+  "audit": {
+    "grantedBy": "admin-jane-doe",
+    "grantedAt": "2026-09-01T09:00:00Z",
+    "reason": "Same purpose as campaign-x-overlap-agent, with semantic review enabled"
+  }
+}

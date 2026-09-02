@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "name": "marketing-baseline",
+  "description": "Purpose-agnostic baseline over the marketing sources. Carries no purposeProfile, so it resolves whether or not a purpose is declared -- the backward-compatibility half of every purpose-filtering scenario.",
+  "priority": 50,
+  "appliesToAll": false,
+  "sourcePatterns": ["db:marketing:*"],
+  "permissions": {
+    "canQuery": true,
+    "readOnly": true
+  },
+  "objectRules": {
+    "hiddenObjects": ["billing_internal"],
+    "fieldRules": {
+      "hiddenFields": ["customer_segments.ssn", "customer_segments.date_of_birth"]
+    }
+  },
+  "limits": {
+    "maxResults": 2000
+  }
+}

@@ -1,8 +1,11 @@
 # Integration examples, in their own workflow on purpose.
 #
-# These install seven third-party agent frameworks. A breaking release in any of them must not
-# block a change to the SDK, so this is deliberately NOT part of ci.yml — the main gate stays
-# dependent only on the three SDKs and their zero runtime dependencies.
+# Across the three jobs below these install thirteen third-party framework packages -- six
+# Python, five npm, two NuGet -- covering fourteen integrations, because Bedrock Agents installs
+# nothing at all (it is a plain Lambda handler importing only tolap_core). A breaking release in
+# any of the thirteen must not block a change to the SDK, so this is deliberately NOT part of
+# ci.yml -- the main gate stays dependent only on the three SDKs and their zero runtime
+# dependencies. Per-job counts are in each job's `name:`.
 name: Examples
 
 on:
@@ -22,8 +25,10 @@ on:
 # Least privilege, stated rather than inherited. Every job here only checks out code and
 # runs tests, so read access to contents is the whole requirement. Without this block the
 # jobs inherit the repository default, which can be read-write for the whole token — and
-# these jobs install seven third-party agent frameworks from public registries, so a
-# compromised release in any one of them would run with whatever the default granted.
+# these jobs install thirteen third-party framework packages from three public registries
+# (PyPI, npm, NuGet), so a compromised release in any one of them would run with whatever the
+# default granted. Thirteen, not seven: seven is the Python job's framework count alone, and
+# understating the supply-chain surface by half is exactly the wrong way to justify this block.
 # ci.yml already declares the same thing for the same reason.
 permissions:
   contents: read

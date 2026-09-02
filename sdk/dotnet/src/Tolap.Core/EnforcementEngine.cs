@@ -1089,6 +1089,58 @@ public static class EnforcementEngine
         return new AccessResult(true);
     }
 
+    /// <summary>
+    /// Validates a tool call's action category against the purpose it is running under
+    /// (canonical-enforcement-spec.md section 15.2).
+    /// </summary>
+    /// <param name="actionCategory">
+    /// The semantic category of the operation, for example <c>aggregate_overlap</c>. This
+    /// comes from the wrapper's administrator-supplied tool-to-category map, never from the
+    /// agent: a caller that can name its own category can name an allowed one.
+    /// </param>
+    /// <param name="purposeProfile">
+    /// The profile from the resolved <see cref="EffectivePolicy"/>. Purpose-agnostic
+    /// policies carry none and never reach here.
+    /// </param>
+    /// <remarks>
+    /// <para>Prohibited is checked before allowed, so a category in both lists is denied and
+    /// keeps the more specific reason — the same ordering
+    /// <see cref="ValidateEndpoint"/> uses for hidden before allowed.</para>
+    /// <para><c>allowedActions</c> follows spec section 3: <c>null</c> is unrestricted, an
+    /// empty array denies everything. The <c>null</c> case is a real grant rather than an
+    /// oversight here, because a purpose may legitimately constrain only what is
+    /// <i>forbidden</i> — unlike <c>allowedMethods</c>, where absence defaults to the read
+    /// methods.</para>
+    /// <para>Comparison is case-insensitive, unlike the purpose comparison at resolution.
+    /// The two point the same way: a mis-cased purpose resolves nothing, and a mis-cased
+    /// category is still caught by a prohibition. Comparing case-sensitively here would let
+    /// <c>EXPORT_PII</c> walk past a prohibition on <c>export_pii</c>, which is the one
+    /// outcome neither reading should permit. The reason string echoes the category as
+    /// supplied rather than normalized, so a log shows what was attempted.</para>
+    /// </remarks>
+    public static AccessResult ValidateAction(string actionCategory, PurposeProfile purposeProfile)
+    {
+        if (purposeProfile.ProhibitedActions is not null &&
+            purposeProfile.ProhibitedActions.Contains(actionCategory, StringComparer.OrdinalIgnoreCase))
+        {
+            return new AccessResult(false,
+                $"action '{actionCategory}' is prohibited under purpose '{purposeProfile.PurposeId}'");
+        }
+
+        // Retention tested against null rather than emptiness: an empty allow-list is the
+        // most restrictive outcome the model can express, and a truthiness check would turn
+        // it into no restriction at all (spec section 3).
+        if (purposeProfile.AllowedActions is not null &&
+            !purposeProfile.AllowedActions.Contains(actionCategory, StringComparer.OrdinalIgnoreCase))
+        {
+            return new AccessResult(false,
+                $"action '{actionCategory}' not in allowed actions " +
+                $"for purpose '{purposeProfile.PurposeId}'");
+        }
+
+        return new AccessResult(true);
+    }
+
     // -- Write validation (connector-spec.md section 4) --
     //
     // Reads filter what comes back. Writes have to be validated BEFORE they reach the

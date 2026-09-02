@@ -1,0 +1,63 @@
+{
+  "description": "Every contributing deny-list is explicitly empty -- the union is [] and MUST stay [], not collapse to absent. Invisible to enforcement (neither hides anything) and NOT invisible to signing: an absent field is omitted from the canonical form while [] is emitted, so a policy authoring an empty hiddenObjects signed differently in Python than in .NET and TypeScript, and a context signed by one would not verify in the others. Found by porting purpose binding to Python; the cause was a truthiness retention check, which canonical-enforcement-spec.md section 3 names explicitly as the mistake to avoid. This fixture exists so the collapse cannot come back in any of the three languages -- and it covers hiddenObjects, deniedTags, readOnlyFields and hiddenEndpoints together, because one shared helper produced all four.",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "empty-denials-a",
+      "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": {
+        "hiddenObjects": [],
+        "fieldRules": {
+          "hiddenFields": [],
+          "readOnlyFields": []
+        },
+        "tagRules": {
+          "deniedTags": []
+        },
+        "endpointRules": {
+          "hiddenEndpoints": [],
+          "allowedMethods": ["GET"]
+        }
+      }
+    },
+    {
+      "version": "1.0",
+      "name": "empty-denials-b",
+      "priority": 20,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": {
+        "hiddenObjects": [],
+        "fieldRules": {
+          "hiddenFields": [],
+          "readOnlyFields": []
+        },
+        "tagRules": {
+          "deniedTags": []
+        },
+        "endpointRules": {
+          "hiddenEndpoints": [],
+          "allowedMethods": ["GET"]
+        }
+      }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["empty-denials-a", "empty-denials-b"],
+    "permissions": { "canQuery": true, "readOnly": true },
+    "objectRules": {
+      "hiddenObjects": [],
+      "fieldRules": {
+        "hiddenFields": [],
+        "readOnlyFields": []
+      },
+      "tagRules": {
+        "deniedTags": []
+      },
+      "endpointRules": {
+        "hiddenEndpoints": [],
+        "allowedMethods": ["GET"]
+      }
+    }
+  }
+}

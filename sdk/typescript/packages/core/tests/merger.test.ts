@@ -203,6 +203,189 @@ describe("Policy Merger", () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // union-of-empty-lists-stays-empty (canonical spec §3, §14)
+  // -------------------------------------------------------------------------
+  //
+  // A pin rather than a fix: TypeScript's `unionArrays` already returns `[]` here, as
+  // does .NET's `UnionNullable`. Python's used a truthiness retention check
+  // (`return result if result else None`) and returned `None`.
+  //
+  // On a deny-list the two are indistinguishable to ENFORCEMENT -- neither hides
+  // anything -- so no test comparing access outcomes could see the divergence. They
+  // are not indistinguishable to SIGNING: the canonical form omits an absent field and
+  // emits `[]`, so a policy authoring an explicitly empty deny-list signed differently
+  // in Python than in the other two, and a context signed by one would not verify in
+  // the others. §14 calls that a security defect rather than a stylistic difference.
+  //
+  // The sweep below picks the fixture up automatically but only asserts
+  // `sourceProfiles` and `permissions` are defined, so it could not catch a regression
+  // here. Hence a dedicated case.
+
+  describe("union-of-empty-lists-stays-empty", () => {
+    const FIXTURE = "union-of-empty-lists-stays-empty.json";
+
+    /**
+     * Assert a list is **present** and empty.
+     *
+     * Both halves, deliberately. `expect(x ?? []).toEqual([])` and a bare "is empty"
+     * check both pass against `undefined`, which is the same collapse relocated into
+     * the test — and a test that cannot fail against the bug is the thing this fixture
+     * exists to prevent.
+     */
+    function expectPresentAndEmpty(value: unknown, label: string): void {
+      expect(value, `${label} collapsed to absent`).toBeDefined();
+      expect(value, `${label} collapsed to null`).not.toBeNull();
+      expect(Array.isArray(value), `${label} is not an array`).toBe(true);
+      expect(value, `${label} is not empty`).toEqual([]);
+    }
+
+    it("keeps every explicitly-empty deny-list present and empty", () => {
+      const fixture = loadFixture(FIXTURE);
+      const result = merge(fixture.inputs);
+
+      // Guard: the inputs must actually spell the empty lists, or the assertions below
+      // are about a fixture that stopped exercising the case.
+      for (const input of fixture.inputs) {
+        expect(input.objectRules?.hiddenObjects, input.name).toEqual([]);
+        expect(input.objectRules?.tagRules?.deniedTags, input.name).toEqual([]);
+      }
+
+      const rules = result.objectRules;
+      expect(rules).toBeDefined();
+
+      // One shared helper produced all five, so all five are checked together: fixing
+      // the collapse for one and not the others is the shape §14 warns about.
+      expectPresentAndEmpty(rules?.hiddenObjects, "hiddenObjects");
+      expectPresentAndEmpty(rules?.fieldRules?.hiddenFields, "fieldRules.hiddenFields");
+      expectPresentAndEmpty(rules?.fieldRules?.readOnlyFields, "fieldRules.readOnlyFields");
+      expectPresentAndEmpty(rules?.tagRules?.deniedTags, "tagRules.deniedTags");
+      expectPresentAndEmpty(
+        rules?.endpointRules?.hiddenEndpoints,
+        "endpointRules.hiddenEndpoints",
+      );
+    });
+
+    it("matches the fixture's expected objectRules exactly", () => {
+      // The whole-shape comparison as well as the field-by-field one: `toEqual`
+      // distinguishes a missing key and an `undefined` value from `[]`, so it catches a
+      // collapse in any field the fixture names, including one added later.
+      const fixture = loadFixture(FIXTURE);
+      const result = merge(fixture.inputs);
+
+      expect(result.sourceProfiles).toEqual(fixture.expected.sourceProfiles);
+      expect(result.permissions).toEqual(expectedPermissions(fixture));
+      expect(result.objectRules).toEqual(fixture.expected.objectRules);
+    });
+
+    it("a UNION field no policy mentions stays absent", () => {
+      // The paired direction, and the reason the correct fix is a "did any policy
+      // contribute" flag rather than "always return an array". Emitting `[]` for a field
+      // nobody mentioned would change the canonical bytes of every policy that never
+      // mentioned it — a far larger blast radius than the bug.
+      //
+      // The fields exercised here are the ones the UNION helper produces, and neither
+      // input names them. Asserting the intersection fields instead would leave this
+      // test passing against an "always return an array" union, since the two helpers
+      // are separate: the mutant has to be aimed at the code the test covers.
+      const result = merge([
+        {
+          version: "1.0",
+          name: "allow-only-a",
+          priority: 10,
+          permissions: { canQuery: true, readOnly: true },
+          objectRules: {
+            allowedObjects: ["customer_segments"],
+            fieldRules: { allowedFields: ["segment_id"] },
+            tagRules: { allowedTags: ["public"] },
+            endpointRules: { allowedEndpoints: ["/segments/*"] },
+          },
+        },
+        {
+          version: "1.0",
+          name: "allow-only-b",
+          priority: 20,
+          permissions: { canQuery: true, readOnly: true },
+          objectRules: {
+            allowedObjects: ["customer_segments"],
+            fieldRules: { allowedFields: ["segment_id"] },
+            tagRules: { allowedTags: ["public"] },
+            endpointRules: { allowedEndpoints: ["/segments/*"] },
+          },
+        },
+      ]);
+
+      const rules = result.objectRules;
+      expect(rules).toBeDefined();
+
+      // Every union-produced field, unmentioned by both inputs.
+      expect(rules?.hiddenObjects).toBeUndefined();
+      expect(rules?.fieldRules?.hiddenFields).toBeUndefined();
+      expect(rules?.fieldRules?.readOnlyFields).toBeUndefined();
+      expect(rules?.tagRules?.deniedTags).toBeUndefined();
+      expect(rules?.endpointRules?.hiddenEndpoints).toBeUndefined();
+
+      // Absent rather than present-and-undefined: a key that is never written cannot be
+      // sorted into the canonical bytes at all, whereas §1's null-dropping is a second
+      // line of defence.
+      expect("hiddenObjects" in (rules as object)).toBe(false);
+      expect("deniedTags" in (rules?.tagRules as object)).toBe(false);
+      expect("hiddenFields" in (rules?.fieldRules as object)).toBe(false);
+      expect("readOnlyFields" in (rules?.fieldRules as object)).toBe(false);
+      expect("hiddenEndpoints" in (rules?.endpointRules as object)).toBe(false);
+
+      // The paired half: what the inputs DID name survived, so the absences above are
+      // "nobody contributed" rather than "the merge dropped everything".
+      expect(rules?.allowedObjects).toEqual(["customer_segments"]);
+      expect(rules?.tagRules?.allowedTags).toEqual(["public"]);
+    });
+
+    it("a policy mentioning NO list at all yields no objectRules", () => {
+      // The outermost arm of the same rule: when nothing contributes, the whole block
+      // is absent rather than an empty object.
+      const result = merge([
+        {
+          version: "1.0",
+          name: "no-rules-a",
+          priority: 10,
+          permissions: { canQuery: true, readOnly: true },
+        },
+        {
+          version: "1.0",
+          name: "no-rules-b",
+          priority: 20,
+          permissions: { canQuery: true, readOnly: true },
+        },
+      ]);
+
+      expect(result.objectRules).toBeUndefined();
+      expect(result.limits).toBeUndefined();
+    });
+
+    it("one empty and one populated deny-list unions to the populated one", () => {
+      // The middle case between the two above: `[]` contributes nothing to a union, so
+      // it neither erases the other side nor is erased by it.
+      const result = merge([
+        {
+          version: "1.0",
+          name: "empty",
+          priority: 10,
+          permissions: { canQuery: true, readOnly: true },
+          objectRules: { hiddenObjects: [] },
+        },
+        {
+          version: "1.0",
+          name: "populated",
+          priority: 20,
+          permissions: { canQuery: true, readOnly: true },
+          objectRules: { hiddenObjects: ["billing_internal"] },
+        },
+      ]);
+
+      expect(result.objectRules?.hiddenObjects).toEqual(["billing_internal"]);
+    });
+  });
+
   describe("all fixtures produce valid merge results", () => {
     for (const file of fixtureFiles()) {
       it(`should process ${file}`, () => {

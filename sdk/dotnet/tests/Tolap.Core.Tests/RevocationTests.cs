@@ -99,6 +99,52 @@ public class RevocationTests
         result.Permissions.CanQuery.Should().BeTrue();
     }
 
+    [Theory]
+    [InlineData(true, 60, true)]
+    [InlineData(true, -60, false)]
+    [InlineData(false, 60, true)]
+    [InlineData(false, -60, false)]
+    public void RevokedAtAndExpiresAt_TreatTheSameInstantIdentically(
+        bool revocation, int minutesFromNow, bool resolves)
+    {
+        // Spec section 12 defines `revokedAt` by reference to `expiresAt` -- a future date is
+        // "not yet in effect" for both -- and that mirroring is what keeps the field from
+        // being "a boolean in disguise". The two bounds are therefore one claim, and pinning
+        // them in separate tests cannot see them drift apart: two controls sharing one code
+        // path with no test comparing them is testing-antipatterns.md section 2 exactly. The
+        // expectation table is shared on purpose, so it fails if either field starts reading
+        // the same instant differently from the other.
+        var at = DateTimeOffset.UtcNow.AddMinutes(minutesFromNow);
+        var result = Resolve(revocation ? Assignment(revokedAt: at) : Assignment(expiresAt: at));
+
+        result.Permissions.CanQuery.Should().Be(resolves);
+
+        // Paired control, per the same document: the "denied" rows prove nothing on their own,
+        // since a resolver that denied everything would satisfy them. And `CanQuery` alone
+        // could be satisfied by a merge that produced no policy at all -- the profile list is
+        // what shows the assignment itself resolved.
+        if (resolves)
+            result.SourceProfiles.Should().Equal("analyst");
+        else
+            result.SourceProfiles.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ScheduledRevocation_DoesNotRescueAnExpiredAssignment()
+    {
+        // The mirror of Revocation_OverridesFarFutureExpiry, and the direction that can fail
+        // open. Revocation is filtered first, so a resolver that let "revokedAt is in the
+        // future" stand for "this grant is live" would admit the assignment there and never
+        // apply the expiry bound. Both bounds must hold, not whichever happens to be checked
+        // first.
+        var result = Resolve(Assignment(
+            expiresAt: DateTimeOffset.UtcNow.AddMinutes(-1),
+            revokedAt: DateTimeOffset.UtcNow.AddYears(1)));
+
+        result.Permissions.CanQuery.Should().BeFalse();
+        result.SourceProfiles.Should().BeEmpty();
+    }
+
     [Fact]
     public void NullRevokedAt_IsNotRevoked()
     {

@@ -1,10 +1,25 @@
 # TOLAP Architecture Guide
 
-This document describes the five components of a TOLAP implementation and how they interact.
+This document describes the five components on a TOLAP **enforcement path** and how they
+interact.
+
+Four shipped components sit outside that path and are therefore not in the list below. They are
+not conceptual, they are in this repository:
+
+| Component | Where | What it is |
+| --- | --- | --- |
+| **Policy Store** | `*-store` packages (3 of the 9 shipped SDK packages) | The `IPolicyStore` / `PolicyStore` contract and the in-memory reference implementation. Covered here only as prose under *Security Profiles*, and in [Implementing a Custom Policy Store](#implementing-a-custom-policy-store). |
+| **Policy Server** | [`server/`](../server/) | The reference central policy service — PostgreSQL store, immutable versions, audit trail, signing-key rotation, `GET /v1/resolve`. See [`policy-server.md`](policy-server.md). |
+| **Authoring Console** | [`console/`](../console/) | The admin UI: catalog-backed rule editors, schema validation as you type, resolve preview. |
+| **Deployment** | [`infra/`](../infra/) | CDK for CloudFront, WAF, Aurora Serverless v2 and Fargate. |
+
+The purpose-binding controls (spec §15) are also absent from the five below: they attach to
+resolution and to the wrappers rather than adding a component. Their rationale is in
+[`superpowers/specs/2026-09-01-purpose-binding-design.md`](superpowers/specs/2026-09-01-purpose-binding-design.md).
 
 ## Components
 
-A TOLAP system has five structural components:
+The five structural components of the enforcement path:
 
 ```mermaid
 flowchart TD
@@ -21,8 +36,8 @@ flowchart TD
 A signed, serializable container that carries the user's complete policy set from the trusted authority to the tool execution environment.
 
 **Responsibilities:**
-- Carry user identity (user ID, tenant ID, email, roles)
-- Carry all effective policies for accessible data sources
+- Carry user identity (`userId` and `tenantId` — and nothing else; see the note below)
+- Carry the effective policy for the data source it governs
 - Provide tamper detection via cryptographic signature (e.g., HMAC-SHA256)
 - Enforce time-bound validity (issued-at and expires-at timestamps)
 
@@ -36,16 +51,15 @@ A signed, serializable container that carries the user's complete policy set fro
 
 ```json
 {
+  "version": "1.0",
   "userId": "uuid",
   "tenantId": "uuid",
-  "userEmail": "user@example.com",
-  "roles": ["analyst"],
   "policies": [
-    { "sourceConnectionId": "uuid", "type": "database", "...": "..." },
-    { "sourceConnectionId": "uuid", "type": "api", "...": "..." }
+    { "sourceConnectionId": "uuid", "type": "database", "...": "..." }
   ],
   "issuedAt": "2026-04-08T12:00:00Z",
   "expiresAt": "2026-04-08T13:00:00Z",
+  "jti": "uuid",
   "integrity": {
     "algorithm": "hmac-sha256",
     "signature": "base64-encoded"
@@ -53,13 +67,27 @@ A signed, serializable container that carries the user's complete policy set fro
 }
 ```
 
-> **One context governs one data source.** The `policies` array above is the wire
-> shape, and the canonical signing projection always normalizes to a one-element
-> array. In practice a SecurityContext carries a **single** effective policy: the
-> Python and TypeScript SDKs refuse a multi-policy context outright rather than
-> silently keeping the first, and the .NET enforcement path reads only the first
-> element even though its model holds an array. A deployment spanning several
-> sources issues **one context per source**. See
+> **The envelope is closed, and this is the whole of it.**
+> [`schema/v1.0/security-context.schema.json`](../schema/v1.0/security-context.schema.json)
+> sets `additionalProperties: false` and declares exactly `version`, `userId`,
+> `tenantId`, `issuedAt`, `expiresAt`, `policies`, `jti`, `declaredPurpose` and
+> `delegationChain`. Earlier revisions of this document showed a `userEmail` and a
+> `roles` array; **no SDK has ever carried either**, and a context containing them is
+> now rejected by the repository's own schema. Groups and roles are resolution
+> *inputs* (see the `getGroups`/`getRoles` callbacks in component 3), not envelope
+> fields — putting them in the envelope would invite a wrapper to re-derive access
+> from a role instead of reading the policy that role already resolved.
+>
+> `integrity` sits outside the signed bytes by construction, which is why the schema
+> does not constrain it.
+
+> **One context governs one data source.** The `policies` array is the wire shape, and
+> the canonical signing projection always normalizes to a one-element array. In
+> practice a SecurityContext carries a **single** effective policy: the Python and
+> TypeScript builders **refuse** a multi-policy context outright rather than silently
+> keeping the first, and the .NET enforcement path reads only the first element even
+> though `SecurityContextBuilder.Build` still accepts an array. A deployment spanning
+> several sources issues **one context per source**. See
 > [`canonical-enforcement-spec.md`](canonical-enforcement-spec.md) §2 rule 3.
 
 ### 2. Security Profiles
@@ -139,7 +167,7 @@ flowchart TD
     G --> RES
     U --> RES
 
-    RES["resolve(userId, tenantId, sourceConnectionId,<br/>assignments, definitions, getGroups, getRoles)<br/><br/>filter by principal → scope → expiry → sourcePatterns<br/>then merge by precedence"]
+    RES["resolve(userId, tenantId, sourceConnectionId,<br/>assignments, definitions, getGroups, getRoles,<br/>declaredPurpose?)<br/><br/>filter by principal → scope → expiry → sourcePatterns → declaredPurpose<br/>then merge by precedence"]
 
     RES --> EFF
 
@@ -236,7 +264,7 @@ Creates a Secure Tool Wrapper of the correct type for a signed Security Context.
 
 | Not the factory's job | Reason |
 | --- | --- |
-| Resolving credentials | The SDK never holds a connection: the record-shaped wrapper hands back rewritten SQL for the caller to execute, and the HTTP wrapper is given its client by the caller. Nothing on the enforcement path takes a secret as input, so accepting one would add secret-handling surface for no enforcement benefit. Same reasoning as §9's removal of `maxQueryTimeSeconds`: the SDK cannot enforce what it does not own. |
+| Resolving credentials | The SDK never holds a connection: the record-shaped wrapper hands back rewritten SQL for the caller to execute, and the HTTP wrapper is given its client by the caller. Nothing on the enforcement path takes a secret as input, so accepting one would add secret-handling surface for no enforcement benefit. Same reasoning as [connector-spec §9](connector-spec.md#9-no-advisory-fields)'s removal of `maxQueryTimeSeconds`: the SDK cannot enforce what it does not own. |
 | Pinning connection configuration | A deployment concern. The factory takes the transport it needs as an argument and opens nothing itself. |
 | Holding the user's Security Context | Wrappers are **stateless** and take the context per call. A context stored on a shared wrapper can outlive the request that supplied it and be reused for the next caller, who may be a different user. |
 
@@ -413,19 +441,36 @@ Every service instance reads from the same policy database. The admin UI writes 
 
 ### Implementing a Custom Policy Store
 
-The SDK defines a `IPolicyStore` interface (C#), `PolicyStore` protocol (Python), or `PolicyStore` interface (TypeScript) with these operations:
+The SDK defines an `IPolicyStore` interface (C#), a `PolicyStore` protocol (Python), or a
+`PolicyStore` interface (TypeScript). **The three do not share method names**, so the table
+below gives each language its own column rather than inventing a neutral name that appears in
+no SDK:
 
-| Operation | Description |
-|-----------|-------------|
-| `createPolicy` | Persist a new policy definition |
-| `getPolicy` | Retrieve a policy by name |
-| `listPolicies` | List all policy definitions |
-| `updatePolicy` | Update an existing policy definition |
-| `deletePolicy` | Remove a policy definition |
-| `assignPolicy` | Create a policy-to-user/group assignment |
-| `listAssignments` | List assignments for a user, group, or policy |
-| `revokeAssignment` | Stop a policy assignment resolving. Set `revoked_at` rather than deleting the row, so the grant stays auditable |
-| `resolveEffectivePolicy` | Merge all applicable policies for a user-source pair |
+| What it does | .NET `IPolicyStore` | Python `PolicyStore` | TypeScript `PolicyStore` |
+| --- | --- | --- | --- |
+| Persist a policy definition | `CreatePolicyAsync` / `UpdatePolicyAsync` | `save_definition` (upsert) | `putDefinition` (upsert) |
+| Retrieve one by name | `GetPolicyAsync` | `get_definition` | `getDefinition` |
+| List definitions | `ListPoliciesAsync` | `list_definitions` | `listDefinitions` |
+| Remove a definition | `DeletePolicyAsync` | `delete_definition` | `deleteDefinition` |
+| Create an assignment | `AssignPolicyAsync` | `save_assignment` | `putAssignment` |
+| Read assignments | `GetAssignmentsForUserAsync`, `GetAssignmentsForGroupAsync`, `GetAssignmentsForSourceAsync`, `ListAssignmentsAsync` | `get_assignments(user_id, tenant_id)` | `listAssignments(assigneeIdentifier?)` |
+| Stop an assignment resolving | `RevokePolicyAsync` | `delete_assignment` | `deleteAssignment` |
+| Resolve for a user-source pair | `ResolveEffectivePolicyAsync`, `ResolveAllEffectivePoliciesAsync` | `resolve_policy` | `resolvePolicy` |
+| Observe store mutations | `OnAuditEvent` | *(not on the protocol)* | `onAudit` |
+
+Three differences are load-bearing rather than cosmetic:
+
+- **The Python protocol is synchronous.** Every method is a plain `def`. Do not write `await`
+  against it, and note that `resolve` in `tolap-core` is synchronous too.
+- **Revocation should set `revoked_at`, not delete the row**, so the grant stays auditable. The
+  SDK resolver enforces `revokedAt` itself ([spec §12](canonical-enforcement-spec.md#12-revocation)),
+  overriding `active` and `expiresAt`; your own `revoked_at IS NULL` filter is defence in depth.
+- **Resolution takes a declared purpose.** All three resolve methods accept a trailing optional
+  purpose (`declaredPurpose` / `declared_purpose`, keyword-only in Python) which must be threaded
+  into the SDK resolver — purpose filtering has to happen *before* the merge
+  ([spec §15.1](canonical-enforcement-spec.md#151-resolution-time-purpose-filtering)), and there
+  is no later point at which to undo it. If you implement the interface yourself, you must add
+  this parameter.
 
 To centralize, implement this interface against your chosen backend. The in-memory store in the SDK serves as a reference implementation.
 
@@ -483,12 +528,27 @@ CREATE INDEX idx_assignments_lookup
 
 The `policy_json` column stores the full policy definition as JSONB, enabling PostgreSQL's native JSON querying for policy introspection and reporting.
 
+The three implementations below are **sketches of the storage half**, not compilable stores: each
+shows four methods so the SQL is visible and omits the rest of the interface (see the table above
+for the full set). The signatures shown do match the real interfaces, and three details are easy
+to get wrong:
+
+- **.NET methods take no `CancellationToken`**, and the create/assign methods return the entity
+  they persisted rather than `void`.
+- **Resolution takes the group and role lookups**, plus an optional trailing `declaredPurpose`
+  that must be threaded into the SDK resolver. Dropping it silently makes every purpose-scoped
+  policy invisible.
+- **The Python protocol is synchronous** — the `async def` spellings here are the *store's* own
+  choice, not the protocol's, so a `PolicyStore` implementation using them will not satisfy it.
+  Shown with `await` only because `asyncpg` is; a protocol-conformant store wraps the awaits.
+
 #### .NET Implementation
 
 ```csharp
 using Npgsql;
 using Tolap.Store;
 
+// Four of IPolicyStore's methods. The rest are omitted, so this does not compile as-is.
 public class PostgresPolicyStore : IPolicyStore
 {
     private readonly NpgsqlDataSource _db;
@@ -498,7 +558,7 @@ public class PostgresPolicyStore : IPolicyStore
         _db = NpgsqlDataSource.Create(connectionString);
     }
 
-    public async Task CreatePolicyAsync(PolicyDefinition policy, CancellationToken ct = default)
+    public async Task<PolicyDefinition> CreatePolicyAsync(PolicyDefinition policy)
     {
         const string sql = """
             INSERT INTO tolap_policies (name, version, description, priority, policy_json)
@@ -511,19 +571,20 @@ public class PostgresPolicyStore : IPolicyStore
         cmd.Parameters.AddWithValue("description", policy.Description ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("priority", policy.Priority);
         cmd.Parameters.AddWithValue("json", Serialize(policy));
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync();
+        return policy;
     }
 
-    public async Task<PolicyDefinition?> GetPolicyAsync(string name, CancellationToken ct = default)
+    public async Task<PolicyDefinition?> GetPolicyAsync(string name)
     {
         const string sql = "SELECT policy_json FROM tolap_policies WHERE name = @name";
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("name", name);
-        var json = (string?)await cmd.ExecuteScalarAsync(ct);
+        var json = (string?)await cmd.ExecuteScalarAsync();
         return json is null ? null : Deserialize<PolicyDefinition>(json);
     }
 
-    public async Task AssignPolicyAsync(PolicyAssignment assignment, CancellationToken ct = default)
+    public async Task<PolicyAssignment> AssignPolicyAsync(PolicyAssignment assignment)
     {
         const string sql = """
             INSERT INTO tolap_assignments
@@ -544,11 +605,21 @@ public class PostgresPolicyStore : IPolicyStore
         cmd.Parameters.AddWithValue("expires", assignment.ExpiresAt ?? (object)DBNull.Value);
         cmd.Parameters.AddWithValue("grantedBy", assignment.Audit.GrantedBy);
         cmd.Parameters.AddWithValue("reason", assignment.Audit.Reason ?? (object)DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await cmd.ExecuteNonQueryAsync();
+        return assignment;
     }
 
+    // Note the two lookups and the trailing purpose: they are part of the contract, and the
+    // purpose has to reach the SDK resolver because filtering happens BEFORE the merge
+    // (spec 15.1). Accepting it and not forwarding it makes every purpose-scoped policy
+    // invisible with nothing to indicate why.
     public async Task<EffectivePolicy> ResolveEffectivePolicyAsync(
-        string userId, string tenantId, string dataSourceId, CancellationToken ct = default)
+        string userId,
+        string tenantId,
+        string sourceConnectionId,
+        Func<string, string[]> getGroups,
+        Func<string, string[]> getRoles,
+        string? declaredPurpose = null)
     {
         // 1. Load all live assignments for this user and tenant.
         //
@@ -556,7 +627,10 @@ public class PostgresPolicyStore : IPolicyStore
         // resolver rejects a revoked or inactive assignment on its own. Filter here
         // anyway so you are not fetching and merging rows that cannot apply.
         const string sql = """
-            SELECT p.policy_json
+            SELECT a.policy_name, a.assignee_type, a.assignee_id,
+                   a.tenant_id, a.data_source_id, a.active, a.expires_at,
+                   a.revoked_at, a.granted_by, a.granted_at, a.reason,
+                   p.policy_json
             FROM tolap_assignments a
             JOIN tolap_policies p ON a.policy_name = p.name
             WHERE a.assignee_id = @userId
@@ -568,23 +642,31 @@ public class PostgresPolicyStore : IPolicyStore
             ORDER BY p.priority DESC
             """;
 
-        var policies = new List<PolicyDefinition>();
+        var assignments = new List<PolicyAssignment>();
+        var definitions = new List<PolicyDefinition>();
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("userId", userId);
         cmd.Parameters.AddWithValue("tenantId", tenantId);
-        cmd.Parameters.AddWithValue("dsId", dataSourceId);
+        cmd.Parameters.AddWithValue("dsId", sourceConnectionId);
 
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
         {
-            policies.Add(Deserialize<PolicyDefinition>(reader.GetString(0)));
+            // Project the assignment columns back into the model. The engine needs the
+            // assignments as well as the definitions, because assignee matching, scope
+            // matching and revocation are its job, not the query's.
+            assignments.Add(ReadAssignment(reader));
+            definitions.Add(Deserialize<PolicyDefinition>(reader.GetString(11)));
         }
 
-        // 2. Merge using the SDK's PolicyMerger
-        return PolicyMerger.Merge(policies);
+        // 2. Hand both to the SDK. Resolve -- not Merge -- because the source-pattern and
+        //    declared-purpose filters run before the merge, and Merge alone skips them.
+        return PolicyResolutionEngine.Resolve(
+            userId, tenantId, sourceConnectionId,
+            assignments, definitions, getGroups, getRoles, declaredPurpose);
     }
 
-    // ... Serialize/Deserialize helpers using System.Text.Json
+    // ... ReadAssignment, plus Serialize/Deserialize helpers using System.Text.Json
 }
 ```
 
@@ -592,14 +674,17 @@ public class PostgresPolicyStore : IPolicyStore
 
 ```python
 import asyncpg
-from tolap_core import PolicyDefinition, merge
+from tolap_core import EffectivePolicy, PolicyAssignment, PolicyDefinition, resolve
 from tolap_store import PolicyStore
 
+# Four of PolicyStore's methods. The protocol itself is synchronous; the `async def`
+# spellings here are asyncpg's requirement, so a protocol-conformant store either drives
+# the pool from a sync wrapper or uses a sync driver.
 class PostgresPolicyStore(PolicyStore):
     def __init__(self, pool: asyncpg.Pool):
         self._pool = pool
 
-    async def create_policy(self, policy: PolicyDefinition) -> None:
+    async def save_definition(self, policy: PolicyDefinition) -> None:
         await self._pool.execute(
             """INSERT INTO tolap_policies (name, version, description, priority, policy_json)
                VALUES ($1, $2, $3, $4, $5::jsonb)""",
@@ -607,13 +692,13 @@ class PostgresPolicyStore(PolicyStore):
             policy.priority, policy.to_json(),
         )
 
-    async def get_policy(self, name: str) -> PolicyDefinition | None:
+    async def get_definition(self, name: str) -> PolicyDefinition | None:
         row = await self._pool.fetchrow(
             "SELECT policy_json FROM tolap_policies WHERE name = $1", name
         )
         return PolicyDefinition.from_json(row["policy_json"]) if row else None
 
-    async def assign_policy(self, assignment) -> None:
+    async def save_assignment(self, assignment: PolicyAssignment) -> None:
         await self._pool.execute(
             """INSERT INTO tolap_assignments
                    (policy_name, assignee_type, assignee_id, tenant_id,
@@ -626,11 +711,21 @@ class PostgresPolicyStore(PolicyStore):
             assignment.audit.reason,
         )
 
-    async def resolve_effective_policy(
-        self, user_id: str, tenant_id: str, data_source_id: str
+    # `declared_purpose` is keyword-only and must reach the SDK resolver: purpose
+    # filtering runs BEFORE the merge (spec 15.1), so accepting it and not forwarding it
+    # makes every purpose-scoped policy invisible with nothing to indicate why.
+    async def resolve_policy(
+        self,
+        user_id: str,
+        tenant_id: str,
+        source_connection_id: str,
+        *,
+        declared_purpose: str | None = None,
     ) -> EffectivePolicy:
         rows = await self._pool.fetch(
-            """SELECT p.policy_json
+            """SELECT a.policy_name, a.assignee_type, a.assignee_id, a.tenant_id,
+                      a.data_source_id, a.active, a.expires_at, a.revoked_at,
+                      a.granted_by, a.granted_at, a.reason, p.policy_json
                FROM tolap_assignments a
                JOIN tolap_policies p ON a.policy_name = p.name
                WHERE a.assignee_id = $1
@@ -639,23 +734,45 @@ class PostgresPolicyStore(PolicyStore):
                  AND a.active = true
                  AND (a.expires_at IS NULL OR a.expires_at > now())
                ORDER BY p.priority DESC""",
-            user_id, tenant_id, data_source_id,
+            user_id, tenant_id, source_connection_id,
         )
-        policies = [PolicyDefinition.from_json(r["policy_json"]) for r in rows]
-        return merge(policies)
+        # `resolve`, not `merge`: assignee matching, scope matching, revocation, the
+        # source-pattern filter and the purpose filter all run before the merge, and
+        # `merge` alone skips every one of them. `definitions` is a dict keyed by name.
+        assignments = [_assignment_from_row(r) for r in rows]
+        definitions = {
+            d.name: d
+            for d in (PolicyDefinition.from_json(r["policy_json"]) for r in rows)
+        }
+        return resolve(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            source_connection_id=source_connection_id,
+            assignments=assignments,
+            definitions=definitions,
+            get_groups=self._groups_for,
+            get_roles=self._roles_for,
+            declared_purpose=declared_purpose,
+        )
 ```
 
 #### TypeScript Implementation
 
 ```typescript
 import { Pool } from "pg";
-import { merge, type PolicyDefinition } from "@aws/tolap-core";
+import {
+  resolve,
+  type EffectivePolicy,
+  type PolicyAssignment,
+  type PolicyDefinition,
+} from "@aws/tolap-core";
 import { PolicyStore } from "@aws/tolap-store";
 
+// Four of PolicyStore's methods. The rest are omitted, so this does not typecheck as-is.
 export class PostgresPolicyStore implements PolicyStore {
   constructor(private pool: Pool) {}
 
-  async createPolicy(policy: PolicyDefinition): Promise<void> {
+  async putDefinition(policy: PolicyDefinition): Promise<void> {
     await this.pool.query(
       `INSERT INTO tolap_policies (name, version, description, priority, policy_json)
        VALUES ($1, $2, $3, $4, $5::jsonb)`,
@@ -664,14 +781,16 @@ export class PostgresPolicyStore implements PolicyStore {
     );
   }
 
-  async getPolicy(name: string): Promise<PolicyDefinition | null> {
+  // `undefined`, not `null`: that is what the interface declares, and `null` is a
+  // distinct value the callers do not test for.
+  async getDefinition(name: string): Promise<PolicyDefinition | undefined> {
     const { rows } = await this.pool.query(
       "SELECT policy_json FROM tolap_policies WHERE name = $1", [name]
     );
-    return rows.length ? rows[0].policy_json as PolicyDefinition : null;
+    return rows.length ? (rows[0].policy_json as PolicyDefinition) : undefined;
   }
 
-  async assignPolicy(assignment: PolicyAssignment): Promise<void> {
+  async putAssignment(assignment: PolicyAssignment): Promise<void> {
     await this.pool.query(
       `INSERT INTO tolap_assignments
            (policy_name, assignee_type, assignee_id, tenant_id,
@@ -685,23 +804,55 @@ export class PostgresPolicyStore implements PolicyStore {
     );
   }
 
-  async resolveEffectivePolicy(
-    userId: string, tenantId: string, dataSourceId: string
+  // `declaredPurpose` is the trailing optional parameter the interface declares, and it
+  // must reach the SDK resolver: purpose filtering runs BEFORE the merge (spec §15.1), so
+  // accepting it and not forwarding it makes every purpose-scoped policy invisible with
+  // nothing to indicate why.
+  async resolvePolicy(
+    userId: string,
+    tenantId: string,
+    sourceConnectionId: string,
+    declaredPurpose?: string,
   ): Promise<EffectivePolicy> {
     const { rows } = await this.pool.query(
-      `SELECT p.policy_json
+      `SELECT a.policy_name, a.assignee_type, a.assignee_id, a.tenant_id,
+              a.data_source_id, a.active, a.expires_at, a.revoked_at,
+              a.granted_by, a.granted_at, a.reason, p.policy_json
        FROM tolap_assignments a
        JOIN tolap_policies p ON a.policy_name = p.name
        WHERE a.assignee_id = $1
          AND (a.tenant_id IS NULL OR a.tenant_id = $2)
          AND (a.data_source_id IS NULL OR a.data_source_id = $3)
          AND a.active = true
+         AND a.revoked_at IS NULL
          AND (a.expires_at IS NULL OR a.expires_at > now())
        ORDER BY p.priority DESC`,
-      [userId, tenantId, dataSourceId]
+      [userId, tenantId, sourceConnectionId]
     );
-    const policies = rows.map(r => r.policy_json as PolicyDefinition);
-    return merge(policies);
+
+    // `resolve`, not `merge`: assignee matching, scope matching, revocation, the
+    // source-pattern filter and the purpose filter all run before the merge, and `merge`
+    // alone skips every one of them. `definitions` is a **Map** keyed by name, not the
+    // array `listDefinitions()` returns.
+    const assignments: PolicyAssignment[] = rows.map(assignmentFromRow);
+    const definitions = new Map<string, PolicyDefinition>(
+      rows.map((r) => {
+        const d = r.policy_json as PolicyDefinition;
+        return [d.name, d] as [string, PolicyDefinition];
+      }),
+    );
+
+    return resolve(
+      userId,
+      tenantId,
+      sourceConnectionId,
+      assignments,
+      definitions,
+      (id) => this.groupsFor(id),
+      (id) => this.rolesFor(id),
+      3_600_000,        // ttlMs -- declaredPurpose follows it positionally
+      declaredPurpose,
+    );
   }
 }
 ```
@@ -942,16 +1093,17 @@ The administrator assigns this policy to Dr. Chen, scoped to her tenant:
 
 When Dr. Chen's agent makes a request, the Policy Resolution Engine builds an effective policy for each source. Since she has one policy that matches both sources, the effective policies mirror the definition. If she had additional overlapping policies, the merge rules would produce the most-restrictive intersection.
 
-Each source gets its **own** context. Both are shown together below so the two
-resolved policies can be compared side by side, but they are issued and signed
-separately — a context carries one policy, and the agent holds one per source:
+Each source gets its **own** context. The two resolved policies are listed in one
+`policies` array below purely so they can be compared side by side; **this is not a
+transportable context.** Each is issued and signed separately, a context carries one
+policy, and the agent holds one per source. The `version`, `issuedAt` and `jti` fields
+every real envelope carries are elided here for the same reason:
 
 ```json
 {
   "userId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "tenantId": "tenant-midwest-health",
-  "userEmail": "s.chen@midwesthealth.org",
-  "resolvedAt": "2026-04-08T14:00:00Z",
+  "issuedAt": "2026-04-08T14:00:00Z",
   "expiresAt": "2026-04-08T15:00:00Z",
   "policies": [
     {
@@ -1053,7 +1205,9 @@ separately — a context carries one policy, and the agent holds one per source:
 
 ### Step 4: The Agent Interacts with Both Sources
 
-The Secure Tool Factory creates two wrappers from the Security Context: one for the PostgreSQL database and one for the REST API. The agent receives both tools without knowing they are security-enforced.
+Dr. Chen's session holds **two** signed contexts, one per source, and a Secure Tool Factory
+builds one wrapper from each: a record wrapper for the PostgreSQL database and an HTTP wrapper
+for the REST API. The agent receives both tools without knowing they are security-enforced.
 
 #### Database interaction
 
@@ -1191,7 +1345,7 @@ flowchart LR
     end
 
     subgraph Security Context
-        SC[Signed Context<br/>2 effective policies<br/>HMAC-SHA256]
+        SC[2 Signed Contexts<br/>one effective policy each<br/>HMAC-SHA256]
     end
 
     subgraph Secure Tool Factory

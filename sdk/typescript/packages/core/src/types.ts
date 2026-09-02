@@ -86,6 +86,29 @@ export enum AssigneeType {
   ServiceAccount = "serviceAccount",
 }
 
+/**
+ * Kind of principal at one hop of a delegation chain (canonical spec §15).
+ *
+ * A closed set rather than a bare string, so a hop names one of three things a
+ * reader can reason about rather than whatever the producer felt like writing.
+ *
+ * Published as `security-context.schema.json`'s
+ * `$defs.delegationHop.properties.principalType.enum`, and compared against it in
+ * both directions by `schema-conformance.test.ts` like every other enum here. Note
+ * that schema describes the **canonical signing projection** rather than any SDK's
+ * native context type, which is why a delegation hop is pinned there and not on a
+ * per-SDK model: the three SDKs keep different public shapes and agree only on the
+ * bytes they sign.
+ */
+export enum PrincipalType {
+  /** A human. Only ever the first hop: a person is delegated to, never by an agent. */
+  User = "user",
+  /** An autonomous agent acting on a principal's behalf. */
+  Agent = "agent",
+  /** A non-agent system component, such as an orchestrator passing work along. */
+  Service = "service",
+}
+
 export enum SigningAlgorithm {
   HmacSha256 = "hmac-sha256",
   HmacSha512 = "hmac-sha512",
@@ -183,6 +206,137 @@ export interface PolicyPermissions {
 }
 
 // ---------------------------------------------------------------------------
+// Purpose binding (canonical spec §15)
+// ---------------------------------------------------------------------------
+
+/**
+ * Configuration for the optional semantic judge (spec §15.4).
+ *
+ * **Every field is optional and the documented defaults are applied at read
+ * time**, never baked into a value here. Concrete defaults would serialize
+ * unconditionally and so change the canonical bytes — and therefore the
+ * signature — of every purpose-bound policy that did not spell them out. The
+ * defaults live on {@link module:judge} as `DEFAULT_*` constants, which is the
+ * single place they are read.
+ */
+export interface JudgeConfig {
+  /**
+   * Whether to consult the judge.
+   *
+   * Three-state on purpose: `undefined` means "not configured", which is not the
+   * same statement as an explicit `false` even though both mean no judge today.
+   * The merge preserves the distinction (it ORs the `true`s but keeps `undefined`
+   * when nothing said anything), so a policy that never mentioned the judge does
+   * not start serializing `enabled: false`.
+   */
+  enabled?: boolean;
+  /**
+   * Model identifier, for example `claude-sonnet`.
+   *
+   * Checked against the judge implementation's own `modelId` before it is
+   * invoked; a mismatch escalates. Two policies naming different models cannot be
+   * merged — a verdict is only meaningful against the model that produced it —
+   * and resolve to deny-all.
+   */
+  model?: string;
+  /** How many preceding tool calls the judge is shown. Merged with maximum. */
+  historyWindow?: number;
+  /**
+   * At or above this confidence the verdict is final, allow or block. Merged with
+   * maximum: a higher bar sends more calls to escalation.
+   */
+  confidenceThreshold?: number;
+  /**
+   * Below this confidence the call escalates. Merged with maximum. Must not
+   * exceed {@link confidenceThreshold}; an inverted pair escalates rather than
+   * guessing which bound was meant.
+   */
+  escalationThreshold?: number;
+  /** Wall-clock budget for one evaluation. Merged with minimum. */
+  maxLatencyMs?: number;
+}
+
+/**
+ * Binds a policy to a declared purpose (canonical spec §15).
+ *
+ * On a {@link PolicyDefinition} it scopes resolution: the policy resolves only
+ * for a caller declaring a matching {@link purposeId}. It is carried through the
+ * merge onto the {@link EffectivePolicy} because enforcement only ever sees an
+ * effective policy — without that, `purposeProfile` would be authorable and
+ * unenforceable. Carrying it there also puts the purpose inside the HMAC for
+ * free, since the policy is already part of the signed envelope.
+ */
+export interface PurposeProfile {
+  /**
+   * Matched against the caller's declared purpose exactly and **case-sensitively**,
+   * so a mis-cased purpose resolves nothing rather than resolving something
+   * adjacent. Note the deliberate asymmetry with action-category comparison,
+   * which is case-INsensitive: both choices deny rather than admit a mis-cased
+   * value, which is the direction that matters.
+   */
+  purposeId: string;
+  /**
+   * Human-readable description of the purpose. This is what gives a judge
+   * something to compare a call against, so an author who enables the judge
+   * should write one.
+   */
+  description?: string;
+  /**
+   * Action categories permitted under this purpose.
+   *
+   * Follows the null-versus-empty rule in spec §3: `undefined` is unrestricted,
+   * an empty array denies **every** action. Do not collapse the two with a
+   * truthiness check — that turns the most restrictive outcome the model can
+   * express into no restriction at all. Intersected on merge.
+   */
+  allowedActions?: string[];
+  /**
+   * Action categories denied under this purpose. Takes precedence over
+   * {@link allowedActions}: a category in both is denied. Unioned on merge.
+   */
+  prohibitedActions?: string[];
+  judge?: JudgeConfig;
+}
+
+/**
+ * One hop in a delegation chain, from human to agent to sub-agent (spec §15.3).
+ *
+ * Hops are ordered oldest first and are signed hop for hop when carried on a
+ * {@link SecurityContext}, which is the only reason validating a chain is worth
+ * anything: an unsigned chain would be the attacker's own arithmetic.
+ */
+export interface DelegationHop {
+  principalId: string;
+  /**
+   * Typed as `PrincipalType | string` to match {@link Assignee.type}: the value
+   * arrives from JSON, where TypeScript's types are erased, so a union is the
+   * honest declaration. Nothing branches on it — no narrowing rule reads the
+   * principal kind — so an unrecognized value cannot change a decision, only how
+   * a chain reads to a human and what bytes it signs.
+   */
+  principalType: PrincipalType | string;
+  /**
+   * The purpose asserted at this hop, or absent to assert none. Absent on either
+   * side of a parent/child pair adds no constraint (spec §15.3).
+   */
+  declaredPurpose?: string;
+  /**
+   * When the hop was created. Inside the signed bytes when present, and therefore
+   * truncated to milliseconds like every other timestamp — the three runtimes do
+   * not agree below that (spec §2 rule 5).
+   */
+  delegatedAt?: string;
+  /**
+   * The scopes still **in force** at this hop — not the scopes this hop removed.
+   *
+   * Each hop's set must be a subset of its parent's, so an empty set leaves
+   * nothing for a child to claim. Named for its effect rather than its contents,
+   * which is the reading the subset rule requires.
+   */
+  scopeNarrowing?: string[];
+}
+
+// ---------------------------------------------------------------------------
 // Policy Definition
 // ---------------------------------------------------------------------------
 
@@ -196,6 +350,12 @@ export interface PolicyDefinition {
   permissions: PolicyPermissions;
   objectRules?: ObjectRules;
   limits?: PolicyLimits;
+  /**
+   * Purpose binding (spec §15.1). Present, the definition resolves only for a
+   * caller declaring a matching purpose; absent, it is purpose-agnostic and
+   * resolves exactly as it did before this field existed.
+   */
+  purposeProfile?: PurposeProfile;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +416,13 @@ export interface EffectivePolicy {
   permissions: PolicyPermissions;
   objectRules?: ObjectRules;
   limits?: PolicyLimits;
+  /**
+   * The merged purpose binding (spec §15.2), carried here because enforcement
+   * only ever sees an effective policy — `validateAction` and the judge gate read
+   * it from nowhere else. Absent means purpose-agnostic, in which case action
+   * validation always allows.
+   */
+  purposeProfile?: PurposeProfile;
   integrity: IntegrityBlock;
 }
 
@@ -276,6 +443,28 @@ export interface SecurityContext {
    * produces the same canonical bytes it did before this field existed.
    */
   jti?: string;
+  /**
+   * The purpose this context was resolved for (spec §15).
+   *
+   * Signed when present, so it cannot be swapped for a different purpose or
+   * stripped to escape a purpose-scoped policy. Omitted from the canonical
+   * payload entirely when absent or empty, so a context without a declared
+   * purpose signs to exactly the bytes it did before this field existed — the
+   * same rule {@link jti} follows.
+   *
+   * It records the purpose the caller *asserted* at resolution; TOLAP checks that
+   * assertion against the policy set, not the caller's honesty about it.
+   */
+  declaredPurpose?: string;
+  /**
+   * The chain of principals this authority passed through, oldest hop first.
+   *
+   * Signed when present, hop for hop: mutating, reordering, or removing a hop
+   * invalidates the signature, which is what makes `validateDelegationChain`
+   * worth running at all. An empty array normalizes to absent for signing, on the
+   * same reasoning as {@link jti} — `[]` carries no hops and so makes no claim.
+   */
+  delegationChain?: DelegationHop[];
 }
 
 // ---------------------------------------------------------------------------

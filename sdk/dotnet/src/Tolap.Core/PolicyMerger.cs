@@ -21,10 +21,23 @@ public static class PolicyMerger
     ///   ranking (null &gt; redact &gt; full &gt; hash &gt; partial); an unknown mask type
     ///   ranks most restrictive
     /// - Limits: Min for maxResults/maxObjectSizeBytes, Max for minSimilarityScore
+    /// - PurposeProfile: carried through, with allowedActions intersected and
+    ///   prohibitedActions unioned. Two profiles naming different purposes cannot be
+    ///   merged and return DenyAll (spec section 15.2).
     /// </remarks>
     public static EffectivePolicy Merge(IReadOnlyList<PolicyDefinition> policies)
     {
         if (policies.Count == 0)
+            return EffectivePolicy.DenyAll();
+
+        // Before anything else, because it can refuse the whole merge. Two policies bound
+        // to different purposes have no most-restrictive combination -- picking one would
+        // silently apply rules authored for a purpose the caller did not declare, and
+        // dropping the profile would turn a purpose-scoped policy into an unscoped one.
+        // Resolution never produces this input, having filtered to a single purpose
+        // already; Merge is public and must not rely on that.
+        var purposeProfile = MergePurposeProfiles(policies);
+        if (purposeProfile is null && policies.Any(p => p.PurposeProfile is not null))
             return EffectivePolicy.DenyAll();
 
         var sourceProfiles = policies.Select(p => p.Name).ToArray();
@@ -62,7 +75,102 @@ public static class PolicyMerger
             SourceProfiles: sourceProfiles,
             Permissions: permissions,
             ObjectRules: objectRules,
-            Limits: limits);
+            Limits: limits,
+            PurposeProfile: purposeProfile);
+    }
+
+    /// <summary>
+    /// Combines the purpose profiles of the merged definitions, or <c>null</c> when none
+    /// carry one — and also <c>null</c> when they disagree about the purpose, which the
+    /// caller reads as a refusal.
+    /// </summary>
+    /// <remarks>
+    /// <para>The profile is carried onto the effective policy rather than consumed during
+    /// resolution because enforcement only ever sees an <see cref="EffectivePolicy"/>. It
+    /// also means the purpose travels inside the signed bytes without any change to the
+    /// signing projection: the policy is already part of the signed envelope.</para>
+    /// <para><c>allowedActions</c> intersects and <c>prohibitedActions</c> unions, so both
+    /// fold most-restrictively. Disjoint allow-lists intersect to an empty array, which per
+    /// spec section 3 denies every action — deliberately not collapsed to <c>null</c>, which
+    /// would mean the opposite.</para>
+    /// </remarks>
+    private static PurposeProfile? MergePurposeProfiles(IReadOnlyList<PolicyDefinition> policies)
+    {
+        var profiles = policies
+            .Select(p => p.PurposeProfile)
+            .Where(profile => profile is not null)
+            .Select(profile => profile!)
+            .ToList();
+
+        if (profiles.Count == 0)
+            return null;
+
+        // Case-sensitive, matching the resolution-time comparison. Two spellings of the
+        // same intent are two different purposes as far as this SDK is concerned, and
+        // saying so loudly beats quietly treating them as one.
+        var purposeIds = profiles
+            .Select(profile => profile.PurposeId)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (purposeIds.Count > 1)
+            return null;
+
+        var judge = MergeJudgeConfigs(profiles);
+        if (judge is null && profiles.Any(profile => profile.Judge is not null))
+            return null;
+
+        return new PurposeProfile(
+            PurposeId: purposeIds[0],
+            // Lowest-priority definition first, so the description a reader sees is the one
+            // from the most specific policy. Merge is called with the list already ordered.
+            Description: profiles.Select(profile => profile.Description).FirstOrDefault(d => d is not null),
+            AllowedActions: IntersectNullable(profiles.Select(profile => profile.AllowedActions)),
+            ProhibitedActions: UnionNullable(profiles.Select(profile => profile.ProhibitedActions)),
+            Judge: judge);
+    }
+
+    /// <summary>
+    /// Combines judge configurations toward more escalation, or <c>null</c> when the
+    /// profiles name different models — which the caller reads as a refusal.
+    /// </summary>
+    /// <remarks>
+    /// <c>enabled</c> ORs so any policy can switch the judge on. Both thresholds take the
+    /// <b>maximum</b>: a higher confidence bar sends more calls to review rather than
+    /// letting them through, and a higher escalation floor does the same. <c>maxLatencyMs</c>
+    /// takes the minimum, and <c>historyWindow</c> the maximum, since more context is the
+    /// direction that helps a judge notice drift. Two different models cannot be reconciled
+    /// at all — a verdict is only meaningful against the model that produced it.
+    /// </remarks>
+    private static JudgeConfig? MergeJudgeConfigs(IReadOnlyList<PurposeProfile> profiles)
+    {
+        var configs = profiles
+            .Select(profile => profile.Judge)
+            .Where(judge => judge is not null)
+            .Select(judge => judge!)
+            .ToList();
+
+        if (configs.Count == 0)
+            return null;
+
+        var models = configs
+            .Select(config => config.Model)
+            .Where(model => model is not null)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (models.Count > 1)
+            return null;
+
+        return new JudgeConfig(
+            Enabled: configs.Any(config => config.Enabled == true)
+                ? true
+                : configs.Any(config => config.Enabled is not null) ? false : null,
+            Model: models.Count == 1 ? models[0] : null,
+            HistoryWindow: MaxNullableInt(configs.Select(config => config.HistoryWindow)),
+            ConfidenceThreshold: MaxNullableDouble(configs.Select(config => config.ConfidenceThreshold)),
+            EscalationThreshold: MaxNullableDouble(configs.Select(config => config.EscalationThreshold)),
+            MaxLatencyMs: MinNullable(configs.Select(config => config.MaxLatencyMs)));
     }
 
     private static ObjectRules? MergeObjectRules(IReadOnlyList<PolicyDefinition> policies)
@@ -276,6 +384,20 @@ public static class PolicyMerger
         {
             if (v is null) continue;
             result = result is null ? v : Math.Min(result.Value, v.Value);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Returns the maximum non-null value, or null if all are null.
+    /// </summary>
+    private static int? MaxNullableInt(IEnumerable<int?> values)
+    {
+        int? result = null;
+        foreach (var v in values)
+        {
+            if (v is null) continue;
+            result = result is null ? v : Math.Max(result.Value, v.Value);
         }
         return result;
     }

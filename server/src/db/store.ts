@@ -776,10 +776,20 @@ export class PostgresPolicyStore implements PolicyStore {
    * `:`, matching is case-insensitive, and an empty list means *every* source)
    * would be a second implementation of a normative rule.
    */
+  /**
+   * @param declaredPurpose
+   *   The purpose the caller declares (canonical-enforcement-spec §15.1). Threaded into the
+   *   SDK resolver rather than applied here, because purpose filtering has to happen before
+   *   the merge: a policy scoped to a purpose the caller did not declare must not fold its
+   *   rules into the effective policy at all, and there is no later point at which to undo
+   *   that. Omitting it resolves exactly the policies this method resolved before purpose
+   *   binding existed.
+   */
   async resolvePolicy(
     userId: string,
     tenantId: string,
     sourceConnectionId: string,
+    declaredPurpose?: string,
   ): Promise<EffectivePolicy> {
     const groups = await this.identityResolver.getGroups(userId);
     const roles = await this.identityResolver.getRoles(userId);
@@ -823,7 +833,17 @@ export class PostgresPolicyStore implements PolicyStore {
       }
     }
 
-    this.emit("policy.resolve", { userId, tenantId, sourceConnectionId });
+    // Omitted rather than emitted as undefined: this listener's details are
+    // `Record<string, string>`, so there is no null to carry. That differs from the
+    // persisted audit row, which is JSONB and records an explicit null — a reviewer reading
+    // the table needs to tell "no purpose was declared" from "this row predates purpose
+    // binding", and an in-process listener sees each event as it happens and does not.
+    this.emit("policy.resolve", {
+      userId,
+      tenantId,
+      sourceConnectionId,
+      ...(declaredPurpose === undefined ? {} : { declaredPurpose }),
+    });
 
     return resolve(
       userId,
@@ -833,6 +853,11 @@ export class PostgresPolicyStore implements PolicyStore {
       definitions,
       () => groups,
       () => roles,
+      // `ttlMs` left at its default. Passed explicitly as undefined because the SDK appended
+      // `declaredPurpose` after it rather than inserting it earlier, which is what keeps every
+      // other caller of resolve() compiling unchanged.
+      undefined,
+      declaredPurpose,
     );
   }
 

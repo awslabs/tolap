@@ -1,6 +1,6 @@
 {
   "name": "@aws/tolap-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "TOLAP enforcement wrappers for agent tools - MCP servers, agent frameworks, Lambda handlers",
   "license": "Apache-2.0",
   "author": "Amazon.com, Inc. or its affiliates",
@@ -42,7 +42,7 @@
     "prepublishOnly": "tsc"
   },
   "dependencies": {
-    "@aws/tolap-core": "^1.0.0"
+    "@aws/tolap-core": "^1.1.0"
   },
   "devDependencies": {
     "@aws-sdk/client-athena": "^3.1099.0",

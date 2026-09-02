@@ -31,6 +31,13 @@ public static class PolicyResolutionEngine
     /// <param name="definitions">All known policy definitions.</param>
     /// <param name="getGroups">Function returning group identifiers for a user.</param>
     /// <param name="getRoles">Function returning role identifiers for a user.</param>
+    /// <param name="declaredPurpose">
+    /// The purpose the caller declares for this resolution, or <c>null</c> to declare none
+    /// (spec section 15.1). A definition carrying no <c>purposeProfile</c> resolves either
+    /// way, so omitting this reproduces the pre-purpose behaviour exactly. A definition that
+    /// <i>is</i> purpose-scoped resolves only on an exact, case-sensitive match — including
+    /// not at all when no purpose is declared.
+    /// </param>
     /// <returns>The merged effective policy.</returns>
     public static EffectivePolicy Resolve(
         string userId,
@@ -39,7 +46,8 @@ public static class PolicyResolutionEngine
         IReadOnlyList<PolicyAssignment> assignments,
         IReadOnlyList<PolicyDefinition> definitions,
         Func<string, string[]> getGroups,
-        Func<string, string[]> getRoles)
+        Func<string, string[]> getRoles,
+        string? declaredPurpose = null)
     {
         var now = DateTimeOffset.UtcNow;
         var groups = getGroups(userId);
@@ -50,10 +58,20 @@ public static class PolicyResolutionEngine
         // Active and ExpiresAt: a revoked assignment MUST NOT resolve (spec
         // section 12). A future-dated RevokedAt is not yet in effect, which keeps
         // revocation consistent with expiry rather than a boolean in disguise.
+        // The `is not { } x` pattern unwraps to a non-nullable local, so the comparison is a
+        // plain one rather than C#'s lifted `>`. Written the obvious way --
+        // `a.RevokedAt is null || a.RevokedAt > now` -- the lifted operator emits a second
+        // `HasValue` check that control can only reach when the first one already returned
+        // true, so one arm of it is unreachable IL and the file can never reach 100% branch
+        // coverage. Since `RevokedAt` is an `init`-only property the two reads are provably
+        // the same value, so this is identical in behaviour and honest in its coverage
+        // number. Note the future-versus-past distinction is not a branch either way: the
+        // comparison's bool is the return value, which is why a test for scheduled
+        // revocation does not move the figure.
         var matchingAssignments = assignments
-            .Where(a => a.RevokedAt is null || a.RevokedAt > now)
+            .Where(a => a.RevokedAt is not { } revokedAt || revokedAt > now)
             .Where(a => a.Active)
-            .Where(a => a.ExpiresAt is null || a.ExpiresAt > now)
+            .Where(a => a.ExpiresAt is not { } expiresAt || expiresAt > now)
             .Where(a => MatchesAssignee(a.Assignee, userId, groups, roles))
             .Where(a => MatchesScope(a.Scope, tenantId, sourceConnectionId))
             .ToList();
@@ -64,14 +82,22 @@ public static class PolicyResolutionEngine
         // Build a dictionary of definitions by name for quick lookup
         var definitionsByName = definitions.ToDictionary(d => d.Name, d => d);
 
-        // Load referenced definitions, filter by source patterns
+        // Load referenced definitions, then filter by source patterns and by declared
+        // purpose. Both filters run BEFORE the merge, and for the same reason: a definition
+        // that does not apply must not fold its rules into the effective policy at all.
+        // Filtering afterwards would mean the rules had already merged, and whether that
+        // widens or narrows access depends on the policies involved -- either way the
+        // resolved policy is not the one the administrator authored (spec sections 10, 15.1).
         var matchedDefinitions = matchingAssignments
             .Where(a => definitionsByName.ContainsKey(a.PolicyName))
             .Select(a => definitionsByName[a.PolicyName])
             .Where(d => d.AppliesToAll || MatchesSourcePatterns(d.SourcePatterns, sourceConnectionId))
+            .Where(d => MatchesDeclaredPurpose(d.PurposeProfile, declaredPurpose))
             .OrderBy(d => d.Priority)
             .ToList();
 
+        // Covers the purpose filter too: when every candidate was purpose-scoped and no
+        // matching purpose was declared, the list is empty here and this is the deny-all.
         if (matchedDefinitions.Count == 0)
             return EffectivePolicy.DenyAll();
 
@@ -84,6 +110,38 @@ public static class PolicyResolutionEngine
             SourceConnectionId = sourceConnectionId,
             ResolvedAt = now
         };
+    }
+
+    /// <summary>
+    /// Whether a definition's purpose profile admits the caller's declared purpose
+    /// (spec section 15.1).
+    /// </summary>
+    /// <remarks>
+    /// <para>Three cases, in this order:</para>
+    /// <list type="bullet">
+    /// <item>No profile — the definition is purpose-agnostic and always applies. This is
+    /// what keeps every pre-purpose policy resolving unchanged.</item>
+    /// <item>A profile but no declared purpose — excluded. A purpose-scoped policy is not a
+    /// default grant, so the absence of a purpose cannot satisfy it.</item>
+    /// <item>Both present — an exact, ordinal comparison. Deliberately <b>not</b> the glob
+    /// matching used for chain narrowing or source patterns: those are authored patterns
+    /// meant to span a family of values, whereas this compares one asserted identifier
+    /// against one declared identifier. A case-insensitive or glob comparison here would let
+    /// a caller declaring <c>Campaign-X</c> — or <c>*</c> — resolve a policy written for
+    /// <c>campaign-x</c>.</item>
+    /// </list>
+    /// </remarks>
+    private static bool MatchesDeclaredPurpose(PurposeProfile? profile, string? declaredPurpose)
+    {
+        if (profile is null)
+            return true;
+
+        // Empty normalizes to absent, matching how the signing projection treats it: "" and
+        // omitted must not behave as two different declarations.
+        if (string.IsNullOrEmpty(declaredPurpose))
+            return false;
+
+        return string.Equals(profile.PurposeId, declaredPurpose, StringComparison.Ordinal);
     }
 
     private static bool MatchesAssignee(Assignee assignee, string userId, string[] groups, string[] roles)
@@ -174,20 +232,21 @@ public static class PolicyResolutionEngine
             .Replace("\\*", "[^:]*")  // * matches anything except colon (segment separator)
             + "$";
 
+        // A timeout is a non-match, which is the fail-closed outcome here: an unevaluable
+        // source pattern excludes its policy rather than granting it.
+        //
+        // There is deliberately no `catch (ArgumentException)`. The pattern is escaped before
+        // '*' is expanded, so it always compiles and the catch could never run --
+        // `GlobMatch_RegexMetacharacters_AreLiteral_SoTheInvalidPatternCatchIsUnreachable`
+        // asserts the property that makes that true, rather than asserting the catch. It was
+        // removed because unreachable defensive code reads as a handled case that no test can
+        // exercise, which is a worse signal to a reader than its absence.
         try
         {
             return Regex.IsMatch(value, regexPattern, RegexOptions.IgnoreCase, RegexMatchTimeout);
         }
         catch (RegexMatchTimeoutException)
         {
-            return false;
-        }
-        catch (ArgumentException)
-        {
-            // Defence in depth, and currently unreachable for the same reason as
-            // EnforcementEngine.GlobMatch: the pattern is escaped before '*' is expanded,
-            // so it always compiles. A non-match is the fail-closed outcome here — an
-            // unevaluable source pattern excludes its policy rather than granting it.
             return false;
         }
     }

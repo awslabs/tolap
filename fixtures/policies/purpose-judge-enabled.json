@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "name": "campaign-x-overlap-judged",
+  "description": "The same purpose as campaign-x-overlap-agent, with the semantic judge switched on. Shares that policy's purposeId so the two can merge, which is what exercises the judge merge rules.",
+  "priority": 20,
+  "appliesToAll": false,
+  "sourcePatterns": ["db:marketing:*"],
+  "permissions": {
+    "canQuery": true,
+    "readOnly": true
+  },
+  "purposeProfile": {
+    "purposeId": "campaign-x-overlap",
+    "description": "Identify overlapping opted-in customer segments for Campaign X, with semantic review.",
+    "allowedActions": ["aggregate_overlap", "count_segments", "inspect_account"],
+    "prohibitedActions": ["train_model"],
+    "judge": {
+      "enabled": true,
+      "model": "claude-sonnet",
+      "historyWindow": 5,
+      "confidenceThreshold": 0.9,
+      "escalationThreshold": 0.7,
+      "maxLatencyMs": 1500
+    }
+  },
+  "objectRules": {
+    "allowedObjects": ["customer_segments", "campaign_assignments", "flagged_accounts"]
+  },
+  "limits": {
+    "maxResults": 4000
+  }
+}

@@ -99,3 +99,25 @@ class SigningAlgorithm(Enum):
     hmac_sha256 = "hmac-sha256"
     hmac_sha512 = "hmac-sha512"
     ed25519 = "ed25519"
+
+
+class PrincipalType(Enum):
+    """Kind of principal at one hop of a delegation chain (spec section 15).
+
+    A closed set rather than a bare string, so an unrecognized value is refused at
+    deserialization instead of flowing into chain validation as an unknown that no
+    narrowing rule covers.
+
+    Unlike every other enum here it has no counterpart in ``schema/v1.0/``: a
+    delegation chain lives on the SecurityContext envelope, which is specified in
+    prose and pinned by the signing fixtures rather than by a published schema.
+    That means the conformance check for this enum compares it against the shared
+    fixture corpus rather than against a schema document.
+    """
+
+    #: A human. Only ever the first hop: a person is delegated to, never by an agent.
+    user = "user"
+    #: An autonomous agent acting on a principal's behalf.
+    agent = "agent"
+    #: A non-agent system component, such as an orchestrator passing work along.
+    service = "service"

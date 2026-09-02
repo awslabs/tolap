@@ -71,6 +71,31 @@ export class AdminAuthError extends Error {
   }
 }
 
+/**
+ * Thrown when the verifier could not obtain the issuer's public keys, so no decision about
+ * the credential was reached at all.
+ *
+ * Distinct from {@link AdminAuthError} because the two are different answers. An
+ * `AdminAuthError` says *this credential is not acceptable*; this says *the server cannot
+ * currently tell*. Collapsing them into one 401 — which is what happened before this type
+ * existed — reports a JWKS outage as the caller's credential being bad. That is wrong in
+ * three ways that all cost time during an incident: a client following the status code
+ * discards a perfectly good token and re-authenticates into the same failure, an operator
+ * reads the logs looking at tokens instead of at the identity provider, and a monitor
+ * watching 401 rates sees an authentication-attack shape rather than a dependency being
+ * down.
+ *
+ * It is **not** a fail-open: nothing is authenticated on this path either way. Only the
+ * status code and the signal change — callers map this to 503, matching how
+ * `IdentityLookupError` is already handled on the same routes.
+ */
+export class AdminAuthUnavailableError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "AdminAuthUnavailableError";
+  }
+}
+
 export interface CognitoConfig {
   /** e.g. `https://cognito-idp.us-east-1.amazonaws.com/us-east-1_abc123`. */
   readonly issuer: string;
@@ -95,7 +120,10 @@ type Fetcher = (url: string) => Promise<{ keys: Jwk[] }>;
 const defaultFetcher: Fetcher = async (url) => {
   const response = await fetch(url);
   if (!response.ok) {
-    throw new AdminAuthError(`JWKS fetch failed with status ${response.status}`);
+    // The issuer's key endpoint failing says nothing about the caller's token.
+    throw new AdminAuthUnavailableError(
+      `JWKS fetch failed with status ${response.status}`,
+    );
   }
   return (await response.json()) as { keys: Jwk[] };
 };
@@ -155,10 +183,31 @@ export class CognitoVerifier {
           next.set(jwk.kid, createPublicKey({ key: jwk as never, format: "jwk" }));
         }
         if (next.size === 0) {
-          throw new AdminAuthError("JWKS contained no usable RSA keys");
+          // A document that arrived and carries no usable key is the same class of problem
+          // as one that did not arrive: the server has nothing to verify against.
+          throw new AdminAuthUnavailableError("JWKS contained no usable RSA keys");
         }
         this.keys = next;
         this.fetchedAt = Date.now();
+      } catch (error) {
+        // Anything the fetcher throws that is not already classified is an availability
+        // failure too -- a refused connection, a DNS failure, a body that is not JSON, a
+        // key the JWK parser rejects. Before this, those reached the route's catch-all as
+        // a bare error and became a 500, so the same outage reported 401 or 500 depending
+        // on how far it got. One cause, one status.
+        //
+        // `AdminAuthError` is deliberately re-thrown untouched: `keyFor` raises it for an
+        // unpublished `kid`, which *is* a decision about the token.
+        if (
+          error instanceof AdminAuthUnavailableError ||
+          error instanceof AdminAuthError
+        ) {
+          throw error;
+        }
+        throw new AdminAuthUnavailableError(
+          "JWKS could not be retrieved or parsed",
+          { cause: error },
+        );
       } finally {
         this.inFlight = undefined;
       }

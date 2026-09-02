@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "policyName": "fraud-detection-agent",
+  "assignee": {
+    "type": "user",
+    "identifier": "user-marketing-001"
+  },
+  "scope": {
+    "tenantId": "tenant-acme-retail"
+  },
+  "active": true,
+  "audit": {
+    "grantedBy": "admin-jane-doe",
+    "grantedAt": "2026-09-01T09:00:00Z",
+    "reason": "Fraud review, granted to the same user as the campaign purpose so a purpose mismatch is what excludes it"
+  }
+}

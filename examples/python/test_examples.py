@@ -215,3 +215,252 @@ class TestEnforcementModeExample:
         assert "Both modes returned the SAME rows" in result.stdout
         assert "[REDACTED]" in result.stdout
         assert "ssn" not in result.stdout.split("Note what enforcement did")[0]
+
+
+#: The lines the purpose-binding example must print, byte for byte.
+#:
+#: Written out in full rather than matched loosely, and repeated verbatim in the TypeScript and
+#: .NET suites, for the same reason ``EXPECTED`` above is: the three SDKs must agree, so a
+#: divergence has to surface as a *different line* rather than hiding behind three separately
+#: written substring matches. Each one is an outcome -- which policy resolved, which action was
+#: refused, the reason string -- not evidence that the script ran.
+PURPOSE_EXPECTED_LINES = [
+    # 15.1 -- resolution filtering. Deny-all without a purpose, the scoped policy with one.
+    "  (no purpose)                      DENY      deny-all: 0 policies resolved, canQuery=false",
+    "  'campaign-x-overlap'              ALLOW     campaign-x-overlap-agent (maxResults=10000)",
+    "  'fraud-detection'                 ALLOW     fraud-detection-agent (maxResults=500)",
+    "  'Campaign-X-Overlap'              DENY      deny-all: 0 policies resolved, canQuery=false",
+    "  (no purpose)                      ALLOW     marketing-baseline (maxResults=2000)",
+    # 15.3 -- the chain narrows, and the sharp mid-segment case.
+    "  three narrowing hops              ALLOW",
+    "  + a fourth, wider hop             DENY      delegation hop 3 purpose 'campaign-y-export'"
+    " is not within parent scope 'campaign-x-overlap'",
+    "  campaign-x -> campaign-x-overlap  ALLOW     extends on a '-' segment boundary",
+    "  campaign-x -> campaign-xyz-evil   DENY      delegation hop 1 purpose 'campaign-xyz-evil'"
+    " is not within parent scope 'campaign-x'",
+    "  [read, aggregate] -> [read]       ALLOW     a subset of the parent",
+    "  [read] -> [read, write]           DENY      delegation hop 1 scopes exceed parent delegation",
+    # 15.2 -- the three action outcomes, plus the permitted one.
+    "  segment_overlap                   ALLOW     category 'aggregate_overlap' is allowed",
+    "  export_customers                  DENY      action 'export_pii' is prohibited under"
+    " purpose 'campaign-x-overlap'",
+    "  inspect_account                   DENY      action 'inspect_account' not in allowed"
+    " actions for purpose 'campaign-x-overlap'",
+    "  join_external                     DENY      action category not declared for tool",
+    # 15.4 -- the disposition mapping.
+    "  aligned, confidence 0.95          allow     the deterministic allowance stands",
+    "  misaligned, confidence 0.95       block     the allowance is withdrawn",
+    "  aligned, confidence 0.70          escalate  a DENIAL unless a review handler is wired",
+    # The purpose and the chain are inside the signature.
+    "  as signed                         VALID     purpose 'campaign-x-overlap', 3 hops",
+    "  declared purpose swapped          BROKEN    to 'fraud-detection'",
+    "  last hop repurposed               BROKEN    to 'campaign-y-export'",
+    "  a fourth hop appended             BROKEN    agent-exfil, 'campaign-y-export'",
+    "  hops reordered                    BROKEN    hop 0 is the delegator; reversing inverts it",
+]
+
+
+class TestPurposeBindingExample:
+    """The purpose-binding example, executed rather than trusted.
+
+    Every assertion here is an *outcome*: which policy resolved, which action was allowed or
+    refused, the verbatim reason string. An example that printed plausible-looking verdicts
+    while enforcing nothing would teach a wiring pattern nobody has checked.
+    """
+
+    def test_no_declared_purpose_resolves_deny_all(self) -> None:
+        """The control with teeth. A purpose-scoped policy is not a default grant."""
+        import purpose_binding_example as ex
+
+        policy = ex.resolve_for([ex.campaign_definition(), ex.fraud_definition()], None)
+
+        assert policy.source_profiles == []
+        assert policy.permissions.can_query is False
+        assert policy.purpose_profile is None
+
+    def test_declared_purpose_resolves_only_the_matching_policy(self) -> None:
+        import purpose_binding_example as ex
+
+        policy = ex.resolve_for(
+            [ex.campaign_definition(), ex.fraud_definition()], ex.CAMPAIGN_PURPOSE
+        )
+
+        # The other purpose's rules were never merged -- which is why the filter runs before the
+        # merge rather than after it.
+        assert policy.source_profiles == ["campaign-x-overlap-agent"]
+        assert policy.purpose_profile is not None
+        assert policy.purpose_profile.purpose_id == "campaign-x-overlap"
+        assert policy.limits is not None and policy.limits.max_results == 10000
+        assert "flagged_accounts" not in (policy.object_rules.allowed_objects or [])
+
+    def test_the_purpose_comparison_is_case_sensitive(self) -> None:
+        import purpose_binding_example as ex
+
+        policy = ex.resolve_for(
+            [ex.campaign_definition(), ex.fraud_definition()], "Campaign-X-Overlap"
+        )
+
+        assert policy.source_profiles == []
+        assert policy.permissions.can_query is False
+
+    def test_a_purpose_agnostic_policy_still_resolves_without_a_purpose(self) -> None:
+        """Paired allow: purpose binding is additive, so pre-purpose policies are untouched."""
+        import purpose_binding_example as ex
+
+        policy = ex.resolve_for(
+            [ex.campaign_definition(), ex.fraud_definition(), ex.baseline_definition()], None
+        )
+
+        assert policy.source_profiles == ["marketing-baseline"]
+        assert policy.permissions.can_query is True
+        assert policy.purpose_profile is None
+
+    def test_a_narrowing_chain_is_allowed_and_a_widening_hop_is_not(self) -> None:
+        import purpose_binding_example as ex
+        from tolap_core import validate_delegation_chain
+
+        chain = ex.narrowing_chain()
+        assert validate_delegation_chain(chain).allowed is True
+
+        widened = validate_delegation_chain(chain + [ex.widening_hop()])
+        assert widened.allowed is False
+        assert widened.reason == (
+            "delegation hop 3 purpose 'campaign-y-export' is not within parent scope "
+            "'campaign-x-overlap'"
+        )
+
+    def test_a_segment_boundary_narrows_but_a_mid_segment_prefix_does_not(self) -> None:
+        """The case a plain ``startsWith`` gets wrong, which is why it is in the example."""
+        import purpose_binding_example as ex
+        from tolap_core import validate_delegation_chain
+
+        assert validate_delegation_chain(
+            ex.two_hop("campaign-x", "campaign-x-overlap")
+        ).allowed is True
+
+        evil = validate_delegation_chain(ex.two_hop("campaign-x", "campaign-xyz-evil"))
+        assert evil.allowed is False
+        assert evil.reason == (
+            "delegation hop 1 purpose 'campaign-xyz-evil' is not within parent scope 'campaign-x'"
+        )
+
+    def test_scopes_may_narrow_but_not_widen(self) -> None:
+        import purpose_binding_example as ex
+        from tolap_core import validate_delegation_chain
+
+        assert validate_delegation_chain(
+            ex.scope_hops(["read", "aggregate"], ["read"])
+        ).allowed is True
+
+        widened = validate_delegation_chain(ex.scope_hops(["read"], ["read", "write"]))
+        assert widened.allowed is False
+        assert widened.reason == "delegation hop 1 scopes exceed parent delegation"
+
+    @pytest.mark.parametrize(
+        ("tool", "expected_reason"),
+        [
+            ("segment_overlap", None),
+            (
+                "export_customers",
+                "action 'export_pii' is prohibited under purpose 'campaign-x-overlap'",
+            ),
+            (
+                "inspect_account",
+                "action 'inspect_account' not in allowed actions for purpose 'campaign-x-overlap'",
+            ),
+            ("join_external", "action category not declared for tool"),
+        ],
+    )
+    def test_the_action_category_map_decides(self, tool: str, expected_reason: str | None) -> None:
+        """A permitted category passes; a prohibited one, an unlisted one and an *unmapped* one
+        each fail, with their own reason.
+
+        The map is deployment configuration on the wrapper, never a caller argument -- so this
+        goes through the wrapper's own pre-execute rather than calling the validator directly.
+        """
+        import purpose_binding_example as ex
+        from tolap_mcp.options import SecureMcpServerOptions
+        from tolap_mcp.wrapper import SecureMcpToolWrapper
+
+        wrapper = SecureMcpToolWrapper(
+            SecureMcpServerOptions(
+                signing_key=ex.SIGNING_KEY,
+                tool_action_categories=ex.TOOL_ACTION_CATEGORIES,
+            )
+        )
+
+        result = wrapper.pre_execute(ex.signed_context(), tool)
+
+        assert result.allowed is (expected_reason is None)
+        assert result.reason == expected_reason
+
+    @pytest.mark.parametrize(
+        ("aligned", "confidence", "expected"),
+        [(True, 0.95, "allow"), (False, 0.95, "block"), (True, 0.70, "escalate")],
+    )
+    def test_the_judge_verdict_maps_to_the_documented_disposition(
+        self, aligned: bool, confidence: float, expected: str
+    ) -> None:
+        import purpose_binding_example as ex
+        from tolap_core import JudgeResult, evaluate_judge
+
+        outcome = evaluate_judge(
+            ex.judged_policy(),
+            ex.StubJudge(JudgeResult(aligned=aligned, confidence=confidence, reasoning="stub")),
+            "segment_overlap(campaign_x)",
+        )
+
+        assert outcome.disposition.value == expected
+        # escalate is NOT an allow. A wrapper with no review handler denies.
+        assert outcome.allowed is (expected == "allow")
+
+    def test_mutating_the_purpose_or_the_chain_breaks_the_signature(self) -> None:
+        """Without this, the chain validation above would check the attacker's own arithmetic."""
+        import purpose_binding_example as ex
+        from tolap_core import validate_context
+
+        original = ex.signed_context()
+        assert validate_context(original, ex.SIGNING_KEY) is True
+        assert original.declared_purpose == "campaign-x-overlap"
+        assert original.delegation_chain is not None and len(original.delegation_chain) == 3
+
+        repurposed = ex.signed_context()
+        repurposed.declared_purpose = ex.FRAUD_PURPOSE
+        assert validate_context(repurposed, ex.SIGNING_KEY) is False
+
+        rechained = ex.signed_context()
+        assert rechained.delegation_chain is not None
+        rechained.delegation_chain[-1].declared_purpose = "campaign-y-export"
+        assert validate_context(rechained, ex.SIGNING_KEY) is False
+
+        appended = ex.signed_context()
+        assert appended.delegation_chain is not None
+        appended.delegation_chain.append(ex.widening_hop())
+        assert validate_context(appended, ex.SIGNING_KEY) is False
+
+        # Reordering included: hop 0 is the delegator, so reversing a chain makes the sub-agent
+        # the root.
+        reordered = ex.signed_context()
+        assert reordered.delegation_chain is not None
+        reordered.delegation_chain.reverse()
+        assert validate_context(reordered, ex.SIGNING_KEY) is False
+
+    def test_the_example_script_prints_every_expected_line(self) -> None:
+        """Runs the script as CI does, and checks the printed outcomes line by line.
+
+        The script raises ``SystemExit`` if a mutated context still verifies, so this covers that
+        path too.
+        """
+        import pathlib
+        import subprocess
+        import sys
+
+        script = pathlib.Path(__file__).parent / "purpose_binding_example.py"
+        result = subprocess.run(
+            [sys.executable, str(script)], capture_output=True, text=True, timeout=60
+        )
+
+        assert result.returncode == 0, result.stderr
+        lines = result.stdout.splitlines()
+        for expected in PURPOSE_EXPECTED_LINES:
+            assert expected in lines, f"missing line: {expected!r}"

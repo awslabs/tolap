@@ -5,10 +5,44 @@ using Tolap.Core;
 
 namespace Tolap.Mcp;
 
+/// <param name="HttpActionCategories">
+/// Keys of the form <c>"METHOD path-glob"</c> — for example <c>"GET /segments/*"</c> — mapped
+/// to a semantic action category, for purpose-bound action validation
+/// (canonical-enforcement-spec.md section 15.2).
+/// <para>
+/// Keyed by method and path rather than by tool name because an HTTP request has no tool name:
+/// <see cref="HttpRequestArgs"/> carries a method and a path. A name-keyed map would leave this
+/// enforcement point permanently inert for API sources, which is worse than having none —
+/// the configuration would imply a control that never ran. The path uses the same glob dialect
+/// as <c>allowedEndpoints</c>, so a deployment writes one kind of endpoint pattern.
+/// </para>
+/// <para>
+/// Consulted on every redirect hop, like every other rule here: a 307 to
+/// <c>/export/all.csv</c> is a different action from the <c>GET</c> that started the chain.
+/// </para>
+/// </param>
+/// <param name="HashSalt">
+/// Secret salt for <c>hash</c> masking, turning the digest into a keyed HMAC.
+/// <para>
+/// This option was <b>missing</b>, which made <c>hash</c> masking over an <c>api</c> source
+/// unsalted in .NET while Python and TypeScript salted it — so the same policy produced a
+/// different pseudonym per SDK, and an <c>api</c>-sourced pseudonym did not join with a
+/// <c>db</c>-sourced one inside a single .NET deployment. The join-key property is the whole
+/// reason a salt is a deployment-wide value rather than a per-wrapper one, so a wrapper that
+/// silently omitted it defeated the feature rather than merely lacking it.
+/// </para>
+/// <para>
+/// Treat it as a secret on a par with <paramref name="SigningKey"/>, and configure the same
+/// value everywhere the pseudonym is joined. See
+/// <see cref="SecureContextWrapperOptions.HashSalt"/> for the full reasoning.
+/// </para>
+/// </param>
 public sealed record SecureHttpWrapperOptions(
     string SigningKey,
     bool EnforceSignatures = true,
-    bool EnforceExpiry = true);
+    bool EnforceExpiry = true,
+    IReadOnlyDictionary<string, string>? HttpActionCategories = null,
+    string? HashSalt = null);
 
 /// <param name="ObjectName">
 /// The object behind this route, checked against <c>allowedObjects</c>/<c>hiddenObjects</c>.
@@ -356,7 +390,13 @@ public sealed class SecureHttpToolWrapper
         return null;
     }
 
-    private static AccessResult ValidateHop(
+    /// <remarks>
+    /// An instance method rather than a static one because purpose-bound action validation
+    /// reads <see cref="SecureHttpWrapperOptions.HttpActionCategories"/>. Keeping it here, in
+    /// the per-hop validator, is what makes the category check apply to redirect targets as
+    /// well as to the original request.
+    /// </remarks>
+    private AccessResult ValidateHop(
         string method,
         string path,
         object? body,
@@ -378,6 +418,16 @@ public sealed class SecureHttpToolWrapper
 
         var queryIndex = path.IndexOf('?');
         var policyPath = queryIndex >= 0 ? path[..queryIndex] : path;
+
+        // Purpose-bound action validation, before the endpoint and write checks. Ordered first
+        // among the policy checks because it answers the broadest question -- does this
+        // operation serve the purpose the context was issued for -- and because that is the
+        // reason an operator most needs to see when several rules would deny. Matched on the
+        // path with the query stripped, so a category cannot be dodged by appending one.
+        var actionResult = PurposeActionResolver.ValidateHttpRequest(
+            policy, method, policyPath, _options.HttpActionCategories);
+        if (!actionResult.Allowed)
+            return actionResult;
 
         // Endpoint rules and, for a write method, the section 4 write checks. Both halves run:
         // an endpoint allow-list is not a write grant, and a write permission does not make a
@@ -413,7 +463,7 @@ public sealed class SecureHttpToolWrapper
     /// runs, so the error payload was never enforced (connector-spec.md section 6, "error bodies
     /// are enforced").
     /// </remarks>
-    private static async Task<JsonElement> EnforceResponseAsync(
+    private async Task<JsonElement> EnforceResponseAsync(
         HttpResponseMessage response,
         Uri url,
         HttpRequestArgs args,
@@ -449,7 +499,7 @@ public sealed class SecureHttpToolWrapper
     /// hidden fields, allowed fields, masking, result limit. Shared by the success and the
     /// 4xx/5xx paths, because an error payload is not a different kind of data.
     /// </remarks>
-    private static JsonElement RunPipeline(string raw, string? collectionPath, EffectivePolicy policy)
+    private JsonElement RunPipeline(string raw, string? collectionPath, EffectivePolicy policy)
     {
         using var doc = JsonDocument.Parse(raw);
         var node = JsonNodeFromElement(doc.RootElement);
@@ -515,6 +565,15 @@ public sealed class SecureHttpToolWrapper
                 return new AccessResult(false, expiryReason);
             }
         }
+        // The delegation chain, if the context carries one (spec section 15.3). See
+        // SecureContextToolWrapper.ValidateSecurityContext for why the check belongs on the
+        // consuming side and after the signature.
+        var chainResult = DelegationChainValidator.Validate(context.DelegationChain);
+        if (!chainResult.Allowed)
+        {
+            return chainResult;
+        }
+
         return new AccessResult(true);
     }
 
@@ -699,7 +758,7 @@ public sealed class SecureHttpToolWrapper
     /// digest the digest.
     /// </para>
     /// </remarks>
-    private static object? ApplyMaskingToBody(object? node, EffectivePolicy policy)
+    private object? ApplyMaskingToBody(object? node, EffectivePolicy policy)
     {
         var rules = policy.ObjectRules?.FieldRules?.MaskedFields;
         if (rules is null || rules.Length == 0) return node;
@@ -717,7 +776,7 @@ public sealed class SecureHttpToolWrapper
     /// so its subtree is replaced rather than walked. Recursion continues only through
     /// unmatched keys.
     /// </remarks>
-    private static void MaskByFieldName(object? node, MaskingRule[] rules)
+    private void MaskByFieldName(object? node, MaskingRule[] rules)
     {
         if (node is List<object?> list)
         {
@@ -760,8 +819,13 @@ public sealed class SecureHttpToolWrapper
     /// value, and a partial mask that would reveal the whole value degrades to a full
     /// mask (canonical-enforcement-spec.md section 6).
     /// </remarks>
-    private static object? ApplyMask(object? value, MaskingRule rule)
-        => EnforcementEngine.ApplyMask(value, rule);
+    /// <remarks>
+    /// An instance method so the configured <see cref="SecureHttpWrapperOptions.HashSalt"/>
+    /// reaches the masking code. It was static and passed no salt, which is exactly how the
+    /// option came to be absent from the options record without anything noticing.
+    /// </remarks>
+    private object? ApplyMask(object? value, MaskingRule rule)
+        => EnforcementEngine.ApplyMask(value, rule, _options.HashSalt);
 
     /// <summary>
     /// Projects the response's records down to allowedFields.

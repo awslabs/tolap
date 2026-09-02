@@ -7,6 +7,7 @@
 
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import {
+  type DelegationHop,
   type EffectivePolicy,
   type SecurityContext,
   SigningAlgorithm,
@@ -57,7 +58,7 @@ function deepSortKeys(value: unknown): unknown {
  */
 export function normalizeTimestamp(value: string | undefined): string {
   if (!value) return "";
-  const parsed = new Date(value);
+  const parsed = new Date(assumeUtcWhenOffsetless(value));
   if (Number.isNaN(parsed.getTime())) return value;
 
   // Spec section 2 rule 5: truncate to milliseconds. `Date` already truncates
@@ -69,6 +70,31 @@ export function normalizeTimestamp(value: string | undefined): string {
   return parsed.getUTCMilliseconds() === 0
     ? iso.replace(/\.\d{3}Z$/, "Z")
     : iso;
+}
+
+/**
+ * Append a `Z` to an ISO 8601 date-time that carries no UTC offset.
+ *
+ * `new Date("2026-09-01T09:58:00")` — a date-time with no offset and no `Z` — is parsed as
+ * **local** time by ECMAScript, which makes the resulting instant, and therefore the canonical
+ * signing bytes, depend on the host's timezone. The same JSON signed to `09:58:00Z` on a UTC
+ * host, `13:58:00Z` on `EST5EDT` and `16:58:00Z` on `America/Los_Angeles`. That is a divergence
+ * between two deployments of the *same* SDK, which is worse than a cross-SDK one and which no
+ * fixture pinning a single host could detect. .NET had the identical bug through
+ * `System.Text.Json`; Python already assumed UTC, so UTC is the reading all three now share.
+ *
+ * Spec section 2 rule 4 mandates normalizing to UTC before signing but is silent on what an
+ * offset-less value *means*. This is what stops the answer depending on where the process runs.
+ *
+ * Deliberately narrow. A date-only value (`2026-09-01`) is already UTC by specification, and a
+ * value that carries `Z` or a numeric offset names its instant unambiguously; touching either
+ * would change bytes that are currently correct. So the suffix is added only when the string has
+ * a time component and no offset at all.
+ */
+function assumeUtcWhenOffsetless(value: string): string {
+  return /T\d{2}:\d{2}/.test(value) && !/(?:[Zz]|[+-]\d{2}:?\d{2})$/.test(value)
+    ? `${value}Z`
+    : value;
 }
 
 /**
@@ -121,6 +147,25 @@ function normalizePolicyTimestamps(
 }
 
 /**
+ * Project one delegation hop for signing, normalizing its timestamp.
+ *
+ * `delegatedAt` is inside the signed bytes, so it needs the same millisecond
+ * truncation as every other instant (spec §2 rule 5) — a hop carrying microseconds
+ * would otherwise sign as `.123456Z` here and `.123Z` in Python and .NET. Nesting
+ * inside an array of objects is exactly the place a normalization pass gets
+ * forgotten, which is why the purpose-bound signing fixture pins it.
+ *
+ * Absent stays absent: `normalizeTimestamp(undefined)` returns `""`, and writing
+ * that back would add a `delegatedAt: ""` key the other SDKs do not emit.
+ */
+function normalizeHop(hop: DelegationHop): Record<string, unknown> {
+  if (typeof hop.delegatedAt !== "string") {
+    return hop as unknown as Record<string, unknown>;
+  }
+  return { ...hop, delegatedAt: normalizeTimestamp(hop.delegatedAt) };
+}
+
+/**
  * Project a SecurityContext into the canonical signing shape and serialize it.
  *
  * The HMAC covers the whole envelope, not just the policy (canonical spec §2):
@@ -150,6 +195,31 @@ function canonicalPayload(context: SecurityContext): string {
   // so a replay guard cannot be defeated by stripping or swapping the id.
   if (context.jti) {
     payload.jti = context.jti;
+  }
+  // Purpose and chain join the signed bytes on exactly the same terms as `jti`, and
+  // for a sharper reason. A purpose-scoped policy is only worth resolving if the
+  // purpose that selected it cannot then be swapped, and a delegation chain that can
+  // be rewritten is decoration -- `validateDelegationChain` would be checking the
+  // attacker's own arithmetic. Both are omitted when absent, so every context
+  // predating this feature signs to unchanged bytes (spec §15).
+  if (context.declaredPurpose) {
+    payload.declaredPurpose = context.declaredPurpose;
+  }
+  // An empty chain normalizes to absent for the same reason an empty `jti` does:
+  // `[]` and omitted both mean "no delegation", and signing them differently would
+  // give one context two valid signatures. Note this is the opposite of the
+  // null-versus-empty rule for allow-lists (spec §3) -- there `[]` is a meaningful
+  // deny-all; here it carries no hops and so makes no claim.
+  //
+  // An explicit `null` is folded in with absent rather than reached for: `null` and
+  // omitted are indistinguishable in the canonical form (spec §1), and a context
+  // deserialized from a producer that emits nulls instead of omitting keys arrives
+  // here that way. Reading `.length` off it threw a `TypeError` out of
+  // `validateContext` -- a crash in the middle of an enforcement decision, where the
+  // contract is a `false`.
+  const chain = context.delegationChain;
+  if (chain !== undefined && chain !== null && chain.length > 0) {
+    payload.delegationChain = chain.map(normalizeHop);
   }
   return JSON.stringify(deepSortKeys(payload));
 }
@@ -257,6 +327,23 @@ function computeHmac(data: string, key: string, algorithm: string): string {
  * for this SDK to apply.
  *
  * @throws Error if `policy` is an array rather than a single policy.
+ *
+ * @param declaredPurpose
+ * The purpose this context was resolved for (spec §15). Pass the same value given to
+ * {@link resolve}, so the artifact records which purpose produced it. Signed when
+ * present; an empty string normalizes to absent so `""` and omitted cannot yield two
+ * different signatures.
+ *
+ * @param delegationChain
+ * The chain of principals this authority passed through, oldest hop first. Signed
+ * hop for hop when present. Validate it with `validateDelegationChain` **before**
+ * building — this function records the chain, it does not check it, because a
+ * builder that silently dropped an invalid chain would produce a context that looked
+ * delegated and was not.
+ *
+ * The two purpose parameters are appended after `jti` rather than inserted beside
+ * `policy`, so every existing positional call site keeps compiling and keeps meaning
+ * what it did. This is how `jti` was added, for the same reason.
  */
 export function buildSecurityContext(
   userId: string,
@@ -264,6 +351,8 @@ export function buildSecurityContext(
   policy: EffectivePolicy,
   ttlMs: number = 3_600_000,
   jti?: string,
+  declaredPurpose?: string,
+  delegationChain?: DelegationHop[],
 ): SecurityContext {
   if (Array.isArray(policy)) {
     throw new Error(
@@ -283,6 +372,17 @@ export function buildSecurityContext(
     resolvedAt: now.toISOString(),
     expiresAt: expiresAt.toISOString(),
     ...(contextId ? { jti: contextId } : {}),
+    // Normalized here as well as in the signing projection. Doing it here keeps the
+    // model's own value and its signed value the same thing, so a caller inspecting
+    // the context cannot see a purpose or a chain the signature does not cover.
+    ...(declaredPurpose ? { declaredPurpose } : {}),
+    // `null` folded in with absent and `[]`, matching the signing projection: a
+    // JavaScript caller reaching this through JSON has no `undefined` to pass.
+    ...(delegationChain !== undefined &&
+    delegationChain !== null &&
+    delegationChain.length > 0
+      ? { delegationChain }
+      : {}),
   };
 }
 
@@ -371,6 +471,13 @@ export function serializeContext(context: SecurityContext): string {
  *
  * The signature is verified **before** expiry, so a tampered context reports a
  * signature failure rather than leaking whether a valid context merely expired.
+ *
+ * `jti`, `declaredPurpose` and `delegationChain` are restored by the parse below
+ * along with everything else, and that is deliberate rather than an omission: each is
+ * inside the canonical payload when present, so {@link validateContext} — which runs
+ * before anything reads them — already refuses a context whose purpose was swapped or
+ * whose chain was rewritten. Copying them out field by field would add a second
+ * place for the envelope's shape to drift from the shape that was signed.
  *
  * @throws Error if deserialization fails, the signature is invalid, or the
  * context is expired / carries a missing or unparseable expiry.

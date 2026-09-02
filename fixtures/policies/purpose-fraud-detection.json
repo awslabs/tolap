@@ -1,0 +1,27 @@
+{
+  "version": "1.0",
+  "name": "fraud-detection-agent",
+  "description": "Fraud review over the same marketing sources, bound to a different purpose. Paired with campaign-x-overlap-agent to prove a non-matching purpose is excluded rather than merged.",
+  "priority": 10,
+  "appliesToAll": false,
+  "sourcePatterns": ["db:marketing:*"],
+  "permissions": {
+    "canQuery": true,
+    "readOnly": true
+  },
+  "purposeProfile": {
+    "purposeId": "fraud-detection",
+    "description": "Review flagged accounts for payment fraud.",
+    "allowedActions": ["inspect_account", "enumerate_individuals"],
+    "prohibitedActions": ["export_pii"]
+  },
+  "objectRules": {
+    "allowedObjects": ["flagged_accounts", "campaign_assignments"],
+    "fieldRules": {
+      "hiddenFields": ["flagged_accounts.card_number"]
+    }
+  },
+  "limits": {
+    "maxResults": 500
+  }
+}

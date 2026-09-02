@@ -47,7 +47,11 @@ import {
   sourceCategory,
   validateContext,
   validateExpiry,
+  type ActionCategoryMap,
   type SecurityContext,
+  type Judge,
+  type JudgeOutcome,
+  type ToolCallHistory,
 } from "@aws/tolap-core";
 
 import {
@@ -104,6 +108,54 @@ export interface SecureToolFactoryOptions {
    * policy cannot be applied to is denied rather than returned unfiltered.
    */
   allowUnenforceableShapes?: boolean;
+  /**
+   * Secret salt for `hash` masking, forwarded to **both** wrappers.
+   *
+   * The factory previously declared no salt and forwarded none, so a factory-built
+   * wrapper hashed **unsalted** even where the deployment had configured a salt — a
+   * deliberate confidentiality control silently degraded to a plain digest, with
+   * nothing in the output to indicate it. That is worse than the missing action maps
+   * below, which at least fail closed and say so.
+   *
+   * It must be the same value on every wrapper a deployment builds, by hand or here,
+   * or the same field masks to two different pseudonyms depending on which path served
+   * the request and every cross-service join on that column silently stops matching.
+   */
+  hashSalt?: string | Buffer;
+  /**
+   * Tool name to semantic action category, forwarded to
+   * {@link SecureContextToolWrapper} for purpose-bound action validation
+   * (canonical spec §15.2).
+   *
+   * Required whenever any policy this factory may see carries a `purposeProfile` that
+   * constrains actions. Without it the wrapper classifies nothing and therefore denies
+   * **every** call with `action category not declared for tool` — correct, fail-closed,
+   * and useless. Since the factory is the documented composition root, omitting the
+   * option here made the whole feature unreachable through the recommended path.
+   */
+  toolActionCategories?: ActionCategoryMap;
+  /**
+   * `"METHOD path-glob"` to semantic action category, forwarded to
+   * {@link SecureHttpToolWrapper}. The `api` counterpart of
+   * {@link toolActionCategories}, keyed differently because an HTTP request has no tool
+   * name.
+   */
+  httpActionCategories?: ActionCategoryMap;
+  /**
+   * Forwarded to {@link SecureContextToolWrapper}. The semantic judge (§15.4); unset, the
+   * wrapper's `preExecuteAsync` returns the deterministic verdict unchanged.
+   */
+  judge?: Judge;
+  /**
+   * Forwarded to {@link SecureContextToolWrapper}. The trajectory the judge reasons over. You
+   * own the instance and therefore its retention.
+   */
+  toolCallHistory?: ToolCallHistory;
+  /**
+   * Forwarded to {@link SecureContextToolWrapper}. Where an ambiguous verdict goes for review;
+   * unset, `escalate` denies.
+   */
+  escalationHandler?: (outcome: JudgeOutcome) => boolean | Promise<boolean>;
 }
 
 /**
@@ -184,6 +236,11 @@ export class SecureToolFactory {
    * supplied per call and still validated there.
    */
   createContextTool(): SecureContextToolWrapper {
+    // Every option `SecureContextWrapperOptions` declares is forwarded. An option the
+    // factory accepts and drops is the worst of the three possible bugs: the wrapper
+    // behaves as though the deployment never configured it, and nothing in the result
+    // says so. `factory-parity.test.ts` compares the two key sets so a future option
+    // cannot be added to one side alone.
     const options: SecureContextWrapperOptions = {
       signingKey: this.options.signingKey,
       enforceSignatures: this.options.enforceSignatures,
@@ -193,6 +250,19 @@ export class SecureToolFactory {
         : {}),
       ...(this.options.allowUnenforceableShapes !== undefined
         ? { allowUnenforceableShapes: this.options.allowUnenforceableShapes }
+        : {}),
+      ...(this.options.hashSalt !== undefined
+        ? { hashSalt: this.options.hashSalt }
+        : {}),
+      ...(this.options.toolActionCategories !== undefined
+        ? { toolActionCategories: this.options.toolActionCategories }
+        : {}),
+      ...(this.options.judge !== undefined ? { judge: this.options.judge } : {}),
+      ...(this.options.toolCallHistory !== undefined
+        ? { toolCallHistory: this.options.toolCallHistory }
+        : {}),
+      ...(this.options.escalationHandler !== undefined
+        ? { escalationHandler: this.options.escalationHandler }
         : {}),
     };
     return new SecureContextToolWrapper(options);
@@ -212,6 +282,12 @@ export class SecureToolFactory {
       enforceSignatures: this.options.enforceSignatures,
       enforceExpiry: this.options.enforceExpiry,
       ...(this.options.baseUrl !== undefined ? { baseUrl: this.options.baseUrl } : {}),
+      ...(this.options.hashSalt !== undefined
+        ? { hashSalt: this.options.hashSalt }
+        : {}),
+      ...(this.options.httpActionCategories !== undefined
+        ? { httpActionCategories: this.options.httpActionCategories }
+        : {}),
     };
     return new SecureHttpToolWrapper(options, fetchFn);
   }

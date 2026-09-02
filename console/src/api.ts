@@ -149,6 +149,42 @@ export interface RowFilter {
   values?: unknown[];
 }
 
+/**
+ * The judge's configuration, spelled out for the same reason `MaskParameters` is.
+ *
+ * The schema closes this object to exactly these six keys, so an open record would let
+ * the console build a `judge` block that only fails at save time. Every field is
+ * optional and the merger materializes no defaults, so an absent key here is genuinely
+ * absent in the signed bytes rather than a stand-in for the schema's documented
+ * default.
+ */
+export interface PurposeJudgeConfig {
+  enabled?: boolean;
+  model?: string;
+  historyWindow?: number;
+  confidenceThreshold?: number;
+  escalationThreshold?: number;
+  maxLatencyMs?: number;
+}
+
+/**
+ * A policy's purpose binding.
+ *
+ * `allowedActions` is typed as an optional array rather than as `string[]` with an
+ * empty default on purpose: absent means *unrestricted* and `[]` means *deny every
+ * action* (canonical-enforcement-spec section 15.2, following section 3), so the two
+ * states have to remain distinguishable all the way from the editor to the wire.
+ * `prohibitedActions` is the deliberate asymmetry -- a deny-list of nothing restricts
+ * nothing, so absent and `[]` read the same there.
+ */
+export interface PurposeProfile {
+  purposeId: string;
+  description?: string;
+  allowedActions?: string[];
+  prohibitedActions?: string[];
+  judge?: PurposeJudgeConfig;
+}
+
 export interface PolicyDefinition {
   version: string;
   name: string;
@@ -157,6 +193,10 @@ export interface PolicyDefinition {
   appliesToAll?: boolean;
   sourcePatterns?: string[];
   permissions: PolicyPermissions;
+  // Optional, and its absence is the pre-purpose behaviour: a policy with no profile
+  // resolves for every caller, whatever purpose is declared. Adding one narrows
+  // resolution rather than adding a rule, which is why the editor says so loudly.
+  purposeProfile?: PurposeProfile;
   objectRules?: {
     allowedObjects?: string[];
     hiddenObjects?: string[];

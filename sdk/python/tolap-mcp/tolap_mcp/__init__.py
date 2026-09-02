@@ -18,6 +18,14 @@ from tolap_mcp.factory import (
     SecureToolFactory,
     ToolCreationError,
 )
+from tolap_mcp.bedrock_judge import (
+    DEFAULT_SYSTEM_PROMPT,
+    UNAVAILABLE_FLAG,
+    BedrockConverseClient,
+    BedrockJudge,
+    build_user_prompt,
+    parse_judge_response,
+)
 
 __all__ = [
     "RequestIdentityExtractor",
@@ -32,4 +40,13 @@ __all__ = [
     "SecureTool",
     "SecureToolFactory",
     "ToolCreationError",
+    # The optional Bedrock-backed semantic judge (canonical spec section 15.4). The
+    # transport is a Protocol the integrator implements, so this package keeps its two
+    # runtime dependencies and boto3 stays out of everyone's enforcement path.
+    "DEFAULT_SYSTEM_PROMPT",
+    "UNAVAILABLE_FLAG",
+    "BedrockConverseClient",
+    "BedrockJudge",
+    "build_user_prompt",
+    "parse_judge_response",
 ]

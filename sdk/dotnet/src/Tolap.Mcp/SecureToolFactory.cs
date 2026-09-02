@@ -52,12 +52,44 @@ public sealed record SecureTool(
 /// Off by default: a result the policy cannot be applied to is denied rather than returned
 /// unfiltered.
 /// </param>
+/// <param name="HashSalt">
+/// Secret salt for <c>hash</c> masking, forwarded to the record wrapper. Omitting it here
+/// used to mean a factory-produced wrapper silently hashed <b>unsalted</b> even when the
+/// deployment had configured a salt — turning a configured confidentiality control back into
+/// a plain digest, with nothing to indicate it. See
+/// <see cref="SecureContextWrapperOptions.HashSalt"/>.
+/// </param>
+/// <param name="ToolActionCategories">
+/// Tool name to action category, forwarded to the record wrapper for purpose-bound action
+/// validation (canonical-enforcement-spec.md section 15.2).
+/// </param>
+/// <param name="HttpActionCategories">
+/// <c>"METHOD path-glob"</c> to action category, forwarded to the HTTP wrapper. Keyed
+/// differently from <paramref name="ToolActionCategories"/> because an HTTP request carries a
+/// method and a path and no tool name.
+/// </param>
+/// <remarks>
+/// Every option here exists to be <b>forwarded</b>. The factory is documented as the
+/// composition root, so an option the wrappers accept and the factory does not is worse than
+/// an absent feature: the deployment configures it, the factory drops it, and the wrapper runs
+/// with a default nobody chose. For the two category maps that failure is loud — a purpose
+/// constraining actions denies every call with <c>action category not declared for tool</c> —
+/// and for <paramref name="HashSalt"/> it was silent, which is why it went unnoticed. A test
+/// now asserts that a factory-built wrapper decides identically to a hand-built one, so a
+/// future option cannot be added to a wrapper and forgotten here.
+/// </remarks>
 public sealed record SecureToolFactoryOptions(
     string SigningKey,
     bool EnforceSignatures = true,
     bool EnforceExpiry = true,
     string[]? AllowedTools = null,
-    bool AllowUnenforceableShapes = false);
+    bool AllowUnenforceableShapes = false,
+    string? HashSalt = null,
+    IReadOnlyDictionary<string, string>? ToolActionCategories = null,
+    IReadOnlyDictionary<string, string>? HttpActionCategories = null,
+    IJudge? Judge = null,
+    ToolCallHistory? ToolCallHistory = null,
+    Func<JudgeOutcome, Task<bool>>? EscalationHandler = null);
 
 /// <summary>
 /// Secure Tool Factory — the composition root for policy-enforced tools
@@ -190,7 +222,12 @@ public sealed class SecureToolFactory
             EnforceSignatures: _options.EnforceSignatures,
             EnforceExpiry: _options.EnforceExpiry,
             AllowedTools: _options.AllowedTools,
-            AllowUnenforceableShapes: _options.AllowUnenforceableShapes));
+            AllowUnenforceableShapes: _options.AllowUnenforceableShapes,
+            HashSalt: _options.HashSalt,
+            ToolActionCategories: _options.ToolActionCategories,
+            Judge: _options.Judge,
+            ToolCallHistory: _options.ToolCallHistory,
+            EscalationHandler: _options.EscalationHandler));
 
     /// <summary>
     /// The HTTP wrapper for <c>api</c> sources. Requires a client.
@@ -207,7 +244,9 @@ public sealed class SecureToolFactory
             new SecureHttpWrapperOptions(
                 SigningKey: _options.SigningKey,
                 EnforceSignatures: _options.EnforceSignatures,
-                EnforceExpiry: _options.EnforceExpiry),
+                EnforceExpiry: _options.EnforceExpiry,
+                HttpActionCategories: _options.HttpActionCategories,
+                HashSalt: _options.HashSalt),
             _client);
     }
 

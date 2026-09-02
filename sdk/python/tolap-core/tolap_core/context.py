@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
 from tolap_core.enums import SigningAlgorithm
-from tolap_core.models import EffectivePolicy, SecurityContext
+from tolap_core.models import DelegationHop, EffectivePolicy, SecurityContext
 from tolap_core.serialization import deserialize_effective_policy, serialize
 
 
@@ -21,6 +21,8 @@ def build_security_context(
     ttl: timedelta = timedelta(hours=1),
     *,
     jti: str | None = None,
+    declared_purpose: str | None = None,
+    delegation_chain: list[DelegationHop] | None = None,
 ) -> SecurityContext:
     """Build a SecurityContext from a resolved effective policy.
 
@@ -45,6 +47,21 @@ def build_security_context(
     :class:`ReplayGuard` at the verifying end -- an identifier alone records
     nothing.
 
+    ``declared_purpose`` is the purpose this context was resolved for (spec section
+    15). Pass the same value given to :func:`~tolap_core.resolution.resolve`, so the
+    artifact records which purpose produced it. Signed when present; an empty string
+    normalizes to absent so ``""`` and omitted cannot yield two different signatures.
+
+    ``delegation_chain`` is the chain of principals this authority passed through,
+    oldest hop first. Signed hop for hop when present. Validate it with
+    :func:`~tolap_core.delegation.validate_delegation_chain` *before* building -- this
+    function records the chain, it does not check it, because a builder that silently
+    dropped an invalid chain would produce a context that looked delegated and was not.
+
+    Both are keyword-only and appended after ``jti`` rather than inserted beside
+    ``policies``, so every existing positional call site keeps compiling and keeps
+    meaning what it did.
+
     Raises:
         ValueError: if more than one effective policy is supplied.
     """
@@ -65,6 +82,11 @@ def build_security_context(
         issued_at=now.isoformat().replace("+00:00", "Z"),
         expires_at=(now + ttl).isoformat().replace("+00:00", "Z"),
         jti=str(uuid.uuid4()) if jti is None else (jti or None),
+        # Normalized here as well as in the signing projection. Doing it here keeps the
+        # model's own value and its signed value the same thing, so a caller inspecting
+        # the context cannot see a purpose the signature does not cover.
+        declared_purpose=declared_purpose or None,
+        delegation_chain=delegation_chain,
     )
 
 
@@ -199,6 +221,29 @@ def _normalize_policy_timestamps(policy_dict: dict) -> dict:
     }
 
 
+def _canonical_delegation_hop(hop: DelegationHop) -> dict[str, Any]:
+    """Project one delegation hop into its canonical form.
+
+    Reflective, like the policy projection above: ``serialize`` camel-cases the keys,
+    turns the ``PrincipalType`` into its wire string, and omits every ``None`` field --
+    so an absent ``delegatedAt`` or ``scopeNarrowing`` disappears rather than signing
+    as ``null``. An empty ``scopeNarrowing`` is retained, because ``[]`` on a hop is a
+    claim ("nothing is in force here") rather than an omission.
+
+    ``delegatedAt`` is then normalized like every other instant in the signed bytes.
+    Without this the hop's timestamp would be signed as the verbatim transport string,
+    so a microsecond value would sign as ``.123456Z`` here and ``.123Z`` in .NET --
+    the same context, two signatures, and a cross-SDK verification failure (spec
+    section 2 rule 5). It is the only timestamp in the payload nested inside an array
+    of objects, which is exactly why it needs saying rather than assuming.
+    """
+    projected: dict[str, Any] = json.loads(serialize(hop))
+    delegated_at = projected.get("delegatedAt")
+    if isinstance(delegated_at, str):
+        projected["delegatedAt"] = _normalize_timestamp(delegated_at)
+    return projected
+
+
 def _canonical_payload(context: SecurityContext) -> str:
     """Project a SecurityContext into the canonical signing shape and serialize it.
 
@@ -235,7 +280,59 @@ def _canonical_payload(context: SecurityContext) -> str:
     # so a replay guard cannot be defeated by stripping or swapping the id.
     if context.jti:
         payload["jti"] = context.jti
-    return json.dumps(payload, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+    # `declaredPurpose` and `delegationChain` join the signed bytes on exactly the same
+    # terms as `jti`, and for a sharper reason. A purpose-scoped policy is only worth
+    # resolving if the purpose that selected it cannot then be swapped, and a delegation
+    # chain that can be rewritten is decoration -- `validate_delegation_chain` would be
+    # checking the attacker's own arithmetic. Both are omitted when absent or empty, so
+    # every context predating this feature signs to unchanged bytes.
+    #
+    # An empty chain normalizes to absent for the same reason an empty `jti` does: `[]`
+    # and omitted both mean "no delegation", and signing them differently would give one
+    # context two valid signatures. Note this is the opposite of the null-versus-empty
+    # rule for allow-lists (spec section 3) -- there `[]` is a meaningful deny-all; here
+    # it carries no hops and so makes no claim.
+    if context.declared_purpose:
+        payload["declaredPurpose"] = context.declared_purpose
+    if context.delegation_chain:
+        payload["delegationChain"] = [
+            _canonical_delegation_hop(hop) for hop in context.delegation_chain
+        ]
+    return json.dumps(
+        _shorten_whole_floats(payload),
+        separators=(",", ":"),
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+
+
+def _shorten_whole_floats(node: object) -> object:
+    """Render a float that holds a whole number as an integer, recursively.
+
+    Python's ``json.dumps`` emits ``1.0`` for a float whose value is whole, while .NET's
+    ``System.Text.Json`` and JavaScript's ``JSON.stringify`` both emit ``1``. A policy setting
+    ``confidenceThreshold: 1.0`` or ``minSimilarityScore: 0.0`` -- both schema-valid, both
+    reachable by ``json.loads`` producing a ``float`` -- therefore signed different bytes here
+    than in the other two SDKs, and a context signed by Python would not verify in either.
+    Canonical spec sections 1 and 14 make identical bytes the requirement, and two of the three
+    already agree on the shorter form, so Python is the one that moves.
+
+    Applied to the whole payload rather than to the fields known to be affected. A per-field
+    list is a second thing to keep in step with the schema, and the schema has several
+    ``number`` fields (``minSimilarityScore``, both judge thresholds) with more possible later.
+
+    ``bool`` is excluded explicitly: it is a subclass of ``int`` in Python, and ``True`` must
+    keep serializing as ``true`` rather than becoming ``1``.
+    """
+    if isinstance(node, bool):
+        return node
+    if isinstance(node, float) and node.is_integer():
+        return int(node)
+    if isinstance(node, dict):
+        return {key: _shorten_whole_floats(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_shorten_whole_floats(item) for item in node]
+    return node
 
 
 def _compute_signature(payload: str, secret_key: str, algorithm: SigningAlgorithm) -> str:
@@ -343,11 +440,19 @@ def deserialize_context(
     data = json.loads(json_bytes)
 
     # Convert camelCase keys
-    from tolap_core.serialization import _convert_keys_to_snake, _SIGNING_ALG_MAP
+    from tolap_core.serialization import (
+        _convert_keys_to_snake,
+        _deser_delegation_hop,
+        _SIGNING_ALG_MAP,
+    )
 
     d = _convert_keys_to_snake(data)
 
     effective = deserialize_effective_policy(data.get("effectivePolicy", {}))
+    # The hops are mapped through the real deserializer rather than constructed here, so
+    # an unknown principal type is refused at this boundary instead of arriving in chain
+    # validation as a value no narrowing rule covers.
+    raw_chain = d.get("delegation_chain")
     context = SecurityContext(
         effective_policy=effective,
         issued_at=d.get("issued_at"),
@@ -355,6 +460,12 @@ def deserialize_context(
         signature=d.get("signature"),
         algorithm=_SIGNING_ALG_MAP.get(d.get("algorithm", ""), None) if d.get("algorithm") else None,
         jti=d.get("jti"),
+        declared_purpose=d.get("declared_purpose"),
+        delegation_chain=(
+            [_deser_delegation_hop(hop) for hop in raw_chain]
+            if raw_chain is not None
+            else None
+        ),
     )
 
     # Validate signature before expiry

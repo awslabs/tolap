@@ -29,7 +29,15 @@ public static class SecurityContextSigner
         // without a jti signs to exactly the bytes it did before this field
         // existed. That backward compatibility is what keeps the known-answer
         // fixtures and cross-SDK agreement intact.
-        string? Jti = null);
+        string? Jti = null,
+        // Purpose and chain join the signed bytes on exactly the same terms, and for a
+        // sharper reason. A purpose-scoped policy is only worth resolving if the purpose
+        // that selected it cannot then be swapped, and a delegation chain that can be
+        // rewritten is decoration -- DelegationChainValidator would be checking the
+        // attacker's own arithmetic. Both are omitted when absent, so every context
+        // predating this feature signs to unchanged bytes.
+        string? DeclaredPurpose = null,
+        DelegationHop[]? DelegationChain = null);
 
     /// <summary>
     /// Signs a security context by computing an HMAC over its canonical projection and
@@ -117,7 +125,18 @@ public static class SecurityContextSigner
             Policies: policies,
             // Empty is normalized to null so that "" and absent cannot produce two
             // different signatures for what is semantically the same context.
-            Jti: string.IsNullOrEmpty(context.Jti) ? null : context.Jti);
+            Jti: string.IsNullOrEmpty(context.Jti) ? null : context.Jti,
+            DeclaredPurpose: string.IsNullOrEmpty(context.DeclaredPurpose)
+                ? null
+                : context.DeclaredPurpose,
+            // An empty chain normalizes to absent for the same reason an empty jti does:
+            // [] and omitted both mean "no delegation", and signing them differently would
+            // give one context two valid signatures. Note this is the opposite of the
+            // null-versus-empty rule for allow-lists (spec section 3) -- there [] is a
+            // meaningful deny-all; here it carries no hops and so no claim.
+            DelegationChain: context.DelegationChain is { Length: > 0 }
+                ? context.DelegationChain
+                : null);
 
         return CanonicalJson.Serialize(payload);
     }

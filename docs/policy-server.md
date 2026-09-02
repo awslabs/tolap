@@ -114,7 +114,7 @@ token, and group membership can be mapped from the upstream directory.
 
 ### What the server checks on every admin request
 
-All of these must hold, and any failure is a flat `401`:
+All of these must hold, and failing any of them is a `401`:
 
 - `alg` is `RS256`, taken from an allow-list. `alg: none` and every HMAC algorithm
   are refused — an HMAC algorithm is the algorithm-confusion attack, where a
@@ -131,6 +131,38 @@ All of these must hold, and any failure is a flat `401`:
 
 Rejections deliberately do not distinguish expired from invalid beyond what the
 server logs, per §11.
+
+**A `401` is not the only answer this surface gives, and that is deliberate.** The flat-401
+property belongs to the *resolve* port's install auth (below), not here. On the admin port:
+
+| Situation | Result |
+| --- | --- |
+| Any of the token checks above fails, or no credential is presented | `401` |
+| Valid credential, insufficient role | `403` |
+| The token's `kid` is still absent after one refetch | `401` |
+| The JWKS endpoint answers with a non-2xx status, or publishes no usable RSA key | `503` — `identity provider keys unavailable; request not authenticated` |
+| The JWKS fetch fails at the network level (DNS, connection refused, TLS) or its body will not parse | `503` — same body |
+| Group/role lookup unavailable | `503` — `identity lookup unavailable; policy not resolved` |
+| Rate limit exceeded | `429` |
+
+The 503s are the point: **a JWKS failure is not an authentication decision.** Reporting one as
+`401` tells an operator their token is bad when the server simply cannot reach Cognito, and it
+costs time three ways — a client following the status discards a good token and
+re-authenticates into the same failure, an operator reads the logs looking at tokens instead of
+at the identity provider, and a monitor watching 401 rates sees an attack shape rather than a
+dependency being down.
+
+Two rows here used to disagree with that. A non-2xx JWKS response surfaced as `401` and a
+network-level failure as `500`, so one outage reported two different statuses depending on how
+far it got, and neither was right. `guards.ts` even carried a comment saying a JWKS failure is
+not an authentication decision, with a re-throw implementing it — the re-throw was unreachable,
+because the verifier raised the same `AdminAuthError` the branch above it caught. A distinct
+`AdminAuthUnavailableError` is what makes the distinction real. The `kid`-not-published row
+stays `401` deliberately: that *is* a finding about the token, and collapsing it into the 503
+would report a bad credential as an outage.
+
+Both the 503 and the paired `401` are pinned by tests, since a change that made *everything*
+unavailable would satisfy a one-sided assertion.
 
 ### Fail closed, always
 
@@ -180,7 +212,14 @@ assignments.
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `DATABASE_URL` | yes | PostgreSQL connection string |
+| `DATABASE_SECRET_ID` | yes† | Secrets Manager secret id. **Setting this selects secret mode**, in which the password is re-read rather than snapshotted at start-up |
+| `DATABASE_URL` | yes† | PostgreSQL connection string. Read **only** when `DATABASE_SECRET_ID` is unset or blank |
+| `DATABASE_SECRET_CACHE_SECONDS` | no | Secret-mode only. Default 300, range 0–3600 |
+| `DATABASE_HOST` | no | Secret-mode only. Optional because RDS-managed secrets carry the host themselves |
+| `DATABASE_PORT` | no | Secret-mode only. Default 5432 |
+| `DATABASE_NAME` | no | Secret-mode only. Default `tolap` |
+| `DATABASE_SSL_MODE` | no | Secret-mode only. Default `verify-full`, named rather than `require` so a future `pg` major cannot weaken it to encrypt-without-verify |
+| `DATABASE_SSL_ROOT_CERT` | no | Secret-mode only. Omitted from the config when unset |
 | `TOLAP_SIGNING_KEY` | yes\* | A single secret, ≥32 chars. **No default** — see below |
 | `TOLAP_SIGNING_KEYS` | yes\* | `kid:secret` pairs for rotation, first active. Replaces the above |
 | `TOLAP_ACTIVE_KID` | no | Sign with this key instead of the first |
@@ -203,6 +242,13 @@ assignments.
 | `TOLAP_RATE_LIMIT_WINDOW_SECONDS` | no | Window for both, default 60 |
 
 \* One of the two signing forms is required.
+
+† One of the two database forms is required. `DATABASE_SECRET_ID` **wins when set**, on a
+whitespace-trim check: a deployment that has gone to the trouble of providing a secret should
+never silently fall back to a password baked into an environment variable. When it is set,
+`DATABASE_URL` is never read at all. `DATABASE_SECRET_ID="  "` counts as unset and falls back.
+The reference CDK deployment uses secret mode; `DATABASE_URL` is the local-development form,
+which is why the examples in [Running it](#running-it) use it.
 
 ### Rate limiting sits in two places, and both matter
 
@@ -297,12 +343,22 @@ Rotation works, and it needed no SDK change — which was not obvious, because n
 the three SDKs has a `kid` concept or a key-resolution hook; every signing API takes
 a bare `secretKey: string`.
 
-The opening is that **the security-context envelope has no JSON Schema**, so an extra
-top-level key is legal, and all three SDKs ignore members they do not model. The
+The opening is that **the artifact this server puts on the wire is not schema-constrained**,
+so an extra top-level key is legal, and all three SDKs ignore members they do not model. The
 artifact therefore carries `kid` alongside the signature. Verified against the real
 SDKs rather than assumed: an artifact with `kid` verifies in TypeScript
 (`validateContext` and `validatePolicy`), deserializes and verifies in Python, and
 verifies in .NET.
+
+`schema/v1.0/security-context.schema.json` does not contradict this, and it is worth being
+precise about why, because the file's name invites the wrong reading. It describes the
+**canonical signing projection** — the exact bytes the HMAC covers — and not the transported
+artifact, which carries `signature`, `algorithm`, `resolvedAt`, `effectivePolicy` and `kid`,
+none of which appear in that schema. It is `additionalProperties: false` because the signed
+bytes are exhaustively specified and an unrecognized key there would be either an unsigned
+field someone believed was signed or a signed one the other SDKs do not produce. Neither
+constraint reaches `kid`, for the same reason rotation works at all: `kid` is outside the
+signed payload.
 
 `kid` sits *outside* the signed payload — which the canonical projection fixes to
 `{version,userId,tenantId,issuedAt,expiresAt,policies[]}` (§2) — so it cannot change
@@ -401,6 +457,41 @@ GET /v1/resolve?userId=…&tenantId=…&sourceConnectionId=db:analytics:patients
 Authorization: Bearer tolap_ik_…
 ```
 
+### `declaredPurpose`
+
+One optional query parameter, for purpose-bound policies
+([canonical-enforcement-spec §15.1](canonical-enforcement-spec.md#151-resolution-time-purpose-filtering)):
+
+```
+GET /v1/resolve?userId=…&tenantId=…&sourceConnectionId=…&declaredPurpose=campaign-x-overlap
+```
+
+A policy carrying a `purposeProfile` resolves **only** for a caller declaring a matching
+`purposeId`, compared exactly and case-sensitively. Three consequences worth knowing before
+you rely on it:
+
+- **Omitting it is not an error, and can still change the answer.** A purpose-scoped policy
+  will not resolve, and a policy set that is *entirely* purpose-scoped resolves to deny-all — a
+  200 with a valid signed artifact granting nothing. That is the specified behaviour, but it
+  looks like a working request, so a caller meaning to use a purpose-bound policy has to send
+  the parameter.
+- **A malformed value is a 400, not a silent miss.** The parameter must be lowercase
+  alphanumeric with hyphens, at most 128 characters — the same constraint the schema puts on
+  `purposeProfile.purposeId`. Ignoring a malformed purpose would resolve without one, which is
+  the deny-all above wearing a success code. An empty value is treated as absent, matching how
+  the SDKs normalize it for the signature.
+- **It is recorded in the audit trail**, alongside the `purposeId` the resolved policy
+  actually carries. The same user and source under two purposes are two different grants, and
+  an incident review that cannot distinguish them cannot say what an agent was permitted to
+  do.
+
+The purpose ends up inside the signed artifact — carried on the effective policy, and on the
+context envelope when the consuming SDK sets it — so a captured artifact cannot be repurposed.
+
+Purpose profiles need no database migration: policies are stored as opaque `JSONB`, and
+schema validation reads `schema/v1.0/` from disk, so the server accepted `purposeProfile` the
+moment the schema declared it.
+
 ```json
 {
   "effectivePolicy": { "...": "...", "integrity": { "algorithm": "hmac-sha256", "signature": "…" } },
@@ -454,6 +545,26 @@ Three features exist for that specific risk:
   policy *before* publishing, with the contributing definitions listed. Merge is
   most-restrictive-wins and non-obvious — an allow-list intersects while a hidden
   list unions — so previewing beats reasoning.
+
+  It takes an optional **`declaredPurpose`**, forwarded to `store.resolvePolicy` exactly as
+  `GET /v1/resolve` forwards it, so a purpose-scoped policy is visible here
+  ([spec §15.1](canonical-enforcement-spec.md#151-resolution-time-purpose-filtering)). Both
+  routes normalize and validate it through one shared module, `routes/purpose-query.ts`: an
+  empty value means absent, a malformed one is a 400, and neither route can drift from the
+  other about which is which.
+
+  That sharing exists because the routes *did* drift. The preview previously called
+  `resolvePolicy` with three arguments where resolve passed four, so **every** policy
+  carrying a `purposeProfile` was excluded from the preview unconditionally — and the
+  failure was quiet in the worst way. The preview showed a *narrower* policy than production
+  would enforce, and where every assignment reaching the user was purpose-scoped it showed
+  the deny-all, which the console rendered as "this user cannot read this source". Nothing
+  said a purpose was needed and no input could supply one, so a purpose profile authored in
+  the console (see `PurposeProfileEditor` below) was one the console could never preview.
+
+  A test asserts the two routes agree on the policy a given purpose resolves to, rather than
+  only that each accepts the parameter: each route was internally consistent while they
+  disagreed, so agreement is the property worth pinning.
 - **Source catalog** so the console offers real object and field names. This is the
   highest-value correctness feature here: `hiddenFields: ["ssn"]` protects nothing
   if the column is actually `ssn_number`, and *nothing in TOLAP can detect that
@@ -466,10 +577,43 @@ a new trust dependency, and a stale one would silently change what a policy mean
 
 ### What the console's rule editors guard
 
-Every rule in the policy model is editable in the console, each control backed by the
-imported catalog. They are worth describing individually, because most of them exist to
-make one specific quiet failure loud — and in every case the failure is *silent* rather
-than an error an author would notice.
+Every rule under `permissions`, `purposeProfile`, `objectRules` and `limits` is editable in
+the console, each control backed by the imported catalog — as is `appliesToAll`, under
+**Scope**, as a checkbox.
+
+It was the one schema field with no control, and it round-tripped: declared in the client's
+type, so a policy authored elsewhere with `appliesToAll: true` loaded, stayed invisible, and
+saved back unchanged. Since the flag short-circuits `sourcePatterns` entirely
+([spec §10](canonical-enforcement-spec.md)), an author read the pattern list as the scope
+while the policy applied everywhere — a scope-*widening* flag displayed as a narrow one, which
+is worse than an absent field, because the screen answered the question wrongly instead of not
+answering it. When it is on, the form says so and says the patterns below are ignored; the
+patterns stay editable rather than being disabled, so turning it off restores the scope the
+author wrote instead of leaving an empty list that means "every source" for a different
+reason. Clearing the box omits the key rather than writing `false`, so opening and saving a
+policy does not change the stored document.
+
+The editors are worth describing individually, because most of them exist to make one specific
+quiet failure loud — and in every case the failure is *silent* rather than an error an author
+would notice.
+
+- **Purpose binding** (`PurposeProfileEditor`). The one editor whose effect is categorically
+  different from the others': every other rule group narrows *what a policy returns*, while a
+  purpose profile narrows *whether the policy applies at all*. Once a `purposeId` exists,
+  resolution excludes the policy for any caller declaring no purpose or a different one, matched
+  exactly and case-sensitively ([§15.1](canonical-enforcement-spec.md#151-resolution-time-purpose-filtering)).
+  Adding a profile to a working policy is therefore closer to unassigning it than to adding a
+  rule, so the consequence is stated on screen rather than left to a schema description.
+
+  It edits `purposeId`, `description`, `allowedActions`, `prohibitedActions` and the nested
+  `judge` block (`model`, `historyWindow`, `maxLatencyMs`, and both thresholds). Two things to
+  know while authoring: an **empty** `allowedActions` denies every action while an absent one
+  restricts nothing ([§3](canonical-enforcement-spec.md#3-null-vs-empty-array--the-denyunrestricted-distinction)),
+  and two policies naming different `purposeId`s — or different judge `model`s — merge to
+  **deny-all** rather than picking one
+  ([§15.5](canonical-enforcement-spec.md#155-merging-purpose-profiles)). The fieldset is shown
+  for every source category, unlike the endpoint and tag sections, because a declared purpose is
+  a property of the *caller* rather than of the source.
 
 - **Masked fields.** Mask types are listed most- to least-restrictive, which is also the
   spec's merge order (least-revealing wins), so the trade-off is visible while choosing
@@ -530,12 +674,30 @@ GET /v1/policies/:name/versions?limit=200&cursor=…
 GET /v1/audit?limit=200&cursor=…
 ```
 
-The response shape is the same on all six — the route's own key plus `nextCursor`,
-so a client writes the paging loop once:
+The response shape is the same on all six — one items key plus `nextCursor`, which is
+always present and is `null` on the last page rather than omitted, so "no more pages" is a
+value the caller can test instead of a missing key that also means "this endpoint does not
+paginate":
 
 ```json
 { "entries": [ … ], "nextCursor": "eyJ…" }
 ```
+
+**The items key is not derivable from the route.** Four of the six match the path segment and
+two do not, so read it by name:
+
+| Route | Items key |
+| --- | --- |
+| `GET /v1/policies` | `policies` |
+| `GET /v1/policies/:name/versions` | `versions` |
+| `GET /v1/assignments` | `assignments` |
+| `GET /v1/installs` | `installs` |
+| `GET /v1/catalog` | **`sources`** |
+| `GET /v1/audit` | **`entries`** |
+
+A client that derives `catalog` from `/v1/catalog` reads `undefined` and renders an empty
+list with no error — which is why the console's own `fetchAll` helper takes the key as an
+explicit argument rather than inferring it from the URL.
 
 `nextCursor` is **present and `null`** on the last page rather than omitted. An
 absent field would make "no more pages" indistinguishable from "this endpoint does
@@ -623,18 +785,27 @@ COGNITO_USER_POOL_ID=us-east-1_xxx \
   npm run dev
 ```
 
-Startup prints the two things that fail silently if they are wrong — which identity
-source is active, and which key is signing:
+Startup prints five lines. The last three are the things that fail silently if they are
+wrong — how the database password is obtained, which identity source is active, and which
+key is signing:
 
 ```
 admin API + console  http://127.0.0.1:8080
 resolve API          http://127.0.0.1:8081
+database credentials connection string (static)
 identity source      cognito
 signing keys         active=2026-08
 ```
 
-Without `COGNITO_USER_POOL_ID` that third line reads
-`none  (group- and role-scoped assignments will NOT resolve)`.
+- **`database credentials`** reads `Secrets Manager (rotation-aware)` under
+  `DATABASE_SECRET_ID`, and `connection string (static)` under `DATABASE_URL`. The static
+  form is a start-up snapshot: a rotation is not picked up until the task restarts.
+- **`identity source`** — the *fourth* line — reads
+  `none  (group- and role-scoped assignments will NOT resolve)` without
+  `COGNITO_USER_POOL_ID`.
+- **`signing keys`** appends `also verifying: <kids>` when the keyring holds more than one.
+
+The banner prints only when `index.ts` is run directly; `start()` itself logs nothing.
 
 Tests:
 

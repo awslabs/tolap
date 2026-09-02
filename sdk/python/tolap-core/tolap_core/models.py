@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
-from tolap_core.enums import AssigneeType, FilterOperator, MaskType, SigningAlgorithm
+from tolap_core.enums import (
+    AssigneeType,
+    FilterOperator,
+    MaskType,
+    PrincipalType,
+    SigningAlgorithm,
+)
 
 
 # -- Policy Definition models --
@@ -61,6 +68,91 @@ class PolicyLimits:
 
 
 @dataclass
+class JudgeConfig:
+    """Configuration for the optional semantic judge (spec section 15.4).
+
+    Every field is ``None``-defaulted and the documented defaults are applied when
+    the value is *read* rather than when the object is built. A non-None default
+    would serialize unconditionally -- ``serialize`` omits only ``None`` -- and so
+    would change the canonical bytes of every purpose-bound policy.
+
+    ``escalation_threshold`` must not exceed ``confidence_threshold``; an inverted
+    pair escalates rather than guessing which bound was meant (see
+    :func:`tolap_core.judge.judge_disposition`).
+    """
+
+    enabled: bool | None = None
+    model: str | None = None
+    history_window: int | None = None
+    confidence_threshold: float | None = None
+    escalation_threshold: float | None = None
+    max_latency_ms: int | None = None
+
+
+@dataclass
+class PurposeProfile:
+    """Binds a policy to a declared purpose (spec section 15).
+
+    Present on a :class:`PolicyDefinition` it scopes resolution: the policy only
+    resolves for a caller declaring a matching ``purpose_id``. It is carried through
+    the merge onto the :class:`EffectivePolicy` because enforcement only ever sees an
+    effective policy -- without that, the profile would be authorable and
+    unenforceable. Carrying it on the policy also puts the purpose inside the signed
+    bytes for free, since the policy is already part of the signed ``policies[]``.
+
+    ``purpose_id`` is matched against the caller's declared purpose exactly and
+    case-sensitively, so a mis-cased purpose resolves nothing rather than resolving
+    something adjacent.
+
+    ``allowed_actions`` follows the null-versus-empty rule in spec section 3:
+    ``None`` is unrestricted, an empty list denies every action.
+    ``prohibited_actions`` takes precedence over ``allowed_actions``: a category in
+    both is denied.
+    """
+
+    purpose_id: str
+    description: str | None = None
+    allowed_actions: list[str] | None = None
+    prohibited_actions: list[str] | None = None
+    judge: JudgeConfig | None = None
+
+
+@dataclass
+class DelegationHop:
+    """One hop in a delegation chain, from human to agent to sub-agent (section 15.3).
+
+    ``scope_narrowing`` lists the scopes still **in force** at this hop -- not the
+    scopes this hop removed. Each hop's set must be a subset of its parent's, so an
+    empty set leaves nothing for a child to claim.
+
+    ``delegated_at`` is part of the signed bytes when present, and is therefore
+    truncated to milliseconds by the canonical projection like every other timestamp:
+    the three runtimes do not agree below that (spec section 2 rule 5).
+
+    It is carried as an RFC 3339 string, like every other timestamp on these models
+    (``EffectivePolicy.resolved_at``, ``SecurityContext.issued_at``,
+    ``PolicyAssignment.expires_at``). A :class:`~datetime.datetime` is also accepted and
+    converted on construction, because that is the obvious thing to pass and the
+    alternative -- storing it verbatim -- fails later, at ``json.dumps`` inside signing,
+    where the traceback names neither this field nor the caller who set it.
+    """
+
+    principal_id: str
+    principal_type: PrincipalType
+    declared_purpose: str | None = None
+    delegated_at: str | datetime | None = None
+    scope_narrowing: list[str] | None = None
+
+    def __post_init__(self) -> None:
+        # Normalized to the same spelling ``build_security_context`` uses for the
+        # envelope's own instants, so one hop built from a datetime and another from a
+        # string cannot disagree about how the same moment is written -- and therefore
+        # cannot sign differently.
+        if isinstance(self.delegated_at, datetime):
+            self.delegated_at = self.delegated_at.isoformat().replace("+00:00", "Z")
+
+
+@dataclass
 class ObjectRules:
     allowed_objects: list[str] | None = None
     hidden_objects: list[str] | None = None
@@ -100,6 +192,9 @@ class PolicyDefinition:
     source_patterns: list[str] | None = None
     object_rules: ObjectRules | None = None
     limits: PolicyLimits | None = None
+    # Appended after `limits` rather than inserted, so every existing positional
+    # construction keeps compiling and keeps meaning what it did.
+    purpose_profile: PurposeProfile | None = None
 
 
 # -- Policy Assignment models --
@@ -161,6 +256,10 @@ class EffectivePolicy:
     object_rules: ObjectRules | None = None
     limits: PolicyLimits | None = None
     integrity: IntegrityBlock | None = None
+    # Carried here by the merger because every enforcement entry point takes an
+    # EffectivePolicy. A profile readable only on a definition would be authorable
+    # and unenforceable (spec section 15.2).
+    purpose_profile: PurposeProfile | None = None
 
     @classmethod
     def deny_all(cls) -> EffectivePolicy:
@@ -194,3 +293,16 @@ class SecurityContext:
     # signature. Optional for backward compatibility: a context without a `jti`
     # produces the same canonical bytes it did before this field existed.
     jti: str | None = None
+    # The purpose this context was resolved for (spec section 15). Signed when
+    # present, so it cannot be swapped for a different purpose or stripped to escape
+    # a purpose-scoped policy. Omitted from the canonical payload entirely when
+    # absent or empty, so a context without a declared purpose signs to exactly the
+    # bytes it did before this field existed. It records the purpose the caller
+    # *asserted* at resolution; TOLAP checks that assertion against the policy set,
+    # not the caller's honesty about it.
+    declared_purpose: str | None = None
+    # The chain of principals this authority passed through, oldest hop first.
+    # Signed when present, hop for hop: mutating, reordering, or removing a hop
+    # invalidates the signature, which is what makes
+    # :func:`tolap_core.delegation.validate_delegation_chain` worth running at all.
+    delegation_chain: list[DelegationHop] | None = None

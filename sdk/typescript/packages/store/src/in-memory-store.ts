@@ -136,8 +136,20 @@ export class InMemoryPolicyStore implements PolicyStore {
     userId: string,
     tenantId: string,
     sourceConnectionId: string,
+    declaredPurpose?: string,
   ): Promise<EffectivePolicy> {
-    this.emit("policy.resolve", { userId, tenantId, sourceConnectionId });
+    this.emit("policy.resolve", {
+      userId,
+      tenantId,
+      sourceConnectionId,
+      // Recorded in the audit trail because "which purpose was this resolved for"
+      // is the question a reviewer asks of a purpose-bound grant, and the resolved
+      // policy alone cannot answer it: a purpose-agnostic result looks identical
+      // whether no purpose was declared or a non-matching one was. Omitted rather
+      // than emitted as an empty string when absent, so a pre-purpose event's
+      // details are unchanged.
+      ...(declaredPurpose === undefined ? {} : { declaredPurpose }),
+    });
     return resolve(
       userId,
       tenantId,
@@ -146,6 +158,10 @@ export class InMemoryPolicyStore implements PolicyStore {
       this.definitions,
       (uid) => this.identityResolver.getGroups(uid),
       (uid) => this.identityResolver.getRoles(uid),
+      // `ttlMs` is spelled out because `declaredPurpose` follows it positionally;
+      // the value is `resolve`'s own documented default.
+      3_600_000,
+      declaredPurpose,
     );
   }
 }

@@ -148,3 +148,28 @@ public enum SigningAlgorithm
     HmacSha512,
     Ed25519
 }
+
+/// <summary>
+/// Kind of principal at one hop of a delegation chain
+/// (canonical-enforcement-spec.md section 15).
+/// </summary>
+/// <remarks>
+/// A closed set rather than a bare string, so an unrecognized value is refused at
+/// deserialization instead of flowing into chain validation as an unknown that no rule
+/// covers. Unlike every other enum here it has no counterpart in
+/// <c>schema/v1.0/</c>: a delegation chain lives on the SecurityContext envelope, which
+/// is specified in prose and pinned by the signing fixtures rather than by a published
+/// schema. That means the conformance test for this enum compares it against the shared
+/// fixture corpus rather than against a schema document.
+/// </remarks>
+public enum PrincipalType
+{
+    /// <summary>A human. Only ever the first hop: a person is delegated to, never by an agent.</summary>
+    User,
+
+    /// <summary>An autonomous agent acting on a principal's behalf.</summary>
+    Agent,
+
+    /// <summary>A non-agent system component, such as an orchestrator passing work along.</summary>
+    Service
+}

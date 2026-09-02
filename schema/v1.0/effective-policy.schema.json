@@ -79,6 +79,88 @@
         }
       }
     },
+    "purposeProfile": {
+      "type": "object",
+      "required": [
+        "purposeId"
+      ],
+      "additionalProperties": false,
+      "description": "Binds this policy to a declared purpose. When present, the policy only resolves for a caller that declares a matching purposeId, and the tool call must carry an action category the purpose permits. Omit it and the policy is purpose-agnostic, which is the pre-existing behaviour. See docs/canonical-enforcement-spec.md section 15.",
+      "properties": {
+        "purposeId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+          "description": "Unique purpose identifier, matched against the caller's declared purpose exactly and case-sensitively. Lowercase alphanumeric with hyphens, as for 'name'."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Human-readable description of the purpose. Carried into audit logs and, when the judge is enabled, into its prompt."
+        },
+        "allowedActions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "description": "Action categories permitted under this purpose. Omitted means unrestricted; an empty array denies every action (see docs/canonical-enforcement-spec.md section 3). When present, a tool whose action category is unknown is denied. Intersected on merge."
+        },
+        "prohibitedActions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[a-z0-9][a-z0-9_-]*$"
+          },
+          "description": "Action categories denied under this purpose. Takes precedence over allowedActions. Unioned on merge."
+        },
+        "judge": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional LLM judge for semantic purpose alignment. Advisory and non-deterministic: it can only deny a call the deterministic checks already allowed, never permit one they denied.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Whether to consult the judge. Merged with OR: any applicable policy can switch it on."
+            },
+            "model": {
+              "type": "string",
+              "maxLength": 256,
+              "description": "Model identifier, for example 'claude-sonnet'. Two policies naming different models cannot be merged and resolve to deny-all."
+            },
+            "historyWindow": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 10,
+              "description": "Number of recent tool calls to include in the judge's context. Merged with maximum."
+            },
+            "confidenceThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.85,
+              "description": "At or above this confidence the judge's verdict is final, allow or block. Merged with maximum: a higher bar sends more calls to escalation."
+            },
+            "escalationThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.6,
+              "description": "Below this confidence the call escalates to human review. Merged with maximum. Must not exceed confidenceThreshold; an inverted pair fails closed."
+            },
+            "maxLatencyMs": {
+              "type": "integer",
+              "minimum": 100,
+              "default": 2000,
+              "description": "Wall-clock budget for one judge invocation. A timeout escalates rather than allowing. Merged with minimum."
+            }
+          }
+        }
+      }
+    },
     "objectRules": {
       "type": "object",
       "additionalProperties": false,

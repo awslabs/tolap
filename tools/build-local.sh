@@ -43,6 +43,13 @@ build_python() {
   if ! command -v python3 >/dev/null; then SKIPPED+=("python (no python3)"); return; fi
   note "Python"
   python3 -m pip install --quiet --upgrade build 2>/dev/null
+  # Cleaned first, because the install below globs `tolap_core-*.whl`. A dist/ left over
+  # from an earlier version makes that glob match two wheels, and pip refuses the pair
+  # with `ResolutionImpossible` rather than picking the newer -- so the supported build
+  # path breaks on exactly the machines that have used it before. Found by bumping
+  # 1.0.0 -> 1.1.0. dist/ is gitignored and reproducible, and `--artifacts` promises the
+  # files of *this* build, so removing the previous one is also the honest reading.
+  rm -rf "$DIST/python"
   for pkg in tolap-core tolap-store tolap-mcp; do
     echo "  building $pkg"
     if ! python3 -m build --outdir "$DIST/python" "$REPO_ROOT/sdk/python/$pkg" >/dev/null 2>&1; then
@@ -76,6 +83,10 @@ build_typescript() {
     echo "  compiling @aws/tolap-$pkg"
     (cd "packages/$pkg" && npx tsc -p tsconfig.json) || { FAILED+=("typescript:$pkg"); return; }
   done
+  # Cleaned for the same reason as dist/python: a consumer installing
+  # `dist/npm/aws-tolap-core-*.tgz` should not have to pick between versions, and a
+  # stale tarball beside a fresh one is indistinguishable from the fresh one at a glance.
+  rm -rf "$DIST/npm"
   mkdir -p "$DIST/npm"
   for pkg in core store mcp; do
     (cd "packages/$pkg" && npm pack --pack-destination "$DIST/npm" >/dev/null 2>&1) \
@@ -88,6 +99,11 @@ build_typescript() {
 build_dotnet() {
   if ! command -v dotnet >/dev/null; then SKIPPED+=("dotnet (no dotnet SDK)"); return; fi
   note ".NET"
+  # dist/nuget is deliberately NOT cleaned, unlike dist/python and dist/npm. A NuGet
+  # local feed is *meant* to hold several versions and resolves by constraint, so
+  # accumulation is correct behaviour rather than the ambiguity it is for a wheel glob.
+  # Wiping it would also break a feed already registered on this machine with
+  # `dotnet nuget add source`, taking previously-consumable versions with it.
   for proj in Tolap.Core Tolap.Store Tolap.Mcp; do
     echo "  packing $proj"
     if ! dotnet pack "$REPO_ROOT/sdk/dotnet/src/$proj/$proj.csproj" \

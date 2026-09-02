@@ -73,6 +73,43 @@ source.
 
 **Agent Transparency** -- The calling agent requires zero security-awareness code. Restricted data simply does not exist from the agent's perspective. This eliminates an entire class of prompt injection and data exfiltration risks.
 
+## Purpose Binding
+
+The three principles above answer "what may this identity see?". A signed context binds
+identity, tenant, source and expiry -- but not the *reason* the data is being read. An
+agent holding a legitimate context can use it for anything its policy happens to permit,
+so an agent that drifts off-task looks identical to one that has not.
+
+A policy can optionally declare the purpose it serves:
+
+```json
+"purposeProfile": {
+  "purposeId": "campaign-x-overlap",
+  "description": "Identify overlapping opted-in customer segments for Campaign X",
+  "allowedActions": ["aggregate_overlap", "count_segments"],
+  "prohibitedActions": ["export_pii", "enumerate_individuals"]
+}
+```
+
+That gives three deterministic checks, and one optional non-deterministic one:
+
+| | What it does |
+|---|---|
+| **Resolution filtering** | The policy resolves only for a caller declaring a matching `purposeId`. Declare no purpose and it does not resolve at all. |
+| **Action validation** | A tool call must carry an action category the purpose permits. The category comes from an administrator-supplied map, never from the agent. |
+| **Delegation chains** | A human → agent → sub-agent chain may only narrow. A sub-agent cannot grant itself a wider purpose than it was delegated. |
+| **Semantic judge** (opt-in) | An LLM check on whether a call plausibly serves the purpose, across the recent trajectory rather than one call. Strictly subtractive: it can only take away an allowance the deterministic checks already granted. |
+
+**Opt-in and additive.** A policy with no `purposeProfile`, and a caller declaring no
+purpose, behave exactly as they did before -- down to the signed bytes. The purpose and
+the delegation chain are inside the HMAC, so a captured context cannot be repurposed.
+
+What it does not do: purpose is *asserted* by the caller. TOLAP verifies the assertion
+matches a policy and that a chain is internally consistent; it cannot verify the caller
+was honest. This constrains a cooperative agent that drifts and bounds the damage from one
+compromised mid-task -- it is not a defence against a lying integrator. See
+[§15](docs/canonical-enforcement-spec.md#15-purpose-binding).
+
 ## What TOLAP Covers
 
 | Data Source | Enforcement |
@@ -393,9 +430,17 @@ class PostgresPolicyStore(PolicyStore):
     def __init__(self, pool: asyncpg.Pool):
         self._pool = pool
 
-    async def resolve_effective_policy(self, user_id, tenant_id, data_source_id):
+    # `resolve_policy`, and `declared_purpose` is keyword-only. Forward it: purpose
+    # filtering runs BEFORE the merge (spec 15.1), so accepting it and not passing it on
+    # makes every purpose-scoped policy invisible with nothing to indicate why.
+    async def resolve_policy(
+        self, user_id, tenant_id, source_connection_id, *, declared_purpose=None
+    ):
         rows = await self._pool.fetch(
-            """SELECT p.policy_json FROM tolap_assignments a
+            """SELECT a.policy_name, a.assignee_type, a.assignee_id, a.tenant_id,
+                      a.data_source_id, a.active, a.expires_at, a.revoked_at,
+                      a.granted_by, a.granted_at, a.reason, p.policy_json
+               FROM tolap_assignments a
                JOIN tolap_policies p ON a.policy_name = p.name
                WHERE a.assignee_id = $1
                  AND (a.tenant_id IS NULL OR a.tenant_id = $2)
@@ -403,10 +448,25 @@ class PostgresPolicyStore(PolicyStore):
                  AND a.active = true
                  AND (a.expires_at IS NULL OR a.expires_at > now())
                ORDER BY p.priority DESC""",
-            user_id, tenant_id, data_source_id,
+            user_id, tenant_id, source_connection_id,
         )
-        policies = [PolicyDefinition.from_json(r["policy_json"]) for r in rows]
-        return merge(policies)
+        # `resolve`, not `merge`: the source-pattern and declared-purpose filters run
+        # before the merge, and `merge` alone skips both. `definitions` is a dict keyed
+        # by name. Full example: docs/architecture.md#implementing-a-custom-policy-store
+        definitions = {
+            d.name: d
+            for d in (PolicyDefinition.from_json(r["policy_json"]) for r in rows)
+        }
+        return resolve(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            source_connection_id=source_connection_id,
+            assignments=[_assignment_from_row(r) for r in rows],
+            definitions=definitions,
+            get_groups=self._groups_for,
+            get_roles=self._roles_for,
+            declared_purpose=declared_purpose,
+        )
 ```
 
 ### TypeScript (pg)
@@ -415,11 +475,19 @@ class PostgresPolicyStore(PolicyStore):
 export class PostgresPolicyStore implements PolicyStore {
   constructor(private pool: Pool) {}
 
-  async resolveEffectivePolicy(
-    userId: string, tenantId: string, dataSourceId: string
+  // `resolvePolicy`, with `declaredPurpose` as the trailing optional parameter. Forward
+  // it: purpose filtering runs BEFORE the merge (spec §15.1).
+  async resolvePolicy(
+    userId: string,
+    tenantId: string,
+    sourceConnectionId: string,
+    declaredPurpose?: string,
   ): Promise<EffectivePolicy> {
     const { rows } = await this.pool.query(
-      `SELECT p.policy_json FROM tolap_assignments a
+      `SELECT a.policy_name, a.assignee_type, a.assignee_id, a.tenant_id,
+              a.data_source_id, a.active, a.expires_at, a.revoked_at,
+              a.granted_by, a.granted_at, a.reason, p.policy_json
+       FROM tolap_assignments a
        JOIN tolap_policies p ON a.policy_name = p.name
        WHERE a.assignee_id = $1
          AND (a.tenant_id IS NULL OR a.tenant_id = $2)
@@ -427,9 +495,24 @@ export class PostgresPolicyStore implements PolicyStore {
          AND a.active = true
          AND (a.expires_at IS NULL OR a.expires_at > now())
        ORDER BY p.priority DESC`,
-      [userId, tenantId, dataSourceId]
+      [userId, tenantId, sourceConnectionId]
     );
-    return merge(rows.map((r) => r.policy_json));
+    // `resolve`, not `merge`: the source-pattern and declared-purpose filters run before
+    // the merge, and `merge` alone skips both. `definitions` is a **Map** keyed by name,
+    // not an array. Full example: docs/architecture.md#implementing-a-custom-policy-store
+    return resolve(
+      userId,
+      tenantId,
+      sourceConnectionId,
+      rows.map(assignmentFromRow),
+      new Map<string, PolicyDefinition>(
+        rows.map((r) => [r.policy_json.name, r.policy_json] as [string, PolicyDefinition]),
+      ),
+      (id) => this.groupsFor(id),
+      (id) => this.rolesFor(id),
+      3_600_000,          // ttlMs -- declaredPurpose follows it positionally
+      declaredPurpose,
+    );
   }
 }
 ```
@@ -460,6 +543,15 @@ When multiple policies apply to a user, TOLAP merges them using most-restrictive
 | Numeric limits (minima) | Maximum | `minSimilarityScore` 0.7 + 0.8 -> 0.8 |
 | Masked fields | Most restrictive | ranked by disclosure: null > redact > full > hash > partial |
 | Row filters | Concatenate | All filters from all policies apply (AND) |
+| `purposeProfile.allowedActions` | Intersection | Disjoint lists yield `[]`, which denies every action |
+| `purposeProfile.prohibitedActions` | Union | Any policy can forbid a category |
+| `purposeProfile.purposeId` | Must agree | Two different purposes cannot merge -> deny-all |
+| `purposeProfile.judge.model` | Must agree | Two different models cannot merge -> deny-all. Same hazard class as `purposeId`: a verdict is only meaningful against the model that produced it, so picking one would apply a judgement nobody asked for |
+
+The two **deny-all** rows are the ones to know: everywhere else the merge narrows, but a
+disagreement about *which purpose* or *which judge model* has no most-restrictive combination, so
+it refuses. The full table, including the judge thresholds and window, is
+[spec §15.5](docs/canonical-enforcement-spec.md#155-merging-purpose-profiles).
 
 ## TOLAP vs Traditional Approaches
 
@@ -474,13 +566,16 @@ When multiple policies apply to a user, TOLAP merges them using most-restrictive
 
 ## Policy Schema
 
-TOLAP policies are defined in three layers:
+Four published schemas: three policy layers, plus the envelope that carries the resolved policy.
 
-1. **[Policy Definition](schema/v1.0/policy-definition.schema.json)** -- Declares access rules: objects, fields, rows, tags, endpoints, masking, limits
+1. **[Policy Definition](schema/v1.0/policy-definition.schema.json)** -- Declares access rules: objects, fields, rows, tags, endpoints, masking, limits, and an optional `purposeProfile`
 2. **[Policy Assignment](schema/v1.0/policy-assignment.schema.json)** -- Links a policy to a user/group/role with scope, expiry, and audit trail
-3. **[Effective Policy](schema/v1.0/effective-policy.schema.json)** -- The merged, signed result enforced at the tool layer
+3. **[Effective Policy](schema/v1.0/effective-policy.schema.json)** -- The merged result enforced at the tool layer
+4. **[Security Context](schema/v1.0/security-context.schema.json)** -- **New in 1.1.0.** The signed envelope, which had no published schema at all before this release: it was prose plus two known-answer fixtures. It describes the **canonical signing projection** rather than any SDK's native context type, since the three deliberately differ and converge only at the signed form. It gives `delegationHop` and `principalType` a published contract, and it makes every `fixtures/signing/*.json` canonical payload schema-checked rather than merely described — before it, a signing fixture could carry any field at all and nothing would notice.
 
-Schema version: **v1.0** (strict versioning, no extension points)
+All four set `additionalProperties: false`. Schema version: **v1.0** (strict versioning, no
+extension points) — every 1.1.0 addition is an optional property, so a v1.0 policy is still a
+valid v1.0 policy.
 
 ## Security Properties
 
@@ -505,6 +600,11 @@ Schema version: **v1.0** (strict versioning, no extension points)
   becomes a keyed HMAC rather than a plain digest, so a masked SSN or date of birth is
   not recoverable by rainbow table. The same salt yields the same pseudonym in every
   SDK, so it still works as a cross-service join key.
+- **Access can be bound to a declared purpose** -- A policy carrying a `purposeProfile`
+  resolves only for a caller declaring a matching purpose, and the purpose is inside the
+  signature, so a captured context cannot be repurposed. A delegation chain may only
+  narrow, so a sub-agent cannot grant itself wider authority than it was handed. Both are
+  opt-in; the purpose is caller-asserted, which is what this does and does not buy you.
 - **Audit fields are mandatory in the schema** -- Every policy assignment must carry who
   granted it, when, and why. This is a schema constraint on stored assignments; validate
   assignments against the schema in your store, because the SDK does not reject an
@@ -523,7 +623,10 @@ full list of what TOLAP does not guarantee.
 - [Building locally](tools/build-local.sh) -- Builds and installs all nine SDK packages from source
 - [Integration examples](examples/) -- Fourteen integrations across Python, TypeScript and .NET (MCP SDK, Strands, LangChain, Vercel AI, Mastra, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents), each CI-tested to enforce the same policy identically
 - [Threat Model](docs/security/threat-model.md) -- STRIDE analysis per trust boundary, with the defects found and fixed since revision 1
-- [Testing Anti-Patterns](docs/testing-antipatterns.md) -- Six defects that shipped here while the suite was green, and the smell to grep for in each
+- [Testing Anti-Patterns](docs/testing-antipatterns.md) -- Eight defects that shipped here while the suite was green, and the smell to grep for in each
+- Design records -- the reasoning behind decisions that were not obvious, kept out of the specs so the normative documents stay normative:
+  - [Purpose binding](docs/superpowers/specs/2026-09-01-purpose-binding-design.md) -- why prefix matching is not narrowing, why case sensitivity points two ways on purpose, why there are two action-category maps, and why the envelope finally got a schema
+  - [SQL enforcement mode](docs/superpowers/specs/2026-08-17-sql-enforcement-mode-design.md) -- why the rewrite/post-only choice is exposed at all, and why both modes must return the same rows
 - Test evidence:
   - [`security/aws/`](security/aws/) -- 129 tests against real S3, Athena, Bedrock KB, OpenSearch and Elasticsearch, with the findings each one produced
   - [`security/databases/`](security/databases/) -- Verbose transcripts showing the actual SQL, rows before and after, and each masking type, against live PostgreSQL, MySQL, pgvector and a real HTTP socket
@@ -540,15 +643,21 @@ identically**. See [`examples/`](examples/).
 
 | Language | Frameworks | Tests |
 | --- | --- | --: |
-| [Python](examples/python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 44 |
-| [TypeScript](examples/typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 33 |
-| [.NET](examples/dotnet/) | MCP SDK, Semantic Kernel | 17 |
+| [Python](examples/python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 60 |
+| [TypeScript](examples/typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 49 |
+| [.NET](examples/dotnet/) | MCP SDK, Semantic Kernel | 36 |
+
+Each language also carries **two** examples that are not framework integrations — the
+enforcement-mode example and the purpose-binding example — so 20 example files in total. Those six
+are outside the fourteen and are counted in the test numbers above.
 
 **TOLAP is not an MCP server and does not speak the MCP protocol.** It ships no JSON-RPC, no stdio
 transport, no `tools/list`, and declares no MCP dependency in any package. The `*-mcp` packages
 provide enforcement *around the function your tool layer already calls* -- which is why the
-integration is the same substitution in all fourteen cases, and why none of them takes a credential.
-Your code fetches the data; TOLAP decides what may leave.
+integration is the same substitution in **thirteen** of the fourteen cases, and why none of them
+takes a credential. Your code fetches the data; TOLAP decides what may leave. The fourteenth is
+Bedrock Agents, which invokes a Lambda: the signed context cannot be built locally, so it arrives
+as a session attribute and the handler verifies the signature before enforcing.
 
 Every example runs against a fake source returning **4 rows and 5 columns**, and every one returns:
 

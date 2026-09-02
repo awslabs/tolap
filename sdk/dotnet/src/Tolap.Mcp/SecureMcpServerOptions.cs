@@ -67,6 +67,28 @@ public enum EnforcementMode
 /// changing it changes every masked value.
 /// </para>
 /// </param>
+/// <param name="DeclaredPurpose">
+/// The purpose this server declares when resolving (canonical-enforcement-spec.md section 15.1).
+/// <para>
+/// Needed here, unlike on <see cref="SecureContextWrapperOptions"/>, because this wrapper
+/// resolves its own policy rather than being handed a signed context that already recorded a
+/// purpose. Without it, resolution excludes every purpose-scoped definition and returns
+/// deny-all — so a purpose-bound policy was simply unusable through this wrapper family, and
+/// the symptom was a working request that granted nothing, which is the hardest kind to
+/// diagnose. Fail-closed, but a capability the configuration implied and did not have.
+/// </para>
+/// <para>
+/// Configuration rather than a per-call argument, for the same reason
+/// <paramref name="ToolActionCategories"/> is: the purpose is what the deployment was
+/// authorized for, not something the caller of a tool chooses per invocation.
+/// </para>
+/// </param>
+/// <param name="ToolActionCategories">
+/// Tool name to semantic action category, for purpose-bound action validation (section 15.2).
+/// Set alongside <paramref name="DeclaredPurpose"/>: a purpose that constrains actions denies
+/// every call from a wrapper with no map, which is correct and loud but not what an operator
+/// intends.
+/// </param>
 public sealed record SecureMcpServerOptions(
     IPolicyStore PolicyStore,
     IIdentityResolver IdentityResolver,
@@ -76,4 +98,6 @@ public sealed record SecureMcpServerOptions(
     Dictionary<string, string>? SourceMapping = null,
     EnforcementMode EnforcementMode = EnforcementMode.Strict,
     bool AllowUnenforceableShapes = false,
-    string? HashSalt = null);
+    string? HashSalt = null,
+    string? DeclaredPurpose = null,
+    IReadOnlyDictionary<string, string>? ToolActionCategories = null);

@@ -6,15 +6,23 @@ from dataclasses import asdict, fields, is_dataclass
 from enum import Enum
 from typing import Any
 
-from tolap_core.enums import AssigneeType, FilterOperator, MaskType, SigningAlgorithm
+from tolap_core.enums import (
+    AssigneeType,
+    FilterOperator,
+    MaskType,
+    PrincipalType,
+    SigningAlgorithm,
+)
 from tolap_core.models import (
     Assignee,
     AssignmentScope,
     AuditInfo,
+    DelegationHop,
     EffectivePolicy,
     EndpointRules,
     FieldRules,
     IntegrityBlock,
+    JudgeConfig,
     MaskingParameters,
     MaskingRule,
     ObjectRules,
@@ -22,6 +30,7 @@ from tolap_core.models import (
     PolicyDefinition,
     PolicyLimits,
     PolicyPermissions,
+    PurposeProfile,
     RowFilter,
     TagRules,
 )
@@ -95,6 +104,7 @@ _MASK_TYPE_MAP: dict[str, MaskType] = {m.value: m for m in MaskType}
 _FILTER_OP_MAP: dict[str, FilterOperator] = {f.value: f for f in FilterOperator}
 _ASSIGNEE_TYPE_MAP: dict[str, AssigneeType] = {a.value: a for a in AssigneeType}
 _SIGNING_ALG_MAP: dict[str, SigningAlgorithm] = {s.value: s for s in SigningAlgorithm}
+_PRINCIPAL_TYPE_MAP: dict[str, PrincipalType] = {p.value: p for p in PrincipalType}
 
 
 # -- Deserialization helpers --
@@ -213,6 +223,71 @@ def _deser_limits(data: dict | None) -> PolicyLimits | None:
     )
 
 
+def _deser_judge_config(data: dict | None) -> JudgeConfig | None:
+    """Read a ``judge`` block, preserving "absent" as ``None`` on every field.
+
+    Nothing is defaulted here. The documented defaults live in
+    :mod:`tolap_core.judge` and are applied at read time, so an unset threshold
+    stays out of the serialized form and out of the signed bytes.
+    """
+    if data is None:
+        return None
+    d = _convert_keys_to_snake(data)
+    return JudgeConfig(
+        enabled=d.get("enabled"),
+        model=d.get("model"),
+        history_window=d.get("history_window"),
+        confidence_threshold=d.get("confidence_threshold"),
+        escalation_threshold=d.get("escalation_threshold"),
+        max_latency_ms=d.get("max_latency_ms"),
+    )
+
+
+def _deser_purpose_profile(data: dict | None) -> PurposeProfile | None:
+    """Read a ``purposeProfile`` block.
+
+    ``allowed_actions`` and ``prohibited_actions`` are read with ``.get`` rather
+    than a truthiness check so that an empty array survives as ``[]``: on the
+    allow-list that is the most restrictive value the model can express (spec
+    section 3), and collapsing it to ``None`` would mean the opposite.
+    """
+    if data is None:
+        return None
+    d = _convert_keys_to_snake(data)
+    return PurposeProfile(
+        purpose_id=d["purpose_id"],
+        description=d.get("description"),
+        allowed_actions=d.get("allowed_actions"),
+        prohibited_actions=d.get("prohibited_actions"),
+        judge=_deser_judge_config(d.get("judge")),
+    )
+
+
+def _deser_delegation_hop(data: dict) -> DelegationHop:
+    """Read one delegation hop, failing closed on an unknown principal type.
+
+    Modelled on :func:`_deser_masking_rule`, and fail-closed for the same reason: an
+    unrecognized principal type must be refused at the boundary rather than arriving
+    in :func:`tolap_core.delegation.validate_delegation_chain` as a value no
+    narrowing rule covers.
+    """
+    d = _convert_keys_to_snake(data)
+    raw_principal_type = d["principal_type"]
+    if raw_principal_type not in _PRINCIPAL_TYPE_MAP:
+        valid = ", ".join(p.value for p in PrincipalType)
+        raise ValueError(
+            f"unknown principalType {raw_principal_type!r} for principal "
+            f"{d.get('principal_id')!r}; expected one of: {valid}"
+        )
+    return DelegationHop(
+        principal_id=d["principal_id"],
+        principal_type=_PRINCIPAL_TYPE_MAP[raw_principal_type],
+        declared_purpose=d.get("declared_purpose"),
+        delegated_at=d.get("delegated_at"),
+        scope_narrowing=d.get("scope_narrowing"),
+    )
+
+
 def _deser_permissions(data: dict) -> PolicyPermissions:
     """Read the permission block, preserving "absent" as ``None``.
 
@@ -246,6 +321,7 @@ def deserialize_policy_definition(data: dict | str) -> PolicyDefinition:
         source_patterns=d.get("source_patterns"),
         object_rules=_deser_object_rules(d.get("object_rules")),
         limits=_deser_limits(d.get("limits")),
+        purpose_profile=_deser_purpose_profile(d.get("purpose_profile")),
     )
 
 
@@ -316,4 +392,5 @@ def deserialize_effective_policy(data: dict | str) -> EffectivePolicy:
         object_rules=_deser_object_rules(d.get("object_rules")),
         limits=_deser_limits(d.get("limits")),
         integrity=_deser_integrity(d.get("integrity")),
+        purpose_profile=_deser_purpose_profile(d.get("purpose_profile")),
     )

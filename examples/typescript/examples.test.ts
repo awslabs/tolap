@@ -141,3 +141,248 @@ describe("enforcement-mode example", () => {
     }
   });
 });
+
+/**
+ * The lines the purpose-binding example must print, byte for byte.
+ *
+ * Written out in full rather than matched loosely, and repeated verbatim in the Python and .NET
+ * suites, for the same reason `EXPECTED` above is: the three SDKs must agree, so a divergence has
+ * to surface as a *different line* rather than hiding behind three separately written substring
+ * matches. Each one is an outcome — which policy resolved, which action was refused, the reason
+ * string — not evidence that the script ran.
+ */
+const PURPOSE_EXPECTED_LINES = [
+  // §15.1 — resolution filtering. Deny-all without a purpose, the scoped policy with one.
+  "  (no purpose)                      DENY      deny-all: 0 policies resolved, canQuery=false",
+  "  'campaign-x-overlap'              ALLOW     campaign-x-overlap-agent (maxResults=10000)",
+  "  'fraud-detection'                 ALLOW     fraud-detection-agent (maxResults=500)",
+  "  'Campaign-X-Overlap'              DENY      deny-all: 0 policies resolved, canQuery=false",
+  "  (no purpose)                      ALLOW     marketing-baseline (maxResults=2000)",
+  // §15.3 — the chain narrows, and the sharp mid-segment case.
+  "  three narrowing hops              ALLOW",
+  "  + a fourth, wider hop             DENY      delegation hop 3 purpose 'campaign-y-export' is not within parent scope 'campaign-x-overlap'",
+  "  campaign-x -> campaign-x-overlap  ALLOW     extends on a '-' segment boundary",
+  "  campaign-x -> campaign-xyz-evil   DENY      delegation hop 1 purpose 'campaign-xyz-evil' is not within parent scope 'campaign-x'",
+  "  [read, aggregate] -> [read]       ALLOW     a subset of the parent",
+  "  [read] -> [read, write]           DENY      delegation hop 1 scopes exceed parent delegation",
+  // §15.2 — the three action outcomes, plus the permitted one.
+  "  segment_overlap                   ALLOW     category 'aggregate_overlap' is allowed",
+  "  export_customers                  DENY      action 'export_pii' is prohibited under purpose 'campaign-x-overlap'",
+  "  inspect_account                   DENY      action 'inspect_account' not in allowed actions for purpose 'campaign-x-overlap'",
+  "  join_external                     DENY      action category not declared for tool",
+  // §15.4 — the disposition mapping.
+  "  aligned, confidence 0.95          allow     the deterministic allowance stands",
+  "  misaligned, confidence 0.95       block     the allowance is withdrawn",
+  "  aligned, confidence 0.70          escalate  a DENIAL unless a review handler is wired",
+  // The purpose and the chain are inside the signature.
+  "  as signed                         VALID     purpose 'campaign-x-overlap', 3 hops",
+  "  declared purpose swapped          BROKEN    to 'fraud-detection'",
+  "  last hop repurposed               BROKEN    to 'campaign-y-export'",
+  "  a fourth hop appended             BROKEN    agent-exfil, 'campaign-y-export'",
+  "  hops reordered                    BROKEN    hop 0 is the delegator; reversing inverts it",
+];
+
+describe("purpose-binding example", () => {
+  // Every assertion below is an *outcome*: which policy resolved, which action was allowed or
+  // refused, the verbatim reason string. An example that printed plausible-looking verdicts while
+  // enforcing nothing would teach a wiring pattern nobody has checked.
+
+  it("resolves deny-all when no purpose is declared and every candidate is purpose-scoped", async () => {
+    // The control with teeth. A purpose-scoped policy is not a default grant.
+    const ex = await import("./purpose-binding-example.js");
+
+    const policy = await ex.resolveFor([ex.campaignDefinition(), ex.fraudDefinition()], undefined);
+
+    expect(policy.sourceProfiles).toEqual([]);
+    expect(policy.permissions.canQuery).toBe(false);
+    expect(policy.purposeProfile).toBeUndefined();
+  });
+
+  it("resolves only the matching policy when the purpose is declared", async () => {
+    const ex = await import("./purpose-binding-example.js");
+
+    const policy = await ex.resolveFor(
+      [ex.campaignDefinition(), ex.fraudDefinition()],
+      ex.CAMPAIGN_PURPOSE,
+    );
+
+    // The other purpose's rules were never merged — which is why the filter runs before the merge
+    // rather than after it.
+    expect(policy.sourceProfiles).toEqual(["campaign-x-overlap-agent"]);
+    expect(policy.purposeProfile?.purposeId).toBe("campaign-x-overlap");
+    expect(policy.limits?.maxResults).toBe(10000);
+    expect(policy.objectRules?.allowedObjects).not.toContain("flagged_accounts");
+  });
+
+  it("compares the purpose case-sensitively", async () => {
+    const ex = await import("./purpose-binding-example.js");
+
+    const policy = await ex.resolveFor(
+      [ex.campaignDefinition(), ex.fraudDefinition()],
+      "Campaign-X-Overlap",
+    );
+
+    expect(policy.sourceProfiles).toEqual([]);
+    expect(policy.permissions.canQuery).toBe(false);
+  });
+
+  it("CONTROL: a purpose-agnostic policy still resolves without a purpose", async () => {
+    // Purpose binding is additive, so every pre-purpose policy is untouched.
+    const ex = await import("./purpose-binding-example.js");
+
+    const policy = await ex.resolveFor(
+      [ex.campaignDefinition(), ex.fraudDefinition(), ex.baselineDefinition()],
+      undefined,
+    );
+
+    expect(policy.sourceProfiles).toEqual(["marketing-baseline"]);
+    expect(policy.permissions.canQuery).toBe(true);
+    expect(policy.purposeProfile).toBeUndefined();
+  });
+
+  it("allows a narrowing chain and refuses a widening fourth hop", async () => {
+    const ex = await import("./purpose-binding-example.js");
+    const { validateDelegationChain } = await import("@aws/tolap-core");
+
+    const chain = ex.narrowingChain();
+    expect(validateDelegationChain(chain).allowed).toBe(true);
+
+    const widened = validateDelegationChain([...chain, ex.wideningHop()]);
+    expect(widened.allowed).toBe(false);
+    expect(widened.reason).toBe(
+      "delegation hop 3 purpose 'campaign-y-export' is not within parent scope 'campaign-x-overlap'",
+    );
+  });
+
+  it("narrows on a segment boundary but not mid-segment", async () => {
+    // The case a plain `startsWith` gets wrong, which is why it is in the example.
+    const ex = await import("./purpose-binding-example.js");
+    const { validateDelegationChain } = await import("@aws/tolap-core");
+
+    expect(validateDelegationChain(ex.twoHop("campaign-x", "campaign-x-overlap")).allowed).toBe(
+      true,
+    );
+
+    const evil = validateDelegationChain(ex.twoHop("campaign-x", "campaign-xyz-evil"));
+    expect(evil.allowed).toBe(false);
+    expect(evil.reason).toBe(
+      "delegation hop 1 purpose 'campaign-xyz-evil' is not within parent scope 'campaign-x'",
+    );
+  });
+
+  it("lets scopes narrow but not widen", async () => {
+    const ex = await import("./purpose-binding-example.js");
+    const { validateDelegationChain } = await import("@aws/tolap-core");
+
+    expect(validateDelegationChain(ex.scopeHops(["read", "aggregate"], ["read"])).allowed).toBe(
+      true,
+    );
+
+    const widened = validateDelegationChain(ex.scopeHops(["read"], ["read", "write"]));
+    expect(widened.allowed).toBe(false);
+    expect(widened.reason).toBe("delegation hop 1 scopes exceed parent delegation");
+  });
+
+  it.each([
+    ["segment_overlap", undefined],
+    [
+      "export_customers",
+      "action 'export_pii' is prohibited under purpose 'campaign-x-overlap'",
+    ],
+    [
+      "inspect_account",
+      "action 'inspect_account' not in allowed actions for purpose 'campaign-x-overlap'",
+    ],
+    ["join_external", "action category not declared for tool"],
+  ])("the action-category map decides for %s", async (toolName, expectedReason) => {
+    // A permitted category passes; a prohibited one, an unlisted one and an *unmapped* one each
+    // fail, with their own reason. The map is deployment configuration on the wrapper, never a
+    // caller argument — so this goes through the wrapper's own pre-execute.
+    const ex = await import("./purpose-binding-example.js");
+    const { SecureContextToolWrapper } = await import("@aws/tolap-mcp");
+
+    const wrapper = new SecureContextToolWrapper({
+      signingKey: ex.SIGNING_KEY,
+      toolActionCategories: ex.TOOL_ACTION_CATEGORIES,
+    });
+
+    const result = wrapper.preExecute(await ex.signedContext(), { toolName: toolName as string });
+
+    expect(result.allowed).toBe(expectedReason === undefined);
+    expect(result.reason).toBe(expectedReason);
+  });
+
+  it.each([
+    [true, 0.95, "allow"],
+    [false, 0.95, "block"],
+    [true, 0.7, "escalate"],
+  ])("maps aligned=%s confidence=%s to %s", async (aligned, confidence, expected) => {
+    const ex = await import("./purpose-binding-example.js");
+    const { evaluateJudge } = await import("@aws/tolap-core");
+
+    const outcome = await evaluateJudge(
+      await ex.judgedPolicy(),
+      new ex.StubJudge({
+        aligned: aligned as boolean,
+        confidence: confidence as number,
+        reasoning: "stub",
+      }),
+      "segment_overlap(campaign_x)",
+    );
+
+    expect(outcome.disposition).toBe(expected);
+    // escalate is NOT an allow. A wrapper with no review handler denies.
+    expect(outcome.allowed).toBe(expected === "allow");
+  });
+
+  it("breaks the signature when the purpose or the chain is mutated", async () => {
+    // Without this, the chain validation above would check the attacker's own arithmetic.
+    const ex = await import("./purpose-binding-example.js");
+    const { validateContext } = await import("@aws/tolap-core");
+
+    const original = await ex.signedContext();
+    expect(validateContext(original, ex.SIGNING_KEY)).toBe(true);
+    expect(original.declaredPurpose).toBe("campaign-x-overlap");
+    expect(original.delegationChain).toHaveLength(3);
+
+    const repurposed = await ex.signedContext();
+    repurposed.declaredPurpose = ex.FRAUD_PURPOSE;
+    expect(validateContext(repurposed, ex.SIGNING_KEY)).toBe(false);
+
+    const rechained = await ex.signedContext();
+    rechained.delegationChain![2]!.declaredPurpose = "campaign-y-export";
+    expect(validateContext(rechained, ex.SIGNING_KEY)).toBe(false);
+
+    const appended = await ex.signedContext();
+    appended.delegationChain!.push(ex.wideningHop());
+    expect(validateContext(appended, ex.SIGNING_KEY)).toBe(false);
+
+    // Reordering included: hop 0 is the delegator, so reversing a chain makes the sub-agent the
+    // root.
+    const reordered = await ex.signedContext();
+    reordered.delegationChain!.reverse();
+    expect(validateContext(reordered, ex.SIGNING_KEY)).toBe(false);
+  });
+
+  it("prints every expected line", async () => {
+    // The example itself throws if a mutated context still verifies, so this covers that path.
+    // Nothing runs this file standalone in CI — the TypeScript job typechecks and tests — so the
+    // run has to happen here or the script would only ever be compiled, never executed.
+    const ex = await import("./purpose-binding-example.js");
+
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    };
+    try {
+      await ex.main();
+    } finally {
+      console.log = original;
+    }
+
+    for (const expected of PURPOSE_EXPECTED_LINES) {
+      expect(lines, `missing line: ${expected}`).toContain(expected);
+    }
+  });
+});

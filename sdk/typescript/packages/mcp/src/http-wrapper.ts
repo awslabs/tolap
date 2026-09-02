@@ -36,10 +36,13 @@ import {
   stripHiddenFields,
   UnenforceableResultError,
   validateAccess,
+  validateDelegationChain,
   validateContext,
   validateExpiry,
+  validateHttpRequestAction,
   validateHttpWrite,
   type AccessResult,
+  type ActionCategoryMap,
   type EffectivePolicy,
   type SecurityContext,
   type WriteTargetRow,
@@ -146,6 +149,22 @@ export interface SecureHttpWrapperOptions {
    * to two different pseudonyms depending on which transport served the request.
    */
   hashSalt?: string | Buffer;
+  /**
+   * Keys of the form `"METHOD path-glob"` — for example `"GET /segments/*"` — mapped
+   * to a semantic action category, for purpose-bound action validation
+   * (canonical spec §15.2).
+   *
+   * Keyed by method and path rather than by tool name because an HTTP request has no
+   * tool name: {@link RequestArgs} carries a method and a path. A name-keyed map would
+   * leave this enforcement point permanently inert for API sources, which is worse
+   * than having none — the configuration would imply a control that never ran. The
+   * path uses the same glob dialect as `allowedEndpoints`, so a deployment writes one
+   * kind of endpoint pattern.
+   *
+   * Consulted on **every redirect hop**, like every other rule here: a 307 to
+   * `/export/all.csv` is a different action from the `GET` that started the chain.
+   */
+  httpActionCategories?: ActionCategoryMap;
 }
 
 export interface RequestArgs {
@@ -256,6 +275,21 @@ export class SecureHttpToolWrapper {
     const queryIndex = path.indexOf("?");
     const policyPath = queryIndex >= 0 ? path.slice(0, queryIndex) : path;
 
+    // Purpose-bound action validation, before the endpoint and write checks. Ordered
+    // first among the policy checks because it answers the broadest question -- does
+    // this operation serve the purpose the context was issued for -- and because that
+    // is the reason an operator most needs to see when several rules would deny.
+    // Matched on `policyPath`, with the query stripped, so a category cannot be dodged
+    // by appending one. Living inside `validateHop` is what makes it apply to redirect
+    // targets as well as to the original request.
+    const actionResult = validateHttpRequestAction(
+      policy,
+      method,
+      policyPath,
+      this.options.httpActionCategories,
+    );
+    if (!actionResult.allowed) return actionResult;
+
     // Endpoint rules and, for a write method, the §4 write checks. Both halves run:
     // an endpoint allow-list is not a write grant, and a write permission does not
     // make a path reachable.
@@ -297,6 +331,19 @@ export class SecureHttpToolWrapper {
         return { allowed: false, reason: expiryReason };
       }
     }
+        // The delegation chain, if the context carries one (§15.3).
+    //
+    // Validated here rather than in `buildSecurityContext`: a builder that validated would
+    // have to either throw — making issuing brittle — or drop the chain, which emits a
+    // context that looks delegated and is not. And the check is only meaningful *after* the
+    // signature, since the signature proves the chain was not modified in transit rather than
+    // that it is valid, and an unsigned chain can be rewritten by the principal it
+    // constrains.
+    //
+    // Backward compatible: an absent chain, or a single hop, is allowed.
+    const chainResult = validateDelegationChain(context.delegationChain);
+    if (!chainResult.allowed) return chainResult;
+
     return { allowed: true };
   }
 

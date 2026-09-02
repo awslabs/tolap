@@ -47,3 +47,8 @@ TestResults/
 .pytest_cache/
 htmlcov/
 .coverage
+# Coverage reports staged for the purpose-binding gate. `coverage/` above already
+# catches the per-package directories; this is the aggregate one that CI collects
+# cross-language reports into, and it is a directory name generic enough that
+# leaving it untracked-but-unignored invites someone to commit a cobertura dump.
+artifacts/

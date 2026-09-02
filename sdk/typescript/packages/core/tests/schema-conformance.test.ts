@@ -48,9 +48,11 @@ import {
   MASK_RESTRICTIVENESS,
   maskRestrictiveness,
   MaskType,
+  PrincipalType,
   SigningAlgorithm,
   UNKNOWN_MASK_RESTRICTIVENESS,
 } from "../src/types.js";
+import { MAX_DELEGATION_HOPS } from "../src/delegation.js";
 import { applyMask, writeOperationForMethod } from "../src/enforcement.js";
 import {
   buildSecurityContext,
@@ -60,6 +62,7 @@ import {
 import type { EffectivePolicy } from "../src/types.js";
 
 const SCHEMA_DIR = resolvePath(__dirname, "..", "..", "..", "..", "..", "schema", "v1.0");
+const FIXTURES_DIR = resolvePath(__dirname, "..", "..", "..", "..", "..", "fixtures");
 
 /**
  * Load a published schema by bare name.
@@ -121,6 +124,11 @@ const MASK_ALGORITHM_PATH = [
 const ASSIGNEE_TYPE_PATH = ["properties", "assignee", "properties", "type", "enum"];
 const SIGNING_ALGORITHM_PATH = [
   "properties", "integrity", "properties", "algorithm", "enum",
+];
+// A delegation hop lives on the canonical signing projection, so its enum is in
+// `security-context.schema.json` rather than in either policy schema.
+const PRINCIPAL_TYPE_PATH = [
+  "$defs", "delegationHop", "properties", "principalType", "enum",
 ];
 const ALLOWED_METHODS_PATH = [
   "properties", "objectRules", "properties", "endpointRules", "properties",
@@ -321,6 +329,90 @@ describe("AssigneeType matches the schema", () => {
 });
 
 // ---------------------------------------------------------------------------
+// PrincipalType -- declared by the canonical-signing-projection schema
+// ---------------------------------------------------------------------------
+
+describe("PrincipalType matches the schema", () => {
+  it("matches exactly, in both directions", () => {
+    // `security-context.schema.json` describes the canonical SIGNING PROJECTION, not
+    // any SDK's native context type: the three SDKs keep different public shapes
+    // (.NET carries a policies array, Python and TypeScript a single effective policy)
+    // and agree only on the bytes they sign. A delegation hop is therefore pinned
+    // there rather than on a per-SDK model.
+    //
+    // Schema→SDK: a principal type the schema permits but this SDK cannot name is one
+    // a peer SDK will emit and this one cannot describe. SDK→schema: a value this SDK
+    // accepts but the schema forbids would be rejected by the validating runner, so a
+    // fixture written against it would fail somewhere anonymous rather than here.
+    expect(wireValues(PrincipalType)).toEqual(
+      sorted(schemaEnumAt("security-context", ...PRINCIPAL_TYPE_PATH)),
+    );
+  });
+
+  it("declares exactly the three roles a hop can hold", () => {
+    // Named individually as well as compared as a set, because each carries a
+    // documented meaning the narrowing rules rely on a reader understanding: `user` is
+    // only ever the first hop, `agent` acts on a principal's behalf, `service` passes
+    // work along.
+    expect(PrincipalType.User).toBe("user");
+    expect(PrincipalType.Agent).toBe("agent");
+    expect(PrincipalType.Service).toBe("service");
+    expect(Object.keys(PrincipalType)).toHaveLength(3);
+  });
+
+  it("every principalType in the shared fixture corpus is a member", () => {
+    // The other half, and the one that catches a fixture using a principal type this
+    // SDK does not know about. Without it a delegation-chain fixture naming `daemon`
+    // would surface as an opaque behavioural surprise inside whichever chain test
+    // happened to load it.
+    const seen = new Set<string>();
+    collectPrincipalTypes(
+      JSON.parse(
+        readFileSync(
+          resolvePath(FIXTURES_DIR, "purpose-binding", "delegation-chains.json"),
+          "utf8",
+        ),
+      ),
+      seen,
+    );
+    collectPrincipalTypes(
+      JSON.parse(
+        readFileSync(
+          resolvePath(FIXTURES_DIR, "signing", "hmac-sha256-purpose-bound.json"),
+          "utf8",
+        ),
+      ),
+      seen,
+    );
+
+    // A walk that silently found nothing would make the loop below vacuous.
+    expect(seen.size).toBeGreaterThan(0);
+    const accepted = new Set<string>(Object.values(PrincipalType));
+    for (const value of seen) {
+      expect(accepted.has(value), `fixture corpus uses principal type '${value}'`).toBe(
+        true,
+      );
+    }
+    // And the corpus exercises more than one, so the check is not passing on a single
+    // value that happens to be right.
+    expect(seen.size).toBeGreaterThan(1);
+  });
+});
+
+/** Recursively collect every `principalType` string value in a parsed fixture. */
+function collectPrincipalTypes(node: unknown, into: Set<string>): void {
+  if (Array.isArray(node)) {
+    for (const item of node) collectPrincipalTypes(item, into);
+    return;
+  }
+  if (node === null || typeof node !== "object") return;
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === "principalType" && typeof value === "string") into.add(value);
+    else collectPrincipalTypes(value, into);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SigningAlgorithm, including the deliberate ed25519 case
 // ---------------------------------------------------------------------------
 
@@ -433,3 +525,18 @@ describe("allowedMethods matches the schema", () => {
     }
   });
 });
+
+describe("the delegation hop ceiling", () => {
+  it("matches the envelope schema's maxItems", () => {
+    // Spec §15.3 states the ceiling twice — once as `MAX_DELEGATION_HOPS`, once as `maxItems`
+    // on `delegationChain` — and §14 requires the two to agree. Without this, one could be
+    // raised and the other left behind: a chain the validator accepts and the schema rejects,
+    // or worse, one the schema accepts and the validator walks.
+    const schema = JSON.parse(
+      readFileSync(resolvePath(SCHEMA_DIR, "security-context.schema.json"), "utf-8"),
+    ) as { properties: { delegationChain: { maxItems: number } } };
+
+    expect(schema.properties.delegationChain.maxItems).toBe(MAX_DELEGATION_HOPS);
+  });
+});
+
