@@ -375,4 +375,142 @@ public class SecureToolFactoryTests
         tool.PreExecute(forged, new PreExecuteArgs("q", ObjectName: "patients"))
             .Allowed.Should().BeTrue();
     }
+
+    // =======================================================================
+    // Every wrapper option the factory accepts must reach the wrapper
+    // =======================================================================
+
+    /// <remarks>
+    /// The factory is documented as the composition root, so an option the wrappers accept and
+    /// the factory drops is worse than an absent feature: the deployment configures it, the
+    /// factory discards it, and the wrapper runs a default nobody chose.
+    /// <para>Two had gone missing. <c>HashSalt</c> was dropped <b>silently</b> — a
+    /// factory-produced wrapper hashed unsalted even where a salt was configured, turning a
+    /// deliberate confidentiality control back into a plain digest with nothing to indicate it.
+    /// The two purpose category maps were dropped loudly, denying every call under an
+    /// action-constraining purpose. The silent one is why this test compares option lists
+    /// reflectively rather than asserting a hand-written list: a future option added to a
+    /// wrapper and forgotten here fails immediately instead of years later.</para>
+    /// </remarks>
+    [Fact]
+    public void EveryWrapperOptionHasAFactoryCounterpart()
+    {
+        // Reflective on purpose. A hand-maintained list is the same class of thing as the
+        // forwarding code it checks, and would go stale in the same commit.
+        var factoryOptions = typeof(SecureToolFactoryOptions)
+            .GetProperties()
+            .Select(property => property.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var contextOptions = typeof(SecureContextWrapperOptions)
+            .GetProperties()
+            .Select(property => property.Name);
+
+        var httpOptions = typeof(SecureHttpWrapperOptions)
+            .GetProperties()
+            .Select(property => property.Name);
+
+        foreach (var name in contextOptions.Concat(httpOptions).Distinct(StringComparer.Ordinal))
+        {
+            factoryOptions.Should().Contain(name,
+                "SecureToolFactoryOptions must be able to carry '{0}', or a deployment that "
+                + "configures it gets a factory-built wrapper that ignores it", name);
+        }
+    }
+
+    [Fact]
+    public void HashSalt_IsForwardedToTheRecordWrapper()
+    {
+        // Asserted through masked OUTPUT rather than by reading the option back, because the
+        // bug was that the value never reached the code that uses it. Two salts must produce
+        // two different pseudonyms, and an unsalted wrapper produces the same digest as any
+        // other unsalted one -- so comparing against a differently-salted wrapper is what
+        // detects a dropped salt.
+        var masked = new ObjectRules(
+            FieldRules: new FieldRules(MaskedFields: new[]
+            {
+                new MaskingRule("email", MaskType.Hash, new MaskingParameters(Algorithm: "sha256"))
+            }));
+        var context = Signed(objectRules: masked);
+
+        string MaskedWith(string? salt)
+        {
+            var tool = new SecureToolFactory(
+                new SecureToolFactoryOptions(SigningKey: Key, HashSalt: salt), Client())
+                .CreateRecordTool();
+
+            var rows = tool.PostExecute(
+                context,
+                new[] { new Dictionary<string, object?> { ["email"] = "a@example.test" } });
+
+            return (string)rows[0]["email"]!;
+        }
+
+        var salted = MaskedWith("deployment-secret");
+        var unsalted = MaskedWith(null);
+
+        salted.Should().NotBe(unsalted,
+            "a configured salt must reach the masking code, or `hash` is a plain digest");
+    }
+
+    [Fact]
+    public void ToolActionCategories_AreForwardedToTheRecordWrapper()
+    {
+        var purposePolicy = Context().Policies[0] with
+        {
+            PurposeProfile = new PurposeProfile(
+                "campaign-x-overlap",
+                AllowedActions: new[] { "aggregate_overlap" },
+                ProhibitedActions: new[] { "export_pii" })
+        };
+        var context = SecurityContextSigner.Sign(
+            SecurityContextBuilder.Build(
+                "user-001", "tenant-001", new[] { purposePolicy },
+                declaredPurpose: "campaign-x-overlap"),
+            Key);
+
+        var factory = new SecureToolFactory(
+            new SecureToolFactoryOptions(
+                SigningKey: Key,
+                ToolActionCategories: new Dictionary<string, string>
+                {
+                    ["overlap"] = "aggregate_overlap",
+                    ["export"] = "export_pii"
+                }),
+            Client());
+
+        var tool = factory.CreateRecordTool();
+
+        // The paired allow first: without it, a factory that forwarded nothing would still
+        // satisfy the denial below via the unclassified-tool rule, for the wrong reason.
+        tool.PreExecute(context, new PreExecuteArgs("overlap")).Allowed.Should().BeTrue();
+
+        var denied = tool.PreExecute(context, new PreExecuteArgs("export"));
+        denied.Allowed.Should().BeFalse();
+        denied.Reason.Should().Be(
+            "action 'export_pii' is prohibited under purpose 'campaign-x-overlap'");
+    }
+
+    [Fact]
+    public void WithoutForwardedCategories_AnActionConstrainedPurposeDeniesEverything()
+    {
+        // The loud half of the bug, kept as a test because it is also the correct behaviour
+        // when a deployment genuinely has not configured a map: fail closed and say why.
+        var purposePolicy = Context().Policies[0] with
+        {
+            PurposeProfile = new PurposeProfile(
+                "campaign-x-overlap", AllowedActions: new[] { "aggregate_overlap" })
+        };
+        var context = SecurityContextSigner.Sign(
+            SecurityContextBuilder.Build(
+                "user-001", "tenant-001", new[] { purposePolicy },
+                declaredPurpose: "campaign-x-overlap"),
+            Key);
+
+        var tool = new SecureToolFactory(
+            new SecureToolFactoryOptions(SigningKey: Key), Client()).CreateRecordTool();
+
+        tool.PreExecute(context, new PreExecuteArgs("overlap")).Reason
+            .Should().Be(PurposeActionResolver.UndeclaredCategoryReason);
+    }
 }

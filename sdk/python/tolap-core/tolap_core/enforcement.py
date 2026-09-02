@@ -12,7 +12,7 @@ from fnmatch import fnmatchcase
 from typing import Any
 
 from tolap_core.enums import FilterOperator, MaskType, WriteOperation, mask_restrictiveness
-from tolap_core.models import EffectivePolicy, MaskingRule, RowFilter
+from tolap_core.models import EffectivePolicy, MaskingRule, PurposeProfile, RowFilter
 
 
 @dataclass
@@ -1074,6 +1074,61 @@ def validate_endpoint(path: str, method: str, policy: EffectivePolicy) -> Access
     read_only = policy.permissions.read_only is not False
     if read_only and normalized_method not in _READ_METHODS:
         return AccessResult(allowed=False, reason="method not allowed on a read-only policy")
+
+    return AccessResult(allowed=True)
+
+
+def validate_action(action_category: str, purpose_profile: PurposeProfile) -> AccessResult:
+    """Validate a tool call's action category against its purpose (spec section 15.2).
+
+    ``action_category`` is the semantic category of the operation, for example
+    ``aggregate_overlap``. It comes from the wrapper's administrator-supplied
+    tool-to-category map, never from the agent: a caller that can name its own
+    category can name an allowed one.
+
+    ``purpose_profile`` is the profile from the resolved :class:`EffectivePolicy`.
+    Purpose-agnostic policies carry none and never reach here.
+
+    Prohibited is checked before allowed, so a category in both lists is denied and
+    keeps the more specific reason -- the same ordering :func:`validate_endpoint`
+    uses for hidden before allowed.
+
+    ``allowed_actions`` follows spec section 3: ``None`` is unrestricted, an empty
+    list denies everything. The ``None`` case is a real grant rather than an
+    oversight here, because a purpose may legitimately constrain only what is
+    *forbidden* -- unlike ``allowed_methods``, where absence defaults to the read
+    methods. Retention is therefore tested against ``None`` and never truthiness.
+
+    Comparison is case-**insensitive**, unlike the purpose comparison at resolution.
+    The two point the same way: a mis-cased purpose resolves nothing, and a
+    mis-cased category is still caught by a prohibition. Comparing case-sensitively
+    here would let ``EXPORT_PII`` walk past a prohibition on ``export_pii``, which is
+    the one outcome neither reading should permit. The reason string echoes the
+    category as supplied rather than normalized, so a log shows what was attempted.
+    """
+    normalized = action_category.lower()
+
+    if purpose_profile.prohibited_actions is not None and any(
+        prohibited.lower() == normalized for prohibited in purpose_profile.prohibited_actions
+    ):
+        return AccessResult(
+            allowed=False,
+            reason=(
+                f"action '{action_category}' is prohibited under purpose "
+                f"'{purpose_profile.purpose_id}'"
+            ),
+        )
+
+    if purpose_profile.allowed_actions is not None and not any(
+        allowed.lower() == normalized for allowed in purpose_profile.allowed_actions
+    ):
+        return AccessResult(
+            allowed=False,
+            reason=(
+                f"action '{action_category}' not in allowed actions for purpose "
+                f"'{purpose_profile.purpose_id}'"
+            ),
+        )
 
     return AccessResult(allowed=True)
 

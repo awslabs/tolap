@@ -1,0 +1,146 @@
+{
+  "description": "Action validation against a purpose profile -- prohibited wins over allowed, an absent allow-list is unrestricted, and an empty one denies everything. Each denial is paired with a case that the same call is allowed when the purpose permits it, so no assertion passes merely because nothing came back. Category comparison is case-INSENSITIVE, unlike the purposeId comparison at resolution: both choices deny rather than admit a mis-cased value, which is the direction that matters. A case-sensitive comparison here would let 'EXPORT_PII' walk past a prohibition on 'export_pii'. The reason string echoes the category as supplied, not normalized, so the log shows what was attempted.",
+  "action": "validateAction",
+  "cases": [
+    {
+      "actionCategory": "aggregate_overlap",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap",
+          "allowedActions": ["aggregate_overlap", "count_segments"],
+          "prohibitedActions": ["export_pii"]
+        }
+      },
+      "expected": { "allowed": true }
+    },
+    {
+      "actionCategory": "export_pii",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap",
+          "allowedActions": ["aggregate_overlap", "count_segments"],
+          "prohibitedActions": ["export_pii"]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "action 'export_pii' is prohibited under purpose 'campaign-x-overlap'"
+      }
+    },
+    {
+      "actionCategory": "export_pii",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap",
+          "allowedActions": ["export_pii"],
+          "prohibitedActions": ["export_pii"]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "action 'export_pii' is prohibited under purpose 'campaign-x-overlap'"
+      }
+    },
+    {
+      "actionCategory": "train_model",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap",
+          "allowedActions": ["aggregate_overlap"]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "action 'train_model' not in allowed actions for purpose 'campaign-x-overlap'"
+      }
+    },
+    {
+      "actionCategory": "train_model",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap"
+        }
+      },
+      "expected": { "allowed": true }
+    },
+    {
+      "actionCategory": "train_model",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap",
+          "prohibitedActions": []
+        }
+      },
+      "expected": { "allowed": true }
+    },
+    {
+      "actionCategory": "aggregate_overlap",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap",
+          "allowedActions": []
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "action 'aggregate_overlap' not in allowed actions for purpose 'campaign-x-overlap'"
+      }
+    },
+    {
+      "actionCategory": "",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap",
+          "allowedActions": ["aggregate_overlap"]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "action '' not in allowed actions for purpose 'campaign-x-overlap'"
+      }
+    },
+    {
+      "actionCategory": "",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap"
+        }
+      },
+      "expected": { "allowed": true }
+    },
+    {
+      "actionCategory": "Aggregate_Overlap",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap",
+          "allowedActions": ["aggregate_overlap"]
+        }
+      },
+      "expected": { "allowed": true }
+    },
+    {
+      "actionCategory": "EXPORT_PII",
+      "policy": {
+        "permissions": { "canQuery": true },
+        "purposeProfile": {
+          "purposeId": "campaign-x-overlap",
+          "prohibitedActions": ["export_pii"]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "action 'EXPORT_PII' is prohibited under purpose 'campaign-x-overlap'"
+      }
+    }
+  ]
+}

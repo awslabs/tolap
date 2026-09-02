@@ -1,0 +1,335 @@
+{
+  "description": "Delegation chain validation -- a chain may narrow at every hop and never widen. A child purpose is within its parent's scope when it matches exactly, when the parent is a glob that matches it, or when it extends the parent on a '-' segment boundary. Mid-segment extension is DENIED: a plain prefix test would let 'campaign-x' authorize 'campaign-xyz-evil'. Comparison is case-sensitive, matching the purposeId comparison at resolution. `scopeNarrowing` lists the scopes still IN FORCE at a hop, not the scopes removed by it: each hop's set must be a subset of its parent's, so an empty parent set leaves nothing for a child to claim (canonical spec section 3). Either side absent adds no constraint. One case carries `schemaInvalidByDesign`: its hop deliberately violates the lowercase purpose pattern in security-context.schema.json, because the validator must refuse a mis-cased purpose even though no schema-valid context could carry one. Defence in depth -- the SDK deserializers do not enforce schema patterns, so a chain assembled in code can contain it. A validator MUST assert positively that such a case stays schema-invalid, or a fixture silently becoming valid would stop exercising a rejection at all.",
+  "action": "validateDelegationChain",
+  "cases": [
+    {
+      "name": "null-chain-allowed",
+      "chain": null,
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "empty-chain-allowed",
+      "chain": [],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "single-hop-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-x-overlap"
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "exact-purpose-match-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-x-overlap"
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-overlap"
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "glob-parent-narrowing-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-*"
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-overlap"
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "segment-boundary-extension-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-x"
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-overlap"
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "mid-segment-extension-denied",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-x"
+        },
+        {
+          "principalId": "agent-evil",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-xyz-evil"
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "delegation hop 1 purpose 'campaign-xyz-evil' is not within parent scope 'campaign-x'"
+      }
+    },
+    {
+      "name": "widening-purpose-denied",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-*"
+        },
+        {
+          "principalId": "agent-fraud",
+          "principalType": "agent",
+          "declaredPurpose": "fraud-detection"
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "delegation hop 1 purpose 'fraud-detection' is not within parent scope 'campaign-*'"
+      }
+    },
+    {
+      "name": "case-differing-purpose-denied",
+      "schemaInvalidByDesign": "hop 1 declaredPurpose 'Campaign-X' violates the lowercase pattern in security-context.schema.json",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-x"
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "declaredPurpose": "Campaign-X"
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "delegation hop 1 purpose 'Campaign-X' is not within parent scope 'campaign-x'"
+      }
+    },
+    {
+      "name": "parent-purpose-absent-child-set-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user"
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-overlap"
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "child-purpose-absent-parent-set-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-x-overlap"
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent"
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "narrowing-scope-subset-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "scopeNarrowing": ["read", "aggregate"]
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "scopeNarrowing": ["read"]
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "identical-scope-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "scopeNarrowing": ["read"]
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "scopeNarrowing": ["read"]
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "widening-scope-denied",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "scopeNarrowing": ["read"]
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "scopeNarrowing": ["read", "write"]
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "delegation hop 1 scopes exceed parent delegation"
+      }
+    },
+    {
+      "name": "empty-child-scope-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "scopeNarrowing": ["read"]
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "scopeNarrowing": []
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "empty-parent-scope-denies-any-child-scope",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "scopeNarrowing": []
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "scopeNarrowing": ["read"]
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "delegation hop 1 scopes exceed parent delegation"
+      }
+    },
+    {
+      "name": "parent-scope-absent-child-set-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user"
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "scopeNarrowing": ["read", "write"]
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "three-hop-chain-narrowing-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-*",
+          "scopeNarrowing": ["read", "aggregate", "export"]
+        },
+        {
+          "principalId": "orchestrator-01",
+          "principalType": "service",
+          "declaredPurpose": "campaign-x-*",
+          "scopeNarrowing": ["read", "aggregate"]
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-overlap",
+          "scopeNarrowing": ["read"]
+        }
+      ],
+      "expected": { "allowed": true }
+    },
+    {
+      "name": "four-hop-chain-widening-at-the-last-hop-denied",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-*"
+        },
+        {
+          "principalId": "orchestrator-01",
+          "principalType": "service",
+          "declaredPurpose": "campaign-x-*"
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-overlap"
+        },
+        {
+          "principalId": "agent-exfil",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-y-export"
+        }
+      ],
+      "expected": {
+        "allowed": false,
+        "reason": "delegation hop 3 purpose 'campaign-y-export' is not within parent scope 'campaign-x-overlap'"
+      }
+    },
+    {
+      "name": "timestamped-hops-allowed",
+      "chain": [
+        {
+          "principalId": "user-marketing-001",
+          "principalType": "user",
+          "declaredPurpose": "campaign-*",
+          "delegatedAt": "2026-09-01T10:00:00Z"
+        },
+        {
+          "principalId": "agent-overlap",
+          "principalType": "agent",
+          "declaredPurpose": "campaign-x-overlap",
+          "delegatedAt": "2026-09-01T10:00:00.123456Z"
+        }
+      ],
+      "expected": { "allowed": true }
+    }
+  ]
+}

@@ -18,6 +18,7 @@ import {
 } from "node:crypto";
 import {
   AdminAuthError,
+  AdminAuthUnavailableError,
   CognitoVerifier,
   bearerToken,
   type CognitoConfig,
@@ -251,8 +252,53 @@ describe("CognitoVerifier refusals", () => {
   });
 
   it("refuses when the issuer publishes no usable keys", async () => {
+    // `AdminAuthUnavailableError`, not `AdminAuthError`: a key document that arrives with
+    // nothing usable in it leaves the server unable to verify, which is not a finding about
+    // the caller's token. It maps to 503 rather than 401 -- see the availability cases below.
     const empty = new CognitoVerifier(CONFIG, async () => ({ keys: [] }));
-    await expect(empty.verify(mint())).rejects.toThrow(AdminAuthError);
+    await expect(empty.verify(mint())).rejects.toThrow(AdminAuthUnavailableError);
+
+    // Still a refusal, which is the part that must not change: nothing is authenticated.
+    await expect(empty.verify(mint())).rejects.toThrow();
+  });
+
+  it("reports a JWKS outage as unavailable, not as a bad credential", async () => {
+    // The defect: the verifier raised `AdminAuthError` for a non-2xx JWKS response, and the
+    // route layer maps that to 401 -- so a Cognito outage told every caller their token was
+    // invalid. `guards.ts` already had a comment saying a JWKS failure "is not an
+    // authentication decision" and a re-throw implementing it; the re-throw was unreachable
+    // because the error it was meant to let past was the one the branch above caught.
+    const down = new CognitoVerifier(CONFIG, async () => {
+      throw new Error("connect ECONNREFUSED");
+    });
+
+    const error = await down.verify(mint()).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(AdminAuthUnavailableError);
+    // Specifically NOT an AdminAuthError, since that is what produces the misleading 401.
+    // `AdminAuthUnavailableError` deliberately does not extend it, and this is the assertion
+    // that would catch someone "simplifying" the hierarchy later.
+    expect(error).not.toBeInstanceOf(AdminAuthError);
+    // The original cause is preserved, because the status alone does not say what failed.
+    expect((error as Error).cause).toBeInstanceOf(Error);
+  });
+
+  it("still refuses a token whose kid the issuer does not publish, as an auth decision", async () => {
+    // The paired control. If every failure became `AdminAuthUnavailableError`, the test above
+    // would pass and a genuinely bad token would start returning 503 -- reporting an attacker
+    // as an outage, and hiding real refusals from anything watching 401s.
+    const other = new CognitoVerifier(CONFIG, async () => jwks as { keys: never[] });
+
+    const error = await other.verify(mint({ header: { kid: "not-published" } })).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(AdminAuthError);
+    expect(error).not.toBeInstanceOf(AdminAuthUnavailableError);
   });
 });
 

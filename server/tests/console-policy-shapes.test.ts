@@ -28,6 +28,17 @@ function base(objectRules: unknown, limits?: unknown) {
   };
 }
 
+/**
+ * A policy carrying a purpose profile.
+ *
+ * Separate from `base` because `purposeProfile` is a top-level sibling of `objectRules`
+ * rather than a rule inside it -- it decides whether the policy resolves at all, not what
+ * it returns.
+ */
+function purposeBound(purposeProfile: unknown, objectRules: unknown = {}) {
+  return { ...base(objectRules), purposeProfile };
+}
+
 const CASES: Array<[string, unknown]> = [
   ["masking: every mask type", base({ fieldRules: { maskedFields: [
     { field: "a", maskType: "null" }, { field: "b", maskType: "redact" },
@@ -75,6 +86,165 @@ const CASES: Array<[string, unknown]> = [
   ["limits: kb minSimilarityScore", base({ tagRules: { allowedTags: ["x"] } }, { minSimilarityScore: 0.7 })],
   ["limits: storage maxObjectSizeBytes", base({}, { maxObjectSizeBytes: 1048576 })],
   ["limits: maxResults", base({}, { maxResults: 100 })],
+
+  // -- Purpose binding -----------------------------------------------------
+  //
+  // `purposeProfile` closes to five keys and `judge` to six, so the same class of bug
+  // the masking editor had -- an invented parameter name that only fails at the save
+  // button -- is available here twice over. The empty-array and absent cases below are
+  // the ones that matter most: `allowedActions: []` denies every action and an absent
+  // `allowedActions` permits every action, so both spellings have to be things the
+  // schema accepts or the editor cannot express one of the two.
+  ["purpose: the minimum the editor can emit", purposeBound({ purposeId: "fraud-detection" })],
+  ["purpose: with a description", purposeBound({
+    purposeId: "fraud-detection",
+    description: "Investigating a flagged transaction on behalf of the fraud desk.",
+  })],
+  ["purpose: allowedActions empty (denies every action)", purposeBound({
+    purposeId: "fraud-detection", allowedActions: [],
+  })],
+  ["purpose: allowedActions absent, deny-list only (unrestricted allow)", purposeBound({
+    purposeId: "fraud-detection", prohibitedActions: ["export_pii"],
+  })],
+  ["purpose: prohibitedActions empty (restricts nothing)", purposeBound({
+    purposeId: "fraud-detection", prohibitedActions: [],
+  })],
+  ["purpose: both lists empty", purposeBound({
+    purposeId: "fraud-detection", allowedActions: [], prohibitedActions: [],
+  })],
+  ["purpose: category spellings the pattern permits", purposeBound({
+    purposeId: "campaign-x-overlap",
+    // Underscores, hyphens, digits and a single character are all legal for a category
+    // and only the first is legal for a purposeId -- one shared validator would reject
+    // `export_pii`, the spec's own example.
+    allowedActions: ["aggregate_overlap", "read-only", "read2", "x", "0"],
+    prohibitedActions: ["export_pii"],
+  })],
+  ["purpose: a category in both lists (prohibited wins, but valid)", purposeBound({
+    purposeId: "fraud-detection",
+    allowedActions: ["aggregate_overlap", "export_pii"],
+    prohibitedActions: ["export_pii"],
+  })],
+  ["purpose: purposeId and a category at the 128-character ceiling", purposeBound({
+    purposeId: "a".repeat(128), allowedActions: ["b".repeat(128)],
+  })],
+  ["purpose: judge just switched on", purposeBound({
+    purposeId: "fraud-detection", judge: { enabled: true },
+  })],
+  ["purpose: judge configured but off, keeping its model", purposeBound({
+    purposeId: "fraud-detection", judge: { enabled: false, model: "claude-sonnet" },
+  })],
+  ["purpose: judge with every key set", purposeBound({
+    purposeId: "fraud-detection",
+    judge: {
+      enabled: true,
+      model: "claude-sonnet",
+      historyWindow: 25,
+      confidenceThreshold: 0.9,
+      escalationThreshold: 0.7,
+      maxLatencyMs: 5000,
+    },
+  })],
+  ["purpose: judge at every bound the schema allows", purposeBound({
+    purposeId: "fraud-detection",
+    judge: {
+      historyWindow: 1,
+      confidenceThreshold: 1,
+      escalationThreshold: 0,
+      maxLatencyMs: 100,
+    },
+  })],
+  ["purpose: judge with inverted thresholds", purposeBound({
+    // The editor warns about this and must still be able to save it: the inversion is a
+    // merge-reachable state (both thresholds take the maximum independently), so a schema
+    // that rejected it would make a mergeable policy unauthorable.
+    purposeId: "fraud-detection",
+    judge: { enabled: true, confidenceThreshold: 0.5, escalationThreshold: 0.9 },
+  })],
+  ["purpose: an empty judge object, as loaded and saved untouched", purposeBound({
+    // Not something the editor authors from scratch -- ticking the box writes
+    // `{ enabled: true }` -- but a policy edited elsewhere can carry it, and the editor
+    // round-trips what it was given rather than normalising it.
+    purposeId: "fraud-detection", judge: {},
+  })],
+  ["purpose: alongside object rules and limits", {
+    ...purposeBound(
+      {
+        allowedObjects: ["patients"],
+        fieldRules: { allowedFields: [], maskedFields: [{ field: "ssn", maskType: "redact" }] },
+        rowFilters: [{ field: "region", operator: "equals", value: "west" }],
+      },
+    ),
+    purposeProfile: {
+      purposeId: "fraud-detection",
+      description: "Investigating a flagged transaction.",
+      allowedActions: ["aggregate_overlap"],
+      prohibitedActions: ["export_pii"],
+      judge: { enabled: true, model: "claude-sonnet", historyWindow: 5 },
+    },
+    limits: { maxResults: 0 },
+  }],
+];
+
+/**
+ * The shapes the purpose-profile editor had to be *constrained* not to emit.
+ *
+ * The rest of this file proves the editor cannot author a policy the server rejects.
+ * These prove the constraints doing that work are load-bearing rather than decorative --
+ * if the schema were to start accepting any of them, an inline warning in the editor
+ * would be enforcing a rule nothing else does, and could quietly be dropped.
+ */
+// The scope checkbox. Added when `appliesToAll` gained a control -- before that the flag
+// round-tripped through the console with no UI, so no shape it could emit was ever checked
+// here either.
+CASES.push(
+  ["scope: appliesToAll on, with patterns kept", { ...base({}), appliesToAll: true }],
+  [
+    "scope: appliesToAll on and sourcePatterns absent",
+    (() => {
+      const doc = { ...base({}), appliesToAll: true } as Record<string, unknown>;
+      delete doc.sourcePatterns;
+      return doc;
+    })(),
+  ],
+  ["scope: appliesToAll explicitly off", { ...base({}), appliesToAll: false }],
+);
+
+const REJECTED: Array<[string, unknown]> = [
+  // Why "Remove purpose profile" deletes the key instead of blanking the fields.
+  ["a profile with no purposeId", purposeBound({ allowedActions: [] })],
+  // Why a blank purpose id blocks the save rather than merely reading oddly.
+  ["a blank purposeId", purposeBound({ purposeId: "" })],
+  // Why the purposeId warning exists: resolution is case-sensitive, and the schema
+  // refuses the value outright rather than leaving it to resolve for nobody.
+  ["an uppercase purposeId", purposeBound({ purposeId: "Fraud-Detection" })],
+  ["a single-character purposeId", purposeBound({ purposeId: "f" })],
+  ["a trailing hyphen in purposeId", purposeBound({ purposeId: "fraud-" })],
+  // Why action categories are validated as they are typed.
+  ["an uppercase action category", purposeBound({
+    purposeId: "fraud-detection", allowedActions: ["EXPORT_PII"],
+  })],
+  ["an empty-string action category", purposeBound({
+    purposeId: "fraud-detection", prohibitedActions: [""],
+  })],
+  // Why `judge` is a spelled-out interface rather than an open record, and why the
+  // editor never invents a key.
+  ["an invented judge key", purposeBound({
+    purposeId: "fraud-detection", judge: { enabled: true, temperature: 0.2 },
+  })],
+  ["an invented profile key", purposeBound({
+    purposeId: "fraud-detection", deniedActions: ["export_pii"],
+  })],
+  // Why the thresholds carry min/max attributes and the numeric fields are typed.
+  ["a confidence threshold above 1", purposeBound({
+    purposeId: "fraud-detection", judge: { confidenceThreshold: 1.5 },
+  })],
+  ["a history window of zero", purposeBound({
+    purposeId: "fraud-detection", judge: { historyWindow: 0 },
+  })],
+  ["a latency budget below the 100ms floor", purposeBound({
+    purposeId: "fraud-detection", judge: { maxLatencyMs: 50 },
+  })],
 ];
 
 describe("shapes the expanded policy builder emits", () => {
@@ -83,6 +253,21 @@ describe("shapes the expanded policy builder emits", () => {
       const r = validateSchema(doc, "policy-definition");
       expect(r.errors, `${name}: ${JSON.stringify(r.errors)}`).toEqual([]);
       expect(r.valid).toBe(true);
+    });
+  }
+});
+
+describe("shapes the purpose-profile editor is constrained not to emit", () => {
+  for (const [name, doc] of REJECTED) {
+    it(name, () => {
+      // Fragment mode as well as document mode: the console validates drafts as
+      // `?fragment=true`, and fragment mode only drops the *top-level* `required`. If one
+      // of these were accepted there, the editor's Save button would stay enabled and the
+      // author would lose the draft at the server instead.
+      expect(validateSchema(doc, "policy-definition").valid).toBe(false);
+      expect(
+        validateSchema(doc, "policy-definition", { fragment: true }).valid,
+      ).toBe(false);
     });
   }
 });

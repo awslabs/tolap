@@ -15,14 +15,17 @@ import {
   classifyResultShape,
   describeResultShape,
   validateAccess,
+  validateDelegationChain,
   validateContext,
   validateEndpoint,
   validateExpiry,
   validateFieldAccess,
+  validateToolAction,
   validateWrite,
   SqlQueryRewriter,
   SqlDialect,
   type AccessResult,
+  type ActionCategoryMap,
   type RowFilter,
   type SecurityContext,
   type ValidateWriteOptions,
@@ -57,6 +60,20 @@ export interface SecureContextWrapperOptions {
    */
   hashSalt?: string | Buffer;
   allowUnenforceableShapes?: boolean;
+  /**
+   * Tool name to semantic action category, for purpose-bound action validation
+   * (canonical spec §15.2).
+   *
+   * Set this alongside {@link allowedTools} whenever any policy the wrapper may
+   * resolve carries a `purposeProfile` that constrains actions.
+   *
+   * Configuration rather than a caller argument, deliberately: an agent that can name
+   * its own action category can name a permitted one, which reduces the check to a
+   * formality. Unset, a purpose-agnostic policy behaves exactly as before — and a
+   * purpose-bound one that constrains actions denies every call, because a tool the
+   * map does not classify cannot be shown to serve the purpose.
+   */
+  toolActionCategories?: ActionCategoryMap;
 }
 
 export interface PreExecuteArgs {
@@ -142,6 +159,19 @@ export class SecureContextToolWrapper {
         return { allowed: false, reason: expiryReason };
       }
     }
+        // The delegation chain, if the context carries one (§15.3).
+    //
+    // Here rather than left to the integrator, because the validator had no call site at all:
+    // `buildSecurityContext` *records* a chain and does not check one, so a context could be
+    // built, signed and accepted with a hop that widened its parent's purpose. The signature
+    // proved only that the chain had not been *modified* in transit, which is a different and
+    // weaker claim than the chain being valid.
+    //
+    // After the signature deliberately: validating an unsigned chain checks the attacker's own
+    // arithmetic. Backward compatible — an absent chain, or a single hop, is allowed.
+    const chainResult = validateDelegationChain(context.delegationChain);
+    if (!chainResult.allowed) return chainResult;
+
     return { allowed: true };
   }
 
@@ -157,6 +187,19 @@ export class SecureContextToolWrapper {
     if (!policy.permissions.canQuery) {
       return { allowed: false, reason: "query not permitted" };
     }
+
+    // Purpose-bound action validation, after the read gate and before the object
+    // rules. The ordering matters in both directions: after `canQuery`, because a
+    // policy that grants no reads should say so rather than complain about a category;
+    // before the object rules, because "this action does not serve the declared
+    // purpose" is the more specific answer when both would deny, and it is the one
+    // that tells an operator what actually went wrong.
+    const actionResult = validateToolAction(
+      policy,
+      args.toolName,
+      this.options.toolActionCategories,
+    );
+    if (!actionResult.allowed) return actionResult;
 
     if (args.objectName) {
       const r = validateAccess(args.objectName, policy);

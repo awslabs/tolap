@@ -92,6 +92,11 @@ export async function requireAdmin(
     // A JWKS fetch failure is not an authentication decision. Surfacing it as a
     // 401 would tell an operator their token is bad when the real problem is that
     // the server cannot reach Cognito.
+    //
+    // This re-throw was correct and inert: the verifier raised `AdminAuthError` for a
+    // non-2xx JWKS response, so the branch above caught it and returned the 401 this
+    // comment rules out. `AdminAuthUnavailableError` is what makes the distinction real,
+    // and it reaches the route's catch-all as a 503.
     throw error;
   }
 

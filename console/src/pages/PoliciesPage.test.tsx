@@ -539,6 +539,203 @@ describe("merging edits into the draft", () => {
   });
 });
 
+// -- Purpose binding -------------------------------------------------------
+
+/**
+ * The section whose *presence* changes what the policy does.
+ *
+ * `PurposeProfileEditor` has its own tests for the controls. What is tested here is the
+ * page's side of the contract, which has one wrinkle the other rule groups do not: the
+ * profile is set and removed as a whole, so `patchPurposeProfile` has to produce an
+ * **absent** key rather than an empty object, and it has to leave the rest of the policy
+ * alone in both directions. A `purposeProfile: {}` fails the schema; a merely blank one
+ * still filters resolution down to callers declaring the empty purpose, which is nobody.
+ */
+describe("purpose binding", () => {
+  it("offers the section whatever source is selected, and with no catalog at all", async () => {
+    // Unlike endpoint and tag rules, purpose is a property of the *caller*, not of the
+    // source, so there is no category for which it would be silently ignored -- and
+    // therefore no category to gate it on.
+    await renderPage({ sources: [] });
+    await openPolicy();
+    expect(screen.getByText("Purpose binding")).toBeDefined();
+
+    cleanup();
+    await renderPage();
+    await openPolicy();
+    for (const source of ALL_SOURCES) {
+      await selectSource(source);
+      expect(screen.getByText("Purpose binding")).toBeDefined();
+    }
+  });
+
+  it("adds a profile to a policy that had none", async () => {
+    await renderPage();
+    await openPolicy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add purpose profile" }));
+    await userEvent.type(screen.getByLabelText("Purpose id"), "fraud-detection");
+    await save();
+
+    expect(savedPolicy().purposeProfile).toEqual({ purposeId: "fraud-detection" });
+    // And the rules that were already there are untouched.
+    expect(savedPolicy().objectRules?.fieldRules?.hiddenFields).toEqual(["ssn_number"]);
+  });
+
+  it("removes the purposeProfile key entirely rather than saving an empty object", async () => {
+    // The distinction that makes this worth a page-level test: `{}` fails the schema's
+    // nested `required`, and a profile that is present-but-blank keeps filtering
+    // resolution. Only an absent key restores the pre-purpose behaviour.
+    await renderPage({
+      policy: {
+        ...ANALYST,
+        purposeProfile: {
+          purposeId: "fraud-detection",
+          allowedActions: ["aggregate_overlap"],
+          judge: { enabled: true, model: "claude-sonnet" },
+        },
+      },
+    });
+    await openPolicy();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove purpose profile" }),
+    );
+    await save();
+
+    const sent = savedPolicy();
+    expect(Object.keys(sent)).not.toContain("purposeProfile");
+    // Nothing else went with it.
+    expect(sent.permissions).toEqual({ canQuery: true, readOnly: true });
+    expect(sent.objectRules?.allowedObjects).toEqual(["patients"]);
+  });
+
+  it("sends an empty allowedActions when the author restricts actions", async () => {
+    // Direction one of the section 3 distinction, end to end. `[]` denies every action
+    // and has to survive `JSON.stringify` as a key, which an `undefined` would not.
+    await renderPage({
+      policy: { ...ANALYST, purposeProfile: { purposeId: "fraud-detection" } },
+    });
+    await openPolicy();
+
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Permit every action category/ }),
+    );
+    await save();
+
+    const profile = savedPolicy().purposeProfile!;
+    expect(profile.allowedActions).toEqual([]);
+    expect(Object.keys(profile)).toContain("allowedActions");
+  });
+
+  it("sends no allowedActions key when the author lifts the restriction", async () => {
+    // Direction two, and the one that widens access: it must happen only because the
+    // author asked, and it must reach the wire as an absent key rather than as `[]`.
+    await renderPage({
+      policy: {
+        ...ANALYST,
+        purposeProfile: { purposeId: "fraud-detection", allowedActions: [] },
+      },
+    });
+    await openPolicy();
+
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Permit every action category/ }),
+    );
+    await save();
+
+    const profile = savedPolicy().purposeProfile!;
+    expect(Object.keys(profile)).not.toContain("allowedActions");
+    expect(profile).toEqual({ purposeId: "fraud-detection" });
+  });
+
+  it("keeps an existing empty allowedActions while an unrelated rule is edited", async () => {
+    // The hazard `patchObjectRules` has, on the key that the whole page is careful about:
+    // a helper that rebuilt the draft, or that normalised `[]` away, would turn
+    // deny-every-action into permit-every-action while the author edited a hidden field.
+    await renderPage({
+      policy: {
+        ...ANALYST,
+        purposeProfile: {
+          purposeId: "fraud-detection",
+          allowedActions: [],
+          prohibitedActions: ["export_pii"],
+          judge: { enabled: false, model: "claude-sonnet", historyWindow: 25 },
+        },
+      },
+      sources: [DB_SOURCE],
+    });
+    await openPolicy();
+
+    await userEvent.type(screen.getByLabelText("Add to Hidden fields"), "region{Enter}");
+    await save();
+
+    const sent = savedPolicy();
+    expect(sent.purposeProfile).toEqual({
+      purposeId: "fraud-detection",
+      allowedActions: [],
+      prohibitedActions: ["export_pii"],
+      judge: { enabled: false, model: "claude-sonnet", historyWindow: 25 },
+    });
+    expect(Object.keys(sent.purposeProfile!)).toContain("allowedActions");
+    expect(sent.objectRules?.fieldRules?.hiddenFields).toEqual(["ssn_number", "region"]);
+  });
+
+  it("does not disturb the rest of the policy when the profile changes", async () => {
+    // The inverse: `patchPurposeProfile` writes one top-level key and must spread the
+    // draft rather than rebuild it, or an author adding a purpose deletes every rule.
+    await renderPage({
+      policy: {
+        ...ANALYST,
+        sourcePatterns: ["db:analytics:*"],
+        purposeProfile: { purposeId: "fraud-detection" },
+        objectRules: {
+          fieldRules: { allowedFields: [], hiddenFields: ["ssn_number"] },
+          rowFilters: [{ field: "region", operator: "equals", value: "west" }],
+        },
+        limits: { maxResults: 0 },
+      },
+      sources: [DB_SOURCE],
+    });
+    await openPolicy();
+
+    await userEvent.type(
+      screen.getByLabelText("Add to Prohibited actions"),
+      "export_pii{Enter}",
+    );
+    await save();
+
+    const sent = savedPolicy();
+    expect(sent.purposeProfile?.prohibitedActions).toEqual(["export_pii"]);
+    expect(sent.sourcePatterns).toEqual(["db:analytics:*"]);
+    // The empty allow-list of fields is the most restrictive rule here and survives.
+    expect(sent.objectRules?.fieldRules?.allowedFields).toEqual([]);
+    expect(sent.objectRules?.rowFilters).toEqual([
+      { field: "region", operator: "equals", value: "west" },
+    ]);
+    expect(sent.limits?.maxResults).toBe(0);
+  });
+
+  it("adds no purposeProfile key to a policy nobody gave one", async () => {
+    // The section is always on screen, so it must not leave a trace on a policy the
+    // author never bound. `purposeProfile: {}` would not merely be noise in the diff --
+    // it fails validation and, if it did not, would exclude the policy from every
+    // resolution.
+    await renderPage({
+      policy: { version: "1.0", name: "reader", permissions: { canQuery: true } },
+    });
+    await openPolicy("reader");
+
+    await save();
+
+    expect(savedPolicy()).toEqual({
+      version: "1.0",
+      name: "reader",
+      permissions: { canQuery: true },
+    });
+  });
+});
+
 // -- sourcePatterns: the one list where empty is not deny-all --------------
 
 describe("scope (sourcePatterns)", () => {
@@ -572,6 +769,70 @@ describe("scope (sourcePatterns)", () => {
 
     const sent = savedPolicy();
     expect(Object.keys(sent)).not.toContain("sourcePatterns");
+  });
+
+  it("shows appliesToAll, which used to round-trip invisibly", async () => {
+    // The defect: `appliesToAll` was in the console's `PolicyDefinition` type and so was
+    // loaded and saved, but had no control. Because the flag short-circuits `sourcePatterns`
+    // entirely (spec section 10), an author editing such a policy read the pattern list as
+    // the scope while the policy in fact applied everywhere. A widened scope displayed as a
+    // narrow one is worse than an absent field: the screen answered the question wrongly
+    // instead of not answering it.
+    await renderPage({
+      policy: { ...ANALYST, appliesToAll: true, sourcePatterns: ["db:analytics:*"] },
+    });
+    await openPolicy();
+
+    const box = screen.getByRole("checkbox", { name: /Applies to all sources/i });
+    expect((box as HTMLInputElement).checked).toBe(true);
+
+    // And the screen says the patterns are inert, since showing both without saying which
+    // wins is the ambiguity that made the flag dangerous in the first place.
+    expect(screen.getByRole("status").textContent).toMatch(/ignored/i);
+  });
+
+  it("is unchecked, with the ordinary hint, for a policy without the flag", async () => {
+    // The paired control: a checkbox stuck on would satisfy the case above.
+    await renderPage({ policy: { ...ANALYST, sourcePatterns: ["db:analytics:*"] } });
+    await openPolicy();
+
+    expect(
+      (screen.getByRole("checkbox", { name: /Applies to all sources/i }) as HTMLInputElement)
+        .checked,
+    ).toBe(false);
+    expect(screen.getByText(/Leave empty to apply to/)).toBeTruthy();
+  });
+
+  it("widens the scope to every source when the author checks it", async () => {
+    await renderPage({ policy: { ...ANALYST, sourcePatterns: ["db:analytics:*"] } });
+    await openPolicy();
+
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Applies to all sources/i }),
+    );
+    await save();
+
+    const sent = savedPolicy();
+    expect(sent.appliesToAll).toBe(true);
+    // The patterns are kept, not cleared: turning the flag off again has to restore the
+    // scope the author wrote, and an emptied list would then mean "every source" for a
+    // different reason -- silently keeping the widening the author just undid.
+    expect(sent.sourcePatterns).toEqual(["db:analytics:*"]);
+  });
+
+  it("omits appliesToAll entirely when cleared, rather than writing false", async () => {
+    // A no-op open-and-save must not change the stored document. The schema default is
+    // `false` either way, so an explicit `false` is noise that shows up as a diff in a
+    // policy nobody edited.
+    await renderPage({ policy: { ...ANALYST, appliesToAll: true } });
+    await openPolicy();
+
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Applies to all sources/i }),
+    );
+    await save();
+
+    expect(Object.keys(savedPolicy())).not.toContain("appliesToAll");
   });
 
   it("scopes a policy to the patterns the author typed", async () => {
@@ -1200,6 +1461,30 @@ describe("auditor access", () => {
     const canRead = screen.getByRole("checkbox", { name: /Can read/ }) as HTMLInputElement;
     await userEvent.click(canRead);
     expect(canRead.checked).toBe(true);
+  });
+
+  it("does not let an auditor add or remove a purpose profile", async () => {
+    // The one control on this form that can stop a policy resolving for anybody. It is
+    // protected only by the enclosing fieldset, like the rule editors.
+    await renderPage({
+      readOnly: true,
+      policy: {
+        ...ANALYST,
+        purposeProfile: { purposeId: "fraud-detection", allowedActions: [] },
+      },
+    });
+    await openPolicy();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove purpose profile" }),
+    );
+    expect(screen.getByLabelText("Purpose id")).toBeDefined();
+
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: /Permit every action category/ }),
+    );
+    // Still the deny-every-action policy the author wrote.
+    expect(screen.getByText(/denies every action/)).toBeDefined();
   });
 
   it("shows an auditor the version history without the action column", async () => {

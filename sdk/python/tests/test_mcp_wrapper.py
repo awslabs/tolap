@@ -562,4 +562,11 @@ class TestUnenforceableModeWarning:
             # is no value of it that discloses more than the default.
             "hash_salt",
             "allow_unenforceable_shapes",
+            # Purpose-bound action categories (canonical spec section 15.2). Both are
+            # administrator configuration that only ever *narrows*: unset, a
+            # purpose-agnostic policy behaves exactly as before, and a purpose-bound
+            # one that constrains actions denies every call because nothing classifies
+            # the tool. Neither has a value that grants access a policy did not.
+            "tool_action_categories",
+            "http_action_categories",
         }

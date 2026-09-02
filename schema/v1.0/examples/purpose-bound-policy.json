@@ -1,0 +1,48 @@
+{
+  "$schema": "https://tolap.dev/schema/v1.0/policy-definition.schema.json",
+  "version": "1.0",
+  "name": "campaign-x-overlap-agent",
+  "description": "Scoped access for Campaign X customer segment overlap analysis. Resolves only for a caller declaring the campaign-x-overlap purpose, and only permits the two aggregate actions that analysis needs.",
+  "priority": 10,
+  "appliesToAll": false,
+  "sourcePatterns": ["db:marketing:customer_*", "db:marketing:campaign_*"],
+  "permissions": {
+    "canQuery": true,
+    "readOnly": true
+  },
+  "purposeProfile": {
+    "purposeId": "campaign-x-overlap",
+    "description": "Identify overlapping opted-in customer segments for Campaign X.",
+    "allowedActions": ["aggregate_overlap", "count_segments"],
+    "prohibitedActions": ["export_pii", "enumerate_individuals", "join_external_data"]
+  },
+  "objectRules": {
+    "allowedObjects": ["customer_segments", "campaign_assignments"],
+    "hiddenObjects": ["billing_internal", "support_tickets"],
+    "fieldRules": {
+      "hiddenFields": ["customer_segments.ssn"],
+      "maskedFields": [
+        {
+          "field": "customer_segments.email",
+          "maskType": "hash",
+          "parameters": { "algorithm": "sha256" }
+        }
+      ]
+    },
+    "rowFilters": [
+      {
+        "field": "campaign_id",
+        "operator": "equals",
+        "value": "campaign-x"
+      },
+      {
+        "field": "consent_status",
+        "operator": "equals",
+        "value": "opted_in"
+      }
+    ]
+  },
+  "limits": {
+    "maxResults": 10000
+  }
+}

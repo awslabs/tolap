@@ -47,6 +47,7 @@ from tolap_core.enums import (
     AssigneeType,
     FilterOperator,
     MaskType,
+    PrincipalType,
     SigningAlgorithm,
 )
 from tolap_core.models import (
@@ -61,6 +62,10 @@ from tolap_core.models import (
 POLICY_DEFINITION = load_schema("policy-definition")
 EFFECTIVE_POLICY = load_schema("effective-policy")
 POLICY_ASSIGNMENT = load_schema("policy-assignment")
+# The canonical signing projection, which is where a delegation chain lives. It
+# describes the SIGNED shape rather than any SDK's native context type, so an enum read
+# from it is still the published contract for the value on the wire.
+SECURITY_CONTEXT = load_schema("security-context")
 
 
 # The keyword path to each enum in the published schema. Held as data so a missing
@@ -88,6 +93,13 @@ SCHEMA_SIGNING_ALGORITHM_PATH = (
     "integrity",
     "properties",
     "algorithm",
+    "enum",
+)
+SCHEMA_PRINCIPAL_TYPE_PATH = (
+    "$defs",
+    "delegationHop",
+    "properties",
+    "principalType",
     "enum",
 )
 
@@ -353,6 +365,32 @@ class TestAssigneeType:
         )
         assert sdk_values - schema_values == set(), (
             "this SDK accepts assignee types the schema forbids"
+        )
+
+
+class TestPrincipalType:
+    """The delegation hop's principal type, against the security-context schema.
+
+    Read from ``security-context.schema.json`` rather than from either policy schema,
+    because a delegation chain lives on the signing envelope and not on a policy. That
+    envelope had no published schema when purpose binding was written, which made this
+    enum the one value in the SDK pinned by fixtures alone; it now has one, so the enum
+    gets exactly the same treatment as the other four.
+    """
+
+    def test_matches_the_schema_exactly_in_both_directions(self) -> None:
+        schema_values = set(
+            schema_enum_at(SECURITY_CONTEXT, *SCHEMA_PRINCIPAL_TYPE_PATH)
+        )
+        sdk_values = _wire_values(PrincipalType)
+
+        assert schema_values - sdk_values == set(), (
+            "the schema permits principal types this SDK cannot express; a hop "
+            "carrying one would be refused at deserialization, so a schema-valid "
+            "signed context would not load at all"
+        )
+        assert sdk_values - schema_values == set(), (
+            "this SDK accepts principal types the schema forbids"
         )
 
 

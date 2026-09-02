@@ -1,6 +1,6 @@
 """Every committed policy document must validate against the published schema.
 
-The five example policies under ``schema/v1.0/examples/`` and every policy embedded
+The example policies under ``schema/v1.0/examples/`` and every policy embedded
 in ``fixtures/`` are what the three SDKs are tested against. Nothing in any suite
 validated them, so a fixture using an unsupported operator -- or a schema field no
 SDK reads -- was invisible; the SDK tests would pass because each SDK's own
@@ -32,12 +32,21 @@ Two validation modes, because the fixtures are not all whole documents:
 Nested ``required`` lists are NOT relaxed: a masking rule still needs its ``field``
 and ``maskType``, a row filter its ``field`` and ``operator``. Only the document
 envelope is optional in fragment mode.
+
+Two of the four schemas describe things that are not policies. ``security-context``
+describes the **canonical signing projection** -- the byte string the SDKs HMAC -- so it
+is validated against each signing fixture's ``canonicalPayload`` parsed back to a dict,
+never against a deserialized native ``SecurityContext``: the three SDKs deliberately
+keep different public context types and agree only on the projection. Its
+``$defs/delegationHop`` is validated separately against every hop in
+``fixtures/purpose-binding/delegation-chains.json``.
 """
 
 from __future__ import annotations
 
 import copy
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -50,7 +59,41 @@ EXAMPLES_DIR = SCHEMA_DIR / "examples"
 # enforcement input. No policy schema applies to them.
 NON_POLICY_DIRS = frozenset({"api"})
 
-SCHEMA_NAMES = ("policy-definition", "effective-policy", "policy-assignment")
+# Individual fixtures that carry no policy document and no envelope either, so nothing
+# in ``schema/v1.0/`` describes them. Named one file at a time rather than by directory,
+# because their neighbours ARE covered: ``purpose-binding/delegation-chains.json`` is
+# validated hop by hop against the security-context schema below, and excluding the
+# whole directory would have taken that with it.
+#
+# ``judge-dispositions.json`` is a verdict-to-disposition decision table -- an SDK
+# behaviour matrix rather than a document any implementation transports -- so there is
+# nothing for a schema to describe. Stated here rather than left implicit, because an
+# unstated gap reads as coverage.
+FIXTURES_NO_SCHEMA_DESCRIBES = frozenset(
+    {
+        "purpose-binding/judge-dispositions.json",
+        # A prompt-construction table: the inputs are a purpose profile and agent-influenced
+        # strings, and the expectations are about the rendered prompt text. Nothing in
+        # schema/v1.0/ describes a prompt, so there is nothing to validate it against.
+        "purpose-binding/judge-prompt-fencing.json",
+        # A canonical-form rules table: number rendering and offset-less timestamp handling.
+        # It carries no policy and no envelope -- the "cases" are scalar inputs and their
+        # expected canonical spelling -- so no schema in schema/v1.0/ describes it.
+        #
+        # In its own directory rather than under signing/ deliberately. Everything in
+        # fixtures/signing/ is a known-answer fixture, and CI asserts that each one carries
+        # secretKey/payload/canonicalPayload/expectedSignature -- a guard worth keeping intact
+        # rather than special-casing for a file that is a rules table, not an answer.
+        "canonical-form/number-and-timestamp-forms.json",
+    }
+)
+
+SCHEMA_NAMES = (
+    "policy-definition",
+    "effective-policy",
+    "policy-assignment",
+    "security-context",
+)
 
 
 def _document_validator(name: str) -> Draft202012Validator:
@@ -123,6 +166,7 @@ def _policy_fixture_paths() -> list[Path]:
         path
         for path in FIXTURES_DIR.rglob("*.json")
         if not NON_POLICY_DIRS & set(path.relative_to(FIXTURES_DIR).parts)
+        and path.relative_to(FIXTURES_DIR).as_posix() not in FIXTURES_NO_SCHEMA_DESCRIBES
     )
 
 
@@ -131,12 +175,16 @@ POLICY_PATHS = sorted((FIXTURES_DIR / "policies").glob("*.json"))
 ASSIGNMENT_PATHS = sorted((FIXTURES_DIR / "assignments").glob("*.json"))
 MERGE_PATHS = sorted((FIXTURES_DIR / "merge-scenarios").glob("*.json"))
 SIGNING_PATHS = sorted((FIXTURES_DIR / "signing").glob("*.json"))
+DELEGATION_PATHS = sorted(
+    (FIXTURES_DIR / "purpose-binding").glob("delegation-chains.json")
+)
 EMBEDDED_PATHS = sorted(
     set(_policy_fixture_paths())
     - set(POLICY_PATHS)
     - set(ASSIGNMENT_PATHS)
     - set(MERGE_PATHS)
     - set(SIGNING_PATHS)
+    - set(DELEGATION_PATHS)
 )
 
 # Fixtures whose filename declares them invalid. They exist to prove the SDK
@@ -147,24 +195,52 @@ INVALID_BY_DESIGN = {
     "invalid-bad-mask-type.json": "scramble",
 }
 
+# A validator for one delegation hop, built from the security-context schema's ``$defs``
+# so the ``$ref`` inside resolves. The ``$defs`` block is carried alongside the subschema
+# rather than the whole document being validated, because a hop is not a context.
+_HOP_SCHEMA = {
+    "$defs": load_schema("security-context")["$defs"],
+    **load_schema("security-context")["$defs"]["delegationHop"],
+}
+HOP_VALIDATOR = Draft202012Validator(_HOP_SCHEMA, format_checker=FormatChecker())
+
 
 class TestTheCorpusIsNotEmpty:
     """A discovery bug that found nothing would make every test below vacuous."""
 
     def test_the_examples_are_discovered(self) -> None:
-        assert len(EXAMPLE_PATHS) == 5, [p.name for p in EXAMPLE_PATHS]
+        assert len(EXAMPLE_PATHS) == 6, [p.name for p in EXAMPLE_PATHS]
 
     def test_every_policy_fixture_directory_is_covered(self) -> None:
         assert POLICY_PATHS and ASSIGNMENT_PATHS and MERGE_PATHS and SIGNING_PATHS
         assert EMBEDDED_PATHS
+        assert DELEGATION_PATHS
 
     def test_no_policy_bearing_fixture_is_silently_skipped(self) -> None:
         """Every non-API fixture is claimed by exactly one of the groups below."""
         claimed = set(
-            POLICY_PATHS + ASSIGNMENT_PATHS + MERGE_PATHS + SIGNING_PATHS + EMBEDDED_PATHS
+            POLICY_PATHS
+            + ASSIGNMENT_PATHS
+            + MERGE_PATHS
+            + SIGNING_PATHS
+            + DELEGATION_PATHS
+            + EMBEDDED_PATHS
         )
 
         assert set(_policy_fixture_paths()) == claimed
+
+    def test_the_only_unvalidated_fixtures_are_the_named_ones(self) -> None:
+        """The exclusion list is asserted to be exactly what it claims, and to exist.
+
+        A frozenset naming a file that has been renamed or deleted would silently stop
+        excluding anything, and the day a genuinely undescribable fixture arrived nobody
+        would notice it had joined the corpus instead.
+        """
+        excluded = {FIXTURES_DIR / name for name in FIXTURES_NO_SCHEMA_DESCRIBES}
+
+        assert all(path.is_file() for path in excluded), FIXTURES_NO_SCHEMA_DESCRIBES
+        assert excluded & set(FIXTURES_DIR.rglob("*.json")) == excluded
+        assert excluded & set(_policy_fixture_paths()) == set()
 
     def test_the_embedded_walk_finds_policies_in_every_such_fixture(self) -> None:
         """Except the one README, which carries prose rather than policies."""
@@ -305,6 +381,152 @@ class TestSigningFixtures:
             fragment=True,
         )
 
+    @pytest.mark.parametrize("path", SIGNING_PATHS, ids=lambda p: p.name)
+    def test_the_canonical_payload_validates_as_a_security_context(
+        self, path: Path
+    ) -> None:
+        """The signed envelope, checked against the schema that describes it.
+
+        ``canonicalPayload`` is the exact byte string the three SDKs HMAC, so parsing it
+        back and validating the result is the only way the envelope's shape gets checked
+        rather than merely described. Document mode: an envelope is a whole document,
+        and every field the schema requires is one a signable context must carry --
+        which is what makes a payload missing ``expiresAt`` a failure here rather than a
+        fragment nobody minds.
+
+        This is also where the optional-means-omitted rule is enforced from the outside.
+        ``jti`` carries ``minLength: 1`` and ``delegationChain`` carries ``minItems: 1``
+        because an empty value normalizes to absent in the canonical form; a payload
+        emitting ``"jti": ""`` or ``"delegationChain": []`` would be a projection that
+        had started signing two different byte strings for the same context, and the
+        schema now refuses it.
+        """
+        data = json.loads(path.read_text())
+        payload = data.get("canonicalPayload")
+        assert payload, (
+            f"{_relative(path)} must carry a canonicalPayload; the signed bytes are the "
+            "contract, and a fixture without them pins only a digest"
+        )
+
+        _assert_valid(
+            f"{_relative(path)}#/canonicalPayload",
+            json.loads(payload),
+            "security-context",
+            fragment=False,
+        )
+
+    @pytest.mark.parametrize("path", SIGNING_PATHS, ids=lambda p: p.name)
+    def test_each_policy_in_the_canonical_payload_validates_separately(
+        self, path: Path
+    ) -> None:
+        """``policies`` items are ``{"type": "object"}``, so the entries need their own pass.
+
+        The context schema deliberately carries no cross-file ``$ref`` to
+        ``effective-policy.schema.json``: four validators in this repository read these
+        files, and one of them silently lacking a configured resolver would mean a
+        schema that validates nothing. The cost of that choice is this test -- without
+        it, ``policies`` would accept any object at all and the envelope check would say
+        nothing about the policy inside it.
+
+        Fragment mode, for the same reason the ``payload`` check above uses it: a signed
+        policy has its integrity block stripped, since a signature cannot cover itself.
+        """
+        payload = json.loads(json.loads(path.read_text())["canonicalPayload"])
+        policies = payload["policies"]
+        assert policies, f"{_relative(path)} signs an empty policies array"
+
+        for index, policy in enumerate(policies):
+            _assert_valid(
+                f"{_relative(path)}#/canonicalPayload/policies/{index}",
+                policy,
+                "effective-policy",
+                fragment=True,
+            )
+
+
+class TestDelegationChainFixtures:
+    """Every hop in the shared chain corpus, against ``$defs/delegationHop``.
+
+    A delegation chain is signed hop for hop and validated hop for hop, and until the
+    security-context schema existed nothing checked that the fixtures driving that
+    validation were themselves well-formed. A hop with a stray field or a principal type
+    no SDK accepts would have surfaced as an opaque deserialization error inside whichever
+    chain test happened to load it.
+    """
+
+    CASES = json.loads(
+        (FIXTURES_DIR / "purpose-binding" / "delegation-chains.json").read_text()
+    )["cases"]
+
+    # The one case whose hop is schema-invalid on purpose, keyed to the fixture's own
+    # explanation of why. Read from the fixture rather than restated, so the two cannot
+    # disagree about which case it is.
+    INVALID_BY_DESIGN = {
+        case["name"]: case["schemaInvalidByDesign"]
+        for case in CASES
+        if "schemaInvalidByDesign" in case
+    }
+
+    @pytest.mark.parametrize(
+        "case",
+        [c for c in CASES if "schemaInvalidByDesign" not in c],
+        ids=lambda c: c["name"],
+    )
+    def test_every_hop_validates_against_the_hop_subschema(self, case: dict) -> None:
+        for index, hop in enumerate(case["chain"] or []):
+            errors = [
+                f"{error.json_path}: {error.message}"
+                for error in sorted(
+                    HOP_VALIDATOR.iter_errors(hop), key=lambda e: e.json_path
+                )
+            ]
+            assert not errors, "\n".join(
+                [f"case '{case['name']}' hop {index} is not a valid delegationHop:", *errors]
+            )
+
+    def test_exactly_one_case_is_invalid_by_design(self) -> None:
+        """Pinned so the exclusion above cannot quietly grow.
+
+        A second case acquiring the marker would remove it from the sweep, which is how a
+        fixture stops being checked without anything failing.
+        """
+        assert set(self.INVALID_BY_DESIGN) == {"case-differing-purpose-denied"}
+
+    @pytest.mark.parametrize("name", sorted(INVALID_BY_DESIGN))
+    def test_the_invalid_by_design_case_stays_schema_invalid(self, name: str) -> None:
+        """Asserted positively, so a fixture that became valid is a failure.
+
+        ``case-differing-purpose-denied`` carries ``Campaign-X`` at its second hop, which
+        violates the lowercase purpose pattern. It exists to prove the validator refuses a
+        mis-cased purpose even though no schema-valid context could carry one -- defence in
+        depth, since the SDK deserializers do not enforce schema patterns and a chain
+        assembled in code can contain it. If the fixture were silently corrected the chain
+        tests would keep passing while no longer exercising a rejection at all.
+        """
+        case = next(c for c in self.CASES if c["name"] == name)
+        errors = [
+            f"{error.json_path}: {error.message}"
+            for hop in case["chain"]
+            for error in HOP_VALIDATOR.iter_errors(hop)
+        ]
+
+        assert errors, f"case '{name}' is marked schema-invalid but the schema accepts it"
+        assert any("declaredPurpose" in error for error in errors), errors
+
+    def test_the_validator_would_reject_an_unknown_principal_type(self) -> None:
+        """The paired control: the hop validator must not accept everything.
+
+        Without this, every assertion above would pass against a validator built from an
+        empty schema -- which is exactly what a mis-keyed ``$defs`` lookup would produce.
+        """
+        errors = list(
+            HOP_VALIDATOR.iter_errors(
+                {"principalId": "agent-1", "principalType": "daemon"}
+            )
+        )
+
+        assert errors and any("daemon" in error.message for error in errors), errors
+
 
 class TestEmbeddedPolicies:
     """Enforcement and integration fixtures state policies inline, partially."""
@@ -366,3 +588,45 @@ class TestOperatorEnumsAgreeAcrossTheTwoSchemas:
         ]["endpointRules"]["properties"]["allowedMethods"]["items"]["enum"]
 
         assert definition == effective
+
+    def test_the_purpose_profile_subschemas_are_identical(self) -> None:
+        """The whole subschema, not just an enum, because all of it must survive merge.
+
+        A purpose profile is carried from definition into effective policy by the
+        merger, so anything a definition may express has to be expressible in the
+        resolved document -- otherwise a policy validates, resolves, and produces an
+        artifact its own schema rejects. Compared in full rather than field by field
+        so that adding a property to one side and not the other fails here.
+        """
+        definition = load_schema("policy-definition")["properties"]["purposeProfile"]
+        effective = load_schema("effective-policy")["properties"]["purposeProfile"]
+
+        assert definition == effective
+
+    def test_the_envelope_and_hop_purpose_patterns_differ_deliberately(self) -> None:
+        """A hop may carry a glob; the envelope's declared purpose may not.
+
+        Asserted rather than left to a reader noticing, because the looser pattern is the
+        kind of thing a later edit "tidies" into agreement. The envelope's
+        ``declaredPurpose`` is a concrete assertion matched against a ``purposeId``
+        exactly, so admitting ``*`` there would let a caller declare a purpose that
+        resolves every purpose-scoped policy. A hop's is a delegable scope, so
+        ``campaign-*`` has to be expressible or a parent cannot hand down a family.
+        """
+        context = load_schema("security-context")
+        envelope = context["properties"]["declaredPurpose"]["pattern"]
+        hop = context["$defs"]["delegationHop"]["properties"]["declaredPurpose"]["pattern"]
+
+        # Asserted by behaviour on a concrete value rather than by comparing pattern
+        # text, so a rewrite that preserves the meaning still passes.
+        assert re.match(envelope, "campaign-x-overlap")
+        assert re.match(hop, "campaign-x-overlap")
+
+        assert not re.match(envelope, "campaign-*"), (
+            "a declared purpose admitting '*' would let a caller resolve every "
+            "purpose-scoped policy at once"
+        )
+        assert re.match(hop, "campaign-*"), (
+            "a hop must be able to express a glob scope, or a parent cannot delegate "
+            "a family of purposes"
+        )

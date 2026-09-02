@@ -133,6 +133,8 @@ class InMemoryPolicyStore:
         user_id: str,
         tenant_id: str,
         source_connection_id: str,
+        *,
+        declared_purpose: str | None = None,
     ) -> EffectivePolicy:
         with self._lock:
             assignments = list(self._assignments)
@@ -146,6 +148,7 @@ class InMemoryPolicyStore:
             definitions=definitions,
             get_groups=self._identity_resolver.get_groups,
             get_roles=self._identity_resolver.get_roles,
+            declared_purpose=declared_purpose,
         )
 
         self._emit_audit(PolicyAuditEvent.create(

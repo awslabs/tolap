@@ -20,7 +20,16 @@ import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastif
 import Fastify from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import { parseSourceIdentity, type PolicyAssignment, type PolicyDefinition } from "@aws/tolap-core";
-import { AdminAuthError, type AdminPrincipal } from "../auth/cognito.ts";
+import {
+  AdminAuthError,
+  AdminAuthUnavailableError,
+  type AdminPrincipal,
+} from "../auth/cognito.ts";
+import {
+  isValidationError,
+  normalizeDeclaredPurpose,
+  validationErrorBody,
+} from "./purpose-query.ts";
 import { IdentityLookupError } from "../auth/identity-source.ts";
 import {
   AuthorizationError,
@@ -342,34 +351,75 @@ export const adminRoutes =
 
     // -- Resolve preview ---------------------------------------------------
 
+    // A querystring schema, for the same reason `GET /v1/resolve` has one: without it a
+    // REPEATED key arrives as an array, and `normalizeDeclaredPurpose`'s `.trim()` would
+    // throw a TypeError before any validation ran -- turning a malformed request into a 500
+    // where it should be a 400. Declared for all four parameters rather than only the new
+    // one, so the route does not have two classes of parameter.
+    const previewQuerystring = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        userId: { type: "string" },
+        tenantId: { type: "string" },
+        sourceConnectionId: { type: "string" },
+        declaredPurpose: { type: "string" },
+      },
+    } as const;
+
     app.get<{
-      Querystring: { userId?: string; tenantId?: string; sourceConnectionId?: string };
-    }>("/v1/resolve/preview", async (request, reply) => {
-      await auth(request, "auditor");
-      const { userId, tenantId, sourceConnectionId } = request.query;
-
-      if (!userId || !tenantId || !sourceConnectionId) {
-        return reply.code(400).send({
-          error: "userId, tenantId and sourceConnectionId are required",
-        });
-      }
-      if (parseSourceIdentity(sourceConnectionId) == null) {
-        return reply
-          .code(400)
-          .send({ error: "sourceConnectionId must be 'category:namespace:name'" });
-      }
-
-      const policy = await store.resolvePolicy(userId, tenantId, sourceConnectionId);
-
-      // Returned UNSIGNED, deliberately. A preview is for a human to read in the
-      // console; signing it would produce a usable credential on a route an
-      // auditor can reach, turning a read-only inspection tool into a way to mint
-      // access.
-      return {
-        effectivePolicy: policy,
-        contributingPolicies: policy.sourceProfiles,
+      Querystring: {
+        userId?: string;
+        tenantId?: string;
+        sourceConnectionId?: string;
+        declaredPurpose?: string;
       };
-    });
+    }>(
+      "/v1/resolve/preview",
+      { schema: { querystring: previewQuerystring } },
+      async (request, reply) => {
+        await auth(request, "auditor");
+        const { userId, tenantId, sourceConnectionId, declaredPurpose } = request.query;
+
+        if (!userId || !tenantId || !sourceConnectionId) {
+          return reply.code(400).send({
+            error: "userId, tenantId and sourceConnectionId are required",
+          });
+        }
+        if (parseSourceIdentity(sourceConnectionId) == null) {
+          return reply
+            .code(400)
+            .send({ error: "sourceConnectionId must be 'category:namespace:name'" });
+        }
+
+        // The purpose the preview resolves for (spec section 15.1). Without it this route
+        // resolved as though none was declared, so a purpose-scoped policy was invisible
+        // here -- the console could author a `purposeProfile` and then show a deny-all
+        // preview of it, which reads as "this policy grants nothing" rather than as "this
+        // route cannot see it". Same normalization and the same 400 as `GET /v1/resolve`,
+        // from the same helper, so the two routes cannot drift again.
+        const { purpose, error: purposeError } = normalizeDeclaredPurpose(declaredPurpose);
+        if (purposeError !== undefined) {
+          return reply.code(400).send({ error: purposeError });
+        }
+
+        const policy = await store.resolvePolicy(
+          userId,
+          tenantId,
+          sourceConnectionId,
+          purpose,
+        );
+
+        // Returned UNSIGNED, deliberately. A preview is for a human to read in the
+        // console; signing it would produce a usable credential on a route an
+        // auditor can reach, turning a read-only inspection tool into a way to mint
+        // access.
+        return {
+          effectivePolicy: policy,
+          contributingPolicies: policy.sourceProfiles,
+        };
+      },
+    );
 
     // -- Installs ----------------------------------------------------------
 
@@ -536,6 +586,15 @@ export const adminRoutes =
 export function buildAdminApp(deps: AdminDeps): FastifyInstance {
   const app = Fastify({
     logger: loggerOptions({ level: deps.logLevel ?? "silent", app: "admin" }),
+    // Unknown query/body properties are REJECTED, not silently stripped. Fastify's ajv
+    // defaults to `removeAdditional: true`, which deletes anything a schema's
+    // `additionalProperties: false` does not allow and then proceeds -- so a typo'd
+    // `declaredPurposes` was dropped and the request resolved as though no purpose had been
+    // declared. Against a purpose-scoped policy set that is deny-all: a request that looks
+    // like it worked and simply granted nothing, which is the failure this port already
+    // rejects a *malformed* purpose to avoid. Stripping and denying is the same mistake
+    // wearing a 200.
+    ajv: { customOptions: { removeAdditional: false } },
     // Stated rather than inherited. Fastify defaults to 1 MB, which is already the
     // bound on how much work an uploaded OpenAPI document or SQL dump can ask the
     // importers to do -- so it is a security parameter here and belongs where it can
@@ -559,8 +618,24 @@ export function buildAdminApp(deps: AdminDeps): FastifyInstance {
       // the caller is already authenticated for the 403 case.
       return reply.code(error.status).send({ error: error.message });
     }
+    // A schema-validation failure is the caller's fault. Before the querystring schema on
+    // the preview route there was nothing to validate here; with it, this branch is what
+    // keeps a repeated parameter a 400 rather than a 500.
+    if (isValidationError(error)) {
+      return reply.code(400).send(validationErrorBody(error));
+    }
     if (error instanceof AdminAuthError) {
       return reply.code(401).send({ error: error.message });
+    }
+    if (error instanceof AdminAuthUnavailableError) {
+      // 503, not 401: no decision about the credential was reached. The message is
+      // deliberately about the server rather than the token, so an operator reading it
+      // looks at the identity provider instead of at the caller. Logged with the cause,
+      // because the status alone does not say which dependency failed.
+      app.log.error(error);
+      return reply
+        .code(503)
+        .send({ error: "identity provider keys unavailable; request not authenticated" });
     }
     if (error instanceof IdentityLookupError) {
       // Same reasoning as the resolve port: a preview computed without knowing the

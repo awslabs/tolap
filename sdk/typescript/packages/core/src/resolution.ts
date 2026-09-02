@@ -213,6 +213,42 @@ function matchesSourcePatterns(
   );
 }
 
+/**
+ * Whether a definition's purpose profile admits the caller's declared purpose
+ * (canonical spec §15.1).
+ *
+ * Three cases, in this order:
+ *
+ * - **No profile** — the definition is purpose-agnostic and always applies. This
+ *   is what keeps every pre-purpose policy resolving unchanged.
+ * - **A profile but no declared purpose** — excluded. A purpose-scoped policy is
+ *   not a default grant, so the absence of a purpose cannot satisfy it.
+ * - **Both present** — an exact, case-sensitive comparison. Deliberately *not*
+ *   the glob matching used for chain narrowing or for `sourcePatterns`: those are
+ *   authored patterns meant to span a family of values, whereas this compares one
+ *   asserted identifier against one declared identifier. A case-insensitive or
+ *   glob comparison here would let a caller declaring `Campaign-X` — or `*` —
+ *   resolve a policy written for `campaign-x`.
+ *
+ * Like `matchesSourcePatterns` this is a private helper rather than part of the
+ * public surface: it is a resolution-time filter, and exposing it would invite an
+ * integrator to re-check the purpose *after* the merge, which is exactly the
+ * ordering §15.1 forbids.
+ */
+function matchesDeclaredPurpose(
+  definition: PolicyDefinition,
+  declaredPurpose: string | undefined,
+): boolean {
+  const profile = definition.purposeProfile;
+  if (profile === undefined) return true;
+
+  // Empty normalizes to absent, matching how the signing projection treats it:
+  // `""` and omitted must not behave as two different declarations.
+  if (declaredPurpose === undefined || declaredPurpose === "") return false;
+
+  return profile.purposeId === declaredPurpose;
+}
+
 // ---------------------------------------------------------------------------
 // Identity resolution types
 // ---------------------------------------------------------------------------
@@ -320,6 +356,15 @@ function assignmentMatchesIdentity(
  * @param getGroups - Returns groups the user belongs to
  * @param getRoles - Returns roles the user holds
  * @param ttlMs - Time-to-live in milliseconds for the effective policy (default 3600000 = 1h)
+ * @param declaredPurpose
+ * The purpose the caller declares for this resolution, or omitted to declare none
+ * (canonical spec §15.1). A definition carrying no `purposeProfile` resolves either
+ * way, so omitting this reproduces the pre-purpose behaviour exactly. A definition
+ * that *is* purpose-scoped resolves only on an exact, case-sensitive match —
+ * including not at all when no purpose is declared.
+ *
+ * Appended after `ttlMs` rather than inserted beside `definitions` so every
+ * existing positional call site keeps compiling and keeps meaning what it did.
  */
 export async function resolve(
   userId: string,
@@ -330,6 +375,7 @@ export async function resolve(
   getGroups: GetGroupsFn = () => [],
   getRoles: GetRolesFn = () => [],
   ttlMs: number = 3_600_000,
+  declaredPurpose?: string,
 ): Promise<EffectivePolicy> {
   const defMap =
     definitions instanceof Map
@@ -348,14 +394,24 @@ export async function resolve(
       assignmentMatchesIdentity(a, userId, groups, roles),
   );
 
-  // Look up definitions, then filter by sourcePatterns (canonical spec §10): a
-  // definition whose patterns do not cover this source is excluded BEFORE merging,
-  // so its rules cannot fold into an effective policy for a source it was never
-  // authored for.
+  // Look up definitions, then filter by sourcePatterns (canonical spec §10) and by
+  // declared purpose (§15.1). Both filters run BEFORE the merge, and for the same
+  // reason: a definition that does not apply must not fold its rules into the
+  // effective policy at all. Filtering afterwards would mean the rules had already
+  // merged, and whether that widens or narrows access depends on the policies
+  // involved -- either way the resolved policy is not the one the administrator
+  // authored.
+  //
+  // When every candidate was purpose-scoped and no matching purpose was declared,
+  // `policies` is empty here and `merge` returns the deny-all.
   const policies: PolicyDefinition[] = [];
   for (const assignment of matching) {
     const def = defMap.get(assignment.policyName);
-    if (def && matchesSourcePatterns(def, sourceConnectionId)) {
+    if (
+      def &&
+      matchesSourcePatterns(def, sourceConnectionId) &&
+      matchesDeclaredPurpose(def, declaredPurpose)
+    ) {
       policies.push(def);
     }
   }
@@ -377,6 +433,11 @@ export async function resolve(
     permissions: merged.permissions,
     ...(merged.objectRules ? { objectRules: merged.objectRules } : {}),
     ...(merged.limits ? { limits: merged.limits } : {}),
+    // Carried onto the effective policy because enforcement only ever sees one
+    // (spec §15.2), which also puts the purpose inside the signed bytes for free.
+    ...(merged.purposeProfile
+      ? { purposeProfile: merged.purposeProfile }
+      : {}),
     integrity: {
       algorithm: "none",
       signature: "",

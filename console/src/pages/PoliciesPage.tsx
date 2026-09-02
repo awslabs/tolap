@@ -15,12 +15,14 @@ import {
   fetchAll,
   type PolicyDefinition,
   type PolicyVersion,
+  type PurposeProfile,
   type SourceManifest,
   type ValidationError,
 } from "../api.ts";
 import { FieldPicker } from "../components/FieldPicker.tsx";
 import { EndpointPicker, MethodPicker } from "../components/EndpointPicker.tsx";
 import { MaskedFieldEditor } from "../components/MaskedFieldEditor.tsx";
+import { PurposeProfileEditor } from "../components/PurposeProfileEditor.tsx";
 import { RowFilterEditor } from "../components/RowFilterEditor.tsx";
 import { TagPicker } from "../components/TagPicker.tsx";
 
@@ -246,6 +248,33 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
   };
 
   /**
+   * Set or remove the whole purpose profile.
+   *
+   * Unlike the helpers above, this one does not merge a `Partial`. A purpose profile is
+   * authored as one unit -- its `purposeId` is required by the schema even in fragment
+   * mode -- and, more importantly, removing it has to produce an **absent** key rather
+   * than an empty object. A `purposeProfile: {}` fails validation, and a profile that is
+   * merely blank still filters resolution: it would exclude the policy for every caller
+   * except one declaring the empty purpose, which is nobody. "Cleared the boxes" and
+   * "removed the profile" must not be the same edit.
+   *
+   * `delete` rather than assigning `undefined` for the same reason the editors do it:
+   * `JSON.stringify` drops an undefined value, so the two would agree on the wire but
+   * not in the diff or in `Object.keys`.
+   */
+  const patchPurposeProfile = (next: PurposeProfile | undefined) => {
+    setDraft((current) => {
+      if (!current) return current;
+      if (next === undefined) {
+        const without = { ...current };
+        delete without.purposeProfile;
+        return without;
+      }
+      return { ...current, purposeProfile: next };
+    });
+  };
+
+  /**
    * The selected source's category, which decides which sections are relevant.
    *
    * Taken from the manifest rather than guessed from the policy: the category is a
@@ -394,20 +423,54 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
 
             <fieldset disabled={readOnly}>
               <legend>Scope</legend>
-              <p className="hint">
-                {/*
-                  Section 10 is the one place an empty list does NOT mean deny-all,
-                  and the asymmetry with section 3 has caused real bugs.
-                */}
-                Leave empty to apply to <strong>every</strong> source. This is the
-                opposite of an allow-list, where empty denies everything.
-              </p>
+              {/*
+                `appliesToAll` had no control at all, and it round-tripped: the form loaded
+                a policy carrying `true`, never showed it, and saved it back. Since the flag
+                short-circuits `sourcePatterns` entirely (spec section 10), an administrator
+                editing such a policy read the pattern list as the scope while the policy in
+                fact applied everywhere -- a widened scope displayed as a narrow one, which
+                is worse than not offering the field, because the screen answered the
+                question wrongly instead of not answering it.
+              */}
+              <label>
+                <input
+                  type="checkbox"
+                  checked={draft.appliesToAll ?? false}
+                  onChange={(event) =>
+                    // Written as `undefined` rather than `false` when cleared, so a policy
+                    // that never carried the flag does not acquire an explicit `false` just
+                    // by being opened -- the schema default is `false` either way, and a
+                    // no-op edit should not change the stored document.
+                    patch({ appliesToAll: event.target.checked ? true : undefined })
+                  }
+                />
+                Applies to <strong>all</strong> sources (<code>appliesToAll</code>)
+              </label>
+              {draft.appliesToAll ? (
+                <p className="hint" role="status">
+                  This policy applies to every source the assignee can reach. The source
+                  patterns below are <strong>ignored</strong> while this is on.
+                </p>
+              ) : (
+                <p className="hint">
+                  {/*
+                    Section 10 is the one place an empty list does NOT mean deny-all,
+                    and the asymmetry with section 3 has caused real bugs.
+                  */}
+                  Leave empty to apply to <strong>every</strong> source. This is the
+                  opposite of an allow-list, where empty denies everything.
+                </p>
+              )}
               <FieldPicker
                 label="Source patterns"
                 selected={draft.sourcePatterns ?? []}
                 // Section 10, not section 3: absent and `[]` both mean "every source"
                 // here, so the default allow-list message would say the opposite.
                 emptyMeans="everySource"
+                // Left editable while `appliesToAll` is on, deliberately: disabling it
+                // would look like the patterns had been cleared, and turning the flag off
+                // again has to restore the scope the author wrote rather than an empty
+                // list that now means "every source" for a different reason.
                 onChange={(next) =>
                   patch({ sourcePatterns: next.length > 0 ? next : undefined })
                 }
@@ -467,6 +530,25 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
                   ))}
                 </div>
               ) : null}
+            </fieldset>
+
+            {/*
+              Purpose binding, always offered and never gated on a source category:
+              a declared purpose is a property of the *caller*, not of the source, so
+              there is no category for which it would be silently ignored. The
+              optionality that the endpoint and tag sections express by gating lives one
+              level down instead -- the editor renders an "Add purpose profile" button
+              when the policy has none, and a "Remove purpose profile" button when it
+              does. Same rule as those sections, for the same reason: an existing profile
+              is always visible and always removable, because a profile nobody can see
+              still decides whether this policy resolves at all.
+            */}
+            <fieldset disabled={readOnly}>
+              <legend>Purpose binding</legend>
+              <PurposeProfileEditor
+                profile={draft.purposeProfile}
+                onChange={patchPurposeProfile}
+              />
             </fieldset>
 
             <fieldset disabled={readOnly}>

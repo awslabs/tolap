@@ -1,0 +1,33 @@
+{
+  "description": "Same purpose, disjoint allowedActions -- the intersection is the empty array, which per canonical spec section 3 means deny EVERY action, not 'unrestricted'. An implementation that treats [] as falsy and drops the field converts the most restrictive outcome into no restriction at all.",
+  "inputs": [
+    {
+      "version": "1.0",
+      "name": "aggregates-only",
+      "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "purposeProfile": {
+        "purposeId": "campaign-x-overlap",
+        "allowedActions": ["aggregate_overlap", "count_segments"]
+      }
+    },
+    {
+      "version": "1.0",
+      "name": "inspection-only",
+      "priority": 20,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "purposeProfile": {
+        "purposeId": "campaign-x-overlap",
+        "allowedActions": ["inspect_account"]
+      }
+    }
+  ],
+  "expected": {
+    "sourceProfiles": ["aggregates-only", "inspection-only"],
+    "permissions": { "canQuery": true, "readOnly": true },
+    "purposeProfile": {
+      "purposeId": "campaign-x-overlap",
+      "allowedActions": []
+    }
+  }
+}

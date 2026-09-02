@@ -34,6 +34,19 @@ export {
   type RequestArgs,
   type FetchLike,
 } from "./http-wrapper.js";
+// Semantic judge over Bedrock Converse (canonical spec §15.4).
+//
+// The AWS SDK is deliberately NOT a dependency of this package: the transport is a
+// one-method seam the integrator implements, and the prompt, parsing, timeout and
+// fail-closed mapping live here where they can be tested.
+export {
+  BedrockJudge,
+  DEFAULT_JUDGE_SYSTEM_PROMPT,
+  JUDGE_UNAVAILABLE_FLAG,
+  buildJudgeUserPrompt,
+  parseJudgeResponse,
+  type BedrockConverseClient,
+} from "./bedrock-judge.js";
 export {
   SecureToolFactory,
   ToolCreationError,

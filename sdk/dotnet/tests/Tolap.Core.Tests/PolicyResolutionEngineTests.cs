@@ -304,4 +304,74 @@ public class PolicyResolutionEngineTests
         PolicyResolutionEngine.GlobMatch("api:internal:*", "api:external:patient-api")
             .Should().BeFalse();
     }
+
+    /// <summary>
+    /// Records why <see cref="PolicyResolutionEngine.GlobMatch"/>'s
+    /// <c>catch (ArgumentException)</c> is defence in depth rather than a tested path, by
+    /// asserting the property that makes it unreachable.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The pattern goes through <c>Regex.Escape</c> before <c>\*</c> is expanded to
+    /// <c>[^:]*</c>, so every metacharacter arrives at the engine already neutralised and the
+    /// constructed regex always compiles. There is no source pattern — however hostile — that
+    /// reaches the <c>ArgumentException</c> handler, so <b>those lines stay uncovered by
+    /// design</b>. Contriving a test that reached them would mean asserting behaviour the code
+    /// cannot exhibit. The handler has since been REMOVED for exactly that reason -- unreachable
+    /// defensive code reads as a handled case no test can exercise -- so this test is now what
+    /// stands in its place: it fails first if an edit ever made an unescaped pattern reach the
+    /// regex engine, which is the change that would have made the handler necessary.
+    /// </para>
+    /// <para>
+    /// So the assertion is the escaping itself, not "it did not throw". Each pattern must match
+    /// <b>itself</b> — proof it was escaped rather than compiled — and must not match an
+    /// unrelated source, proof nothing here is quietly acting as a wildcard. A change that
+    /// interpolated the pattern unescaped would widen every scoped policy and make an invalid
+    /// pattern a live, security-relevant path; both halves fail here before that ships.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData("")]
+    [InlineData("[")]
+    [InlineData("(")]
+    [InlineData(")")]
+    [InlineData("[a-")]
+    [InlineData("(?<name>")]
+    [InlineData("(a+)+")]
+    [InlineData("a{")]
+    [InlineData("{2,}")]
+    [InlineData("+")]
+    [InlineData("?")]
+    [InlineData("|")]
+    [InlineData(".")]
+    [InlineData("^$")]
+    [InlineData("\\")]
+    [InlineData("\\1")]
+    public void GlobMatch_RegexMetacharacters_AreLiteral_SoTheInvalidPatternCatchIsUnreachable(
+        string pattern)
+    {
+        PolicyResolutionEngine.GlobMatch(pattern, pattern)
+            .Should().BeTrue("an escaped pattern matches itself as a literal");
+
+        PolicyResolutionEngine.GlobMatch(pattern, "db:production:patient_records")
+            .Should().BeFalse("a metacharacter must not behave as a wildcard");
+    }
+
+    [Fact]
+    public void GlobMatch_LongWildcardRun_StillReturnsABoundedAnswer()
+    {
+        // A run of wildcards is a *valid* pattern, so it never reaches the ArgumentException
+        // handler either — it expands to 32 adjacent `[^:]*` groups, the nested-quantifier
+        // shape spec section 13 names as .NET's ReDoS exposure, and is bounded by the 100 ms
+        // match timeout instead. A colon-free source matches; a colon-bearing one cannot, and
+        // returns false either on its own or via that timeout. Both routes give the same
+        // fail-closed answer, which is why this asserts the answer and not a duration: a
+        // threshold nobody measured hides the defect it was meant to catch
+        // (testing-antipatterns.md section 6).
+        var pattern = new string('*', 32);
+
+        PolicyResolutionEngine.GlobMatch(pattern, "patient_records").Should().BeTrue();
+        PolicyResolutionEngine.GlobMatch(pattern, "db:production:patient_records")
+            .Should().BeFalse();
+    }
 }

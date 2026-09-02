@@ -35,3 +35,35 @@ class SecureMcpServerOptions:
     denied rather than returned unfiltered. Integrators mid-migration may opt in
     per wrapper, which is logged at WARNING every time it lets a result through.
     """
+    tool_action_categories: dict[str, str] | None = None
+    """Tool name to semantic action category, for purpose-bound action validation.
+
+    Read by :class:`~tolap_mcp.SecureMcpToolWrapper` (canonical-enforcement-spec.md
+    section 15.2). Set this alongside ``allowed_tools`` whenever any policy the wrapper
+    may resolve carries a ``purposeProfile`` that constrains actions.
+
+    Configuration rather than a caller argument, deliberately: an agent that can name
+    its own action category can name a permitted one, which reduces the check to a
+    formality. Unset, a purpose-agnostic policy behaves exactly as before -- and a
+    purpose-bound one that constrains actions denies every call, because a tool the map
+    does not classify cannot be shown to serve the purpose.
+
+    Matched exactly and case-sensitively, as ``allowed_tools`` is: a tool name is an
+    identifier, not a pattern.
+    """
+    http_action_categories: dict[str, str] | None = None
+    """``"METHOD path-glob"`` to semantic action category, for the HTTP wrapper.
+
+    Read by :class:`~tolap_mcp.SecureHttpToolWrapper` -- for example
+    ``{"GET /segments/*": "aggregate_overlap"}``.
+
+    Keyed by method and path rather than by tool name because an HTTP request has no
+    tool name: ``request()`` takes a method and a path. A name-keyed map would leave
+    this enforcement point permanently inert for API sources, which is worse than
+    having none -- the configuration would imply a control that never ran. The path
+    uses the same glob dialect as ``allowedEndpoints``, so a deployment writes one kind
+    of endpoint pattern.
+
+    Consulted on every redirect hop, like every other rule there: a 307 to
+    ``/export/all.csv`` is a different action from the ``GET`` that started the chain.
+    """

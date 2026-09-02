@@ -91,9 +91,11 @@ public class SchemaFixtureConformanceTests
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToList();
 
-        // A discovery bug that found nothing would make every case below vacuous.
-        files.Should().HaveCountGreaterThan(30,
-            "the shared corpus is 33 policy fixtures plus 5 published examples");
+        // A discovery bug that found nothing would make every case below vacuous. The floor
+        // tracks the corpus rather than sitting far below it, so a walk that silently stops
+        // finding most of the fixtures fails here instead of passing on a handful.
+        files.Should().HaveCountGreaterThan(50,
+            "the shared corpus is 51 policy fixtures plus 6 published examples");
 
         return files;
     }
@@ -141,6 +143,16 @@ public class SchemaFixtureConformanceTests
                         into["assigneeType"].Add(value.GetString()!);
                     }
 
+                    // A delegation hop's principal type. Unlike every other kind here it has
+                    // no schema enum to check against: hops live on the SecurityContext
+                    // envelope, which has no published schema (canonical spec section 15).
+                    // Collected anyway so the SDK-acceptance sweep below covers it -- that
+                    // half is what catches a fixture using a principal type this SDK
+                    // refuses, which is the failure a schema check would otherwise have
+                    // found.
+                    if (property.NameEquals("principalType") && value.ValueKind == JsonValueKind.String)
+                        into["principalType"].Add(value.GetString()!);
+
                     if (property.NameEquals("allowedMethods") && value.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var method in value.EnumerateArray()
@@ -172,6 +184,7 @@ public class SchemaFixtureConformanceTests
             ["maskAlgorithm"] = new(StringComparer.Ordinal),
             ["assigneeType"] = new(StringComparer.Ordinal),
             ["allowedMethod"] = new(StringComparer.Ordinal),
+            ["principalType"] = new(StringComparer.Ordinal),
         };
 
         using var document = JsonDocument.Parse(
@@ -205,6 +218,13 @@ public class SchemaFixtureConformanceTests
 
         foreach (var (kind, seen) in tokens)
         {
+            // `principalType` is deliberately absent from `expected`: there is no published
+            // schema for the SecurityContext envelope, so there is no schema enum to compare
+            // it with. Its equivalent of this check is the SDK-acceptance sweep below, and
+            // naming the exclusion here is what stops it looking like a silent omission.
+            if (kind == "principalType")
+                continue;
+
             var offending = seen.Except(expected[kind], StringComparer.Ordinal).ToList();
 
             if (Path.GetFileName(relativePath) == InvalidByDesign)
@@ -254,6 +274,12 @@ public class SchemaFixtureConformanceTests
 
         foreach (var value in tokens["assigneeType"])
             Accepts<AssigneeType>(value).Should().BeTrue($"{relativePath} uses assignee type '{value}'");
+
+        // The only check `principalType` gets, since no schema declares it. Without this a
+        // delegation-chain fixture naming a principal type the converter refuses would fail
+        // as an opaque deserialization error inside whichever chain test happened to load it.
+        foreach (var value in tokens["principalType"])
+            Accepts<PrincipalType>(value).Should().BeTrue($"{relativePath} uses principal type '{value}'");
     }
 
     [Fact]

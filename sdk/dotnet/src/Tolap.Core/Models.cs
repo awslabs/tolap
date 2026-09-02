@@ -109,7 +109,8 @@ public sealed record PolicyDefinition(
     bool AppliesToAll = false,
     string[]? SourcePatterns = null,
     ObjectRules? ObjectRules = null,
-    PolicyLimits? Limits = null);
+    PolicyLimits? Limits = null,
+    PurposeProfile? PurposeProfile = null);
 
 /// <summary>
 /// The entity receiving a policy assignment.
@@ -174,7 +175,8 @@ public sealed record EffectivePolicy(
     PolicyPermissions Permissions,
     ObjectRules? ObjectRules = null,
     PolicyLimits? Limits = null,
-    IntegrityBlock? Integrity = null)
+    IntegrityBlock? Integrity = null,
+    PurposeProfile? PurposeProfile = null)
 {
     /// <summary>
     /// Creates a deny-all effective policy with no permissions.
@@ -213,7 +215,9 @@ public sealed record SecurityContext
         DateTimeOffset ExpiresAt,
         EffectivePolicy[] Policies,
         IntegrityBlock? Integrity = null,
-        string? Jti = null)
+        string? Jti = null,
+        string? DeclaredPurpose = null,
+        DelegationHop[]? DelegationChain = null)
     {
         // A null array is left alone deliberately: a context deserialized without a
         // "policies" key must still produce signable bytes rather than throwing here,
@@ -236,6 +240,8 @@ public sealed record SecurityContext
         this.Policies = Policies;
         this.Integrity = Integrity;
         this.Jti = Jti;
+        this.DeclaredPurpose = DeclaredPurpose;
+        this.DelegationChain = DelegationChain;
     }
 
     public string Version { get; init; }
@@ -257,4 +263,100 @@ public sealed record SecurityContext
     /// an identifier alone records nothing.
     /// </remarks>
     public string? Jti { get; init; }
+
+    /// <summary>
+    /// The purpose this context was resolved for (spec section 15).
+    /// </summary>
+    /// <remarks>
+    /// Signed when present, so it cannot be swapped for a different purpose or stripped to
+    /// escape a purpose-scoped policy. Omitted from the canonical payload entirely when
+    /// absent or empty, so a context without a declared purpose signs to exactly the bytes
+    /// it did before this field existed. It records the purpose the caller <i>asserted</i>
+    /// at resolution; TOLAP checks that assertion against the policy set, not the caller's
+    /// honesty about it.
+    /// </remarks>
+    public string? DeclaredPurpose { get; init; }
+
+    /// <summary>
+    /// The chain of principals this authority passed through, oldest hop first.
+    /// </summary>
+    /// <remarks>
+    /// Signed when present, hop for hop: mutating, reordering, or removing a hop
+    /// invalidates the signature, which is what makes <see cref="DelegationChainValidator"/>
+    /// worth running at all. Omitted when absent, on the same reasoning as
+    /// <see cref="Jti"/>.
+    /// </remarks>
+    public DelegationHop[]? DelegationChain { get; init; }
 }
+
+/// <summary>
+/// Binds a policy to a declared purpose (canonical-enforcement-spec.md section 15).
+/// </summary>
+/// <remarks>
+/// <para>Present on a <see cref="PolicyDefinition"/> it scopes resolution: the policy only
+/// resolves for a caller declaring a matching <paramref name="PurposeId"/>. It is carried
+/// through the merge onto the <see cref="EffectivePolicy"/> because enforcement only ever
+/// sees an effective policy — without that, the profile would be authorable and
+/// unenforceable.</para>
+/// <para><paramref name="AllowedActions"/> follows the null-versus-empty rule in spec
+/// section 3: <c>null</c> is unrestricted, an empty array denies every action.</para>
+/// </remarks>
+/// <param name="PurposeId">
+/// Matched against the caller's declared purpose exactly and case-sensitively, so a
+/// mis-cased purpose resolves nothing rather than resolving something adjacent.
+/// </param>
+/// <param name="ProhibitedActions">
+/// Takes precedence over <paramref name="AllowedActions"/>: a category in both is denied.
+/// </param>
+public sealed record PurposeProfile(
+    string PurposeId,
+    string? Description = null,
+    string[]? AllowedActions = null,
+    string[]? ProhibitedActions = null,
+    JudgeConfig? Judge = null);
+
+/// <summary>
+/// Configuration for the optional semantic judge (spec section 15.4).
+/// </summary>
+/// <remarks>
+/// Every field is nullable with no default, and the documented defaults are applied when
+/// the value is read rather than when the record is built. Value-typed defaults would
+/// serialize unconditionally — .NET's canonical writer does no default-value elision —
+/// and so would change the signed bytes of every purpose-bound policy.
+/// </remarks>
+/// <param name="ConfidenceThreshold">
+/// At or above this confidence the verdict is final. Defaults to 0.85 when unset.
+/// </param>
+/// <param name="EscalationThreshold">
+/// Below this confidence the call escalates. Defaults to 0.60 when unset. Must not exceed
+/// <paramref name="ConfidenceThreshold"/>; an inverted pair escalates rather than guessing
+/// which bound was meant.
+/// </param>
+public sealed record JudgeConfig(
+    bool? Enabled = null,
+    string? Model = null,
+    int? HistoryWindow = null,
+    double? ConfidenceThreshold = null,
+    double? EscalationThreshold = null,
+    int? MaxLatencyMs = null);
+
+/// <summary>
+/// One hop in a delegation chain, from human to agent to sub-agent (spec section 15.3).
+/// </summary>
+/// <param name="ScopeNarrowing">
+/// The scopes still <b>in force</b> at this hop — not the scopes this hop removed. Each
+/// hop's set must be a subset of its parent's, so an empty set leaves nothing for a child
+/// to claim. Named for its effect rather than its contents, which is the reading the
+/// subset rule requires.
+/// </param>
+/// <param name="DelegatedAt">
+/// When the hop was created. Part of the signed bytes when present, and therefore
+/// truncated to milliseconds by the canonical writer like every other timestamp — the
+/// three runtimes do not agree below that (spec section 2 rule 5).
+/// </param>
+public sealed record DelegationHop(
+    string PrincipalId,
+    PrincipalType PrincipalType,
+    string? DeclaredPurpose = null,
+    DateTimeOffset? DelegatedAt = null,
+    string[]? ScopeNarrowing = null);

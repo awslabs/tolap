@@ -11,6 +11,7 @@ export {
   MaskType,
   FilterOperator,
   AssigneeType,
+  PrincipalType,
   SigningAlgorithm,
   WriteOperation,
   type MaskingParameters,
@@ -22,6 +23,9 @@ export {
   type PolicyLimits,
   type ObjectRules,
   type PolicyPermissions,
+  type PurposeProfile,
+  type JudgeConfig,
+  type DelegationHop,
   type PolicyDefinition,
   type Assignee,
   type AssignmentScope,
@@ -91,9 +95,45 @@ export {
   type ReplayGuard,
 } from "./context.js";
 
+// Purpose binding (canonical spec §15).
+//
+// Four controls, in the order a call meets them: purpose filtering at resolution
+// (`resolve`'s trailing `declaredPurpose`), delegation-chain validation, action
+// validation, and -- optionally, and only ever subtractively -- the semantic judge.
+export {
+  validateDelegationChain,
+} from "./delegation.js";
+export {
+  UNDECLARED_CATEGORY_REASON,
+  validateToolAction,
+  validateHttpRequestAction,
+  type ActionCategoryMap,
+} from "./purpose-action.js";
+export { ToolCallHistory } from "./history.js";
+export {
+  DEFAULT_CONFIDENCE_THRESHOLD,
+  DEFAULT_ESCALATION_THRESHOLD,
+  DEFAULT_HISTORY_WINDOW,
+  DEFAULT_MAX_LATENCY_MS,
+  JUDGE_FAILED_REASON,
+  JUDGE_MODEL_MISMATCH_REASON,
+  NO_JUDGE_CONFIGURED_REASON,
+  JudgeDisposition,
+  buildJudgeRequest,
+  evaluateJudge,
+  getDisposition,
+  judgeEnabled,
+  judgeHistoryWindow,
+  type Judge,
+  type JudgeOutcome,
+  type JudgeRequest,
+  type JudgeResult,
+} from "./judge.js";
+
 // Enforcement
 export {
   validateAccess,
+  validateAction,
   validateFieldAccess,
   applyMask,
   applyFieldMasking,

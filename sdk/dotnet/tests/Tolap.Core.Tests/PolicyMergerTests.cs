@@ -200,4 +200,60 @@ public class PolicyMergerTests
         result.ObjectRules.FieldRules.HiddenFields.Should()
             .BeEquivalentTo(new[] { "ssn", "date_of_birth" });
     }
+
+    [Fact]
+    public void Merge_UnionOfExplicitlyEmptyDenyLists_StaysEmptyRatherThanAbsent()
+    {
+        // Section 3's distinction, on the union side. `[]` and absent are indistinguishable to
+        // enforcement here -- neither hides anything -- so no test comparing ACCESS outcomes
+        // could see the difference. They are not indistinguishable to signing: the canonical
+        // form omits an absent field and emits `[]`, so collapsing one into the other changes
+        // the signed bytes.
+        //
+        // That is exactly what had happened. Python's union used a truthiness retention check
+        // and returned null where .NET and TypeScript returned `[]`, so a policy authoring an
+        // explicitly empty hiddenObjects signed differently in Python than here and a context
+        // signed by one would not verify in the other two. Found by porting purpose binding;
+        // this asserts .NET's half of the now-shared behaviour, and the fixture pins all three.
+        var fixture = FixtureHelper.ReadFixtureAsJson(
+            "merge-scenarios/union-of-empty-lists-stays-empty.json");
+        var inputs = fixture.GetProperty("inputs").EnumerateArray()
+            .Select(p => TolapJsonOptions.Deserialize<PolicyDefinition>(p.GetRawText()))
+            .ToList();
+
+        var result = PolicyMerger.Merge(inputs);
+        var rules = result.ObjectRules!;
+
+        // NotBeNull AND BeEmpty on every one of the four the shared helper produced. NotBeNull
+        // is the half that matters: BeEmpty alone passes against null in some assertion
+        // libraries, which is the same collapse in the test rather than the code.
+        rules.HiddenObjects.Should().NotBeNull().And.BeEmpty();
+        rules.FieldRules!.HiddenFields.Should().NotBeNull().And.BeEmpty();
+        rules.FieldRules.ReadOnlyFields.Should().NotBeNull().And.BeEmpty();
+        rules.TagRules!.DeniedTags.Should().NotBeNull().And.BeEmpty();
+        rules.EndpointRules!.HiddenEndpoints.Should().NotBeNull().And.BeEmpty();
+
+        // And the canonical bytes carry them, which is the property the divergence broke.
+        var canonical = CanonicalJson.Serialize(rules);
+        canonical.Should().Contain("\"hiddenObjects\":[]");
+        canonical.Should().Contain("\"deniedTags\":[]");
+    }
+
+    [Fact]
+    public void Merge_NoPolicyContributingADenyList_LeavesItAbsent()
+    {
+        // The paired direction, and the reason the fix is a `contributed` flag rather than
+        // "always return an array": when NO policy mentions the field at all, absent is
+        // correct, and emitting `[]` would change the bytes of every policy that never
+        // mentioned it -- a far larger blast radius than the bug being fixed.
+        var inputs = new[]
+        {
+            new PolicyDefinition("1.0", "a", new PolicyPermissions(CanQuery: true)),
+            new PolicyDefinition("1.0", "b", new PolicyPermissions(CanQuery: true))
+        };
+
+        var result = PolicyMerger.Merge(inputs);
+
+        result.ObjectRules?.HiddenObjects.Should().BeNull();
+    }
 }

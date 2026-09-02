@@ -161,7 +161,8 @@ public sealed class InMemoryPolicyStore : IPolicyStore
         string tenantId,
         string sourceConnectionId,
         Func<string, string[]> getGroups,
-        Func<string, string[]> getRoles)
+        Func<string, string[]> getRoles,
+        string? declaredPurpose = null)
     {
         var allAssignments = SnapshotAssignments();
         var allDefinitions = _policies.Values.ToList();
@@ -169,7 +170,7 @@ public sealed class InMemoryPolicyStore : IPolicyStore
         var result = PolicyResolutionEngine.Resolve(
             userId, tenantId, sourceConnectionId,
             allAssignments, allDefinitions,
-            getGroups, getRoles);
+            getGroups, getRoles, declaredPurpose);
 
         return Task.FromResult(result);
     }
@@ -179,7 +180,8 @@ public sealed class InMemoryPolicyStore : IPolicyStore
         string tenantId,
         string[] sourceConnectionIds,
         Func<string, string[]> getGroups,
-        Func<string, string[]> getRoles)
+        Func<string, string[]> getRoles,
+        string? declaredPurpose = null)
     {
         var allAssignments = SnapshotAssignments();
         var allDefinitions = _policies.Values.ToList();
@@ -188,7 +190,7 @@ public sealed class InMemoryPolicyStore : IPolicyStore
             .Select(sourceId => PolicyResolutionEngine.Resolve(
                 userId, tenantId, sourceId,
                 allAssignments, allDefinitions,
-                getGroups, getRoles))
+                getGroups, getRoles, declaredPurpose))
             .ToList();
 
         return Task.FromResult(results);

@@ -102,7 +102,14 @@ jobs:
       - name: .NET test
         env:
           TOLAP_TEST_DB_DSN: ${{ env.TOLAP_TEST_DB_DSN_DOTNET }}
-        run: dotnet test sdk/dotnet/Tolap.sln --no-build --verbosity normal
+        # Coverage is collected on this run rather than by a second one, so the gate below
+        # adds no test time. Cobertura because that is the one format the gate, coverlet and
+        # coverage.py all agree on.
+        run: |
+          dotnet test sdk/dotnet/Tolap.sln --no-build --verbosity normal \
+            --collect:"XPlat Code Coverage" \
+            --results-directory artifacts/coverage/dotnet \
+            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
 
       # -- Python --
       - name: Python install
@@ -113,7 +120,14 @@ jobs:
           pip install pytest httpx "psycopg[binary]" PyMySQL jsonschema
       - name: Python test
         working-directory: sdk/python
-        run: python -m pytest tests/ -v
+        run: |
+          pip install pytest-cov
+          python -m pytest tests/ -v \
+            --cov=tolap-core/tolap_core \
+            --cov=tolap-store/tolap_store \
+            --cov=tolap-mcp/tolap_mcp \
+            --cov-branch \
+            --cov-report=xml:../../artifacts/coverage/python.cobertura.xml
 
       # -- TypeScript --
       - name: TypeScript install
@@ -149,10 +163,32 @@ jobs:
           fail=0
           for pkg in core store mcp; do
             echo "::group::vitest @aws/tolap-$pkg"
-            (cd "packages/$pkg" && npx vitest run) || fail=1
+            (cd "packages/$pkg" && npx vitest run --coverage) || fail=1
             echo "::endgroup::"
           done
           exit $fail
+
+      # -- Purpose-binding coverage gate --
+      #
+      # Runs after all three SDK suites because it reads all three of their reports, and
+      # fails when ANY of them is missing: a language dropping out of coverage is
+      # indistinguishable from that language being perfectly covered, and the silent version
+      # is the one that ships. `--allow-missing` exists for running the gate against a single
+      # language locally and is deliberately not passed here.
+      #
+      # Scoped to the modules purpose binding added (canonical spec section 15), not applied
+      # repo-wide. Each is an access-control decision whose fail-closed arms -- an
+      # unclassified tool, a widened delegation hop, a malformed judge verdict, an empty
+      # allow-list -- are the feature, and are exactly the paths a falling repo-wide
+      # percentage is too coarse to notice losing.
+      - name: Purpose-binding modules are at 100% line and branch coverage
+        run: |
+          python3 tools/purpose-binding-coverage-gate.py \
+            --cobertura artifacts/coverage/python.cobertura.xml \
+            $(find artifacts/coverage/dotnet -name 'coverage.cobertura.xml' \
+                -exec printf -- '--cobertura %s ' {} +) \
+            --lcov sdk/typescript/packages/core/coverage/lcov.info \
+            --lcov sdk/typescript/packages/mcp/coverage/lcov.info
 
       # -- Policy server --
       #

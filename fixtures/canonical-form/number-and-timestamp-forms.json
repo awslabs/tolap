@@ -1,0 +1,32 @@
+{
+  "description": "Two canonical-form rules that all three SDKs got wrong in different ways, found by a cross-SDK parity audit of purpose binding. Neither is observable through access decisions -- both produce identical enforcement and differ only in the SIGNED BYTES -- so only a byte comparison across languages could surface them. Canonical spec sections 1 and 14 make identical bytes the requirement, and section 14 recommends comparing bytes rather than signatures for exactly this reason.",
+  "rules": [
+    {
+      "rule": "whole-number-floats-render-as-integers",
+      "why": "Python's json.dumps emits `1.0` for a float holding a whole number; .NET's System.Text.Json and JavaScript's JSON.stringify both emit `1`. A policy setting confidenceThreshold to 1.0 or minSimilarityScore to 0.0 -- both schema-valid, both reachable when json.loads produces a float -- therefore signed different bytes in Python than in the other two, and a Python-signed context failed verification in both. Two of three already agreed on the shorter form, so Python moved.",
+      "cases": [
+        { "input": 1.0, "canonical": "1" },
+        { "input": 0.0, "canonical": "0" },
+        { "input": 0.85, "canonical": "0.85" },
+        { "input": 0.6, "canonical": "0.6" },
+        { "input": 10, "canonical": "10" }
+      ],
+      "note": "A boolean must NOT be shortened to a number. Python's bool is a subclass of int, so a naive numeric coercion turns `true` into `1` -- which would be a second, worse divergence introduced by the fix for the first."
+    },
+    {
+      "rule": "offsetless-timestamps-are-utc",
+      "why": "An ISO 8601 date-time with no offset and no `Z` was read as LOCAL time by .NET's System.Text.Json and by JavaScript's Date, so the signed bytes depended on the host's timezone -- the same JSON signing to three different instants on three hosts. That is a divergence between two deployments of the SAME SDK, worse than a cross-SDK one, and invisible to any fixture pinned to a single host. Python already assumed UTC, which is the only host-independent reading, so .NET and TypeScript moved. Section 2 rule 4 mandates normalizing to UTC but was silent on what an offset-less value means.",
+      "cases": [
+        { "input": "2026-09-01T09:58:00", "canonical": "2026-09-01T09:58:00Z", "note": "no offset: assumed UTC, never local" },
+        { "input": "2026-09-01T09:58:00Z", "canonical": "2026-09-01T09:58:00Z" },
+        { "input": "2026-09-01T09:58:00+00:00", "canonical": "2026-09-01T09:58:00Z" },
+        { "input": "2026-09-01T09:58:00+02:00", "canonical": "2026-09-01T07:58:00Z", "note": "an explicit offset still names its instant and is honoured" },
+        { "input": "2026-09-01T09:58:00-05:00", "canonical": "2026-09-01T14:58:00Z" },
+        { "input": "2026-09-01T09:58:00.123456", "canonical": "2026-09-01T09:58:00.123Z", "note": "offset-less AND sub-second: both rules apply" },
+        { "input": "2026-09-01T09:58:00.000", "canonical": "2026-09-01T09:58:00Z", "note": "a zero fractional part is dropped entirely (section 2 rule 5)" }
+      ],
+      "timezones": ["UTC", "EST5EDT", "America/Los_Angeles", "Asia/Tokyo"],
+      "note": "Every case MUST produce its stated canonical form under every timezone listed. Running the suite only under UTC -- which CI does -- cannot detect this class of bug, so an SDK asserting these MUST vary TZ explicitly or assert the parse in a way that does not depend on the host clock."
+    }
+  ]
+}

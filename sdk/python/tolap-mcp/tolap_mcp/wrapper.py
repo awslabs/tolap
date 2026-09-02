@@ -4,6 +4,7 @@ import logging
 from typing import Any, Callable
 
 from tolap_core.context import validate_context, validate_expiry
+from tolap_core.delegation import validate_delegation_chain
 from tolap_core.enforcement import (
     TARGET_ROW_UNKNOWN,
     AccessResult,
@@ -17,6 +18,7 @@ from tolap_core.enforcement import (
 )
 from tolap_core.enums import WriteOperation
 from tolap_core.models import EffectivePolicy, SecurityContext
+from tolap_core.purpose_action import validate_tool_action
 from tolap_core.sql_rewriter import SqlDialect, SqlEnforcementMode
 
 from tolap_mcp.options import SecureMcpServerOptions
@@ -98,6 +100,20 @@ class SecureMcpToolWrapper:
             if expiry_reason is not None:
                 return AccessResult(allowed=False, reason=expiry_reason)
 
+                # The delegation chain, if the context carries one (spec section 15.3).
+        #
+        # Here rather than left to the integrator, because the validator had no call site at
+        # all: ``build_security_context`` *records* a chain and does not check one, so a context
+        # could be built, signed and accepted with a hop that widened its parent's purpose. The
+        # signature proved only that the chain had not been *modified* in transit, which is a
+        # different and weaker claim than the chain being valid.
+        #
+        # After the signature deliberately: validating an unsigned chain checks the attacker's
+        # own arithmetic. Backward compatible -- an absent chain, or a single hop, is allowed.
+        chain_result = validate_delegation_chain(context.delegation_chain)
+        if not chain_result.allowed:
+            return chain_result
+
         return AccessResult(allowed=True)
 
     def pre_execute(
@@ -124,6 +140,18 @@ class SecureMcpToolWrapper:
         # Check query permission
         if not policy.permissions.can_query:
             return AccessResult(allowed=False, reason="query not permitted")
+
+        # Purpose-bound action validation, after the read gate and before the object
+        # rules. The ordering matters in both directions: after can_query, because a
+        # policy that grants no reads should say so rather than complain about a
+        # category; before the object rules, because "this action does not serve the
+        # declared purpose" is the more specific answer when both would deny, and it is
+        # the one that tells an operator what actually went wrong.
+        action_result = validate_tool_action(
+            policy, tool_name, self._options.tool_action_categories
+        )
+        if not action_result.allowed:
+            return action_result
 
         # Object-level access check
         if object_name is not None:

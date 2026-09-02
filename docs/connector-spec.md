@@ -70,9 +70,23 @@ is not an error, and it is not protection.
 | `limits.maxResults` | ✅ | ✅ | ✅ | ✅ |
 | `limits.minSimilarityScore` | ➖ | ➖ | ✅ | ➖ |
 | `limits.maxObjectSizeBytes` | ➖ | ➖ | ➖ | ✅ |
+| `purposeProfile.purposeId` | ✅ resolution | ✅ resolution | ✅ resolution | ✅ resolution |
+| `purposeProfile.allowedActions` | ⚠️ tool map | ⚠️ method+path map | ⚠️ tool map | ⚠️ tool map |
+| `purposeProfile.prohibitedActions` | ⚠️ tool map | ⚠️ method+path map | ⚠️ tool map | ⚠️ tool map |
+| `purposeProfile.judge` | ⚠️ judge wired | ⚠️ judge wired | ⚠️ judge wired | ⚠️ judge wired |
 
 ✅ enforced · ⚠️ enforced only under a condition named in the category's section · ➖ not
 applicable
+
+`purposeProfile` is category-independent, which is why every cell reads the same.
+`purposeId` filters at **resolution** (canonical-enforcement-spec.md §15.1), before any
+category-specific step runs, so it applies to every source type without a connector
+having to do anything. The action lists and the judge are conditional on wiring the
+wrapper: the action category comes from an administrator-supplied map — keyed by tool
+name everywhere except `api`, where a request has a method and a path and no tool name
+(§15.2) — and the judge on an `IJudge` being supplied. Unwired, a purpose that
+constrains actions denies **every** call rather than permitting them, so the conditional
+fails closed; see §15.2.
 
 No cell means "parsed but ignored" — see §9. A ⚠️ is a *conditional*, not an advisory: the
 field is enforced when the condition holds, and the condition is stated in the category's own
@@ -294,6 +308,26 @@ Write denial reasons:
 
 Naming the field is intentional and safe: the caller supplied it, so the reason discloses
 nothing it did not already know. Reasons for *row* denials MUST NOT name values.
+
+Purpose-binding denial reasons (canonical-enforcement-spec.md §15). These apply to reads
+and writes alike, since a purpose constrains what an operation *does* rather than which
+direction it goes:
+
+| Reason | Cause |
+| --- | --- |
+| `action '<c>' is prohibited under purpose '<p>'` | Category in `prohibitedActions` |
+| `action '<c>' not in allowed actions for purpose '<p>'` | `allowedActions` specified, category absent |
+| `action category not declared for tool` | No map entry classified the call, and the purpose constrains actions |
+| `delegation hop <i> purpose '<child>' is not within parent scope '<parent>'` | A hop widened the purpose it was delegated |
+| `delegation hop <i> scopes exceed parent delegation` | A hop's `scopeNarrowing` is not a subset of its parent's |
+| `judge model mismatch` | The wired judge is not the model `judge.model` named |
+
+The category and the purpose are both named, for the same reason a field is: the caller
+supplied the call and an administrator wrote the policy, so neither discloses anything to
+the party reading the message. The category is echoed **as supplied** rather than
+normalized, so a log shows what was attempted rather than what it matched.
+`action category not declared for tool` names a *configuration* fault deliberately — the
+fix is to classify the tool, not to widen the policy.
 
 ### 4.5 Post-write results
 

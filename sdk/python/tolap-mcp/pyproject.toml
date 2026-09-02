@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tolap-mcp"
-version = "1.0.0"
+version = "1.1.0"
 requires-python = ">=3.10"
 description = "TOLAP SDK enforcement wrappers for agent tools - MCP servers, agent frameworks, Lambda handlers"
 readme = "README.md"
@@ -38,7 +38,7 @@ classifiers = [
 # The zero-dependency guarantee is a property of the *core* packages, which this is
 # not. The TypeScript and .NET wrappers take a caller-supplied HTTP client instead and
 # so declare nothing; that asymmetry is a design difference, not an error here.
-dependencies = ["tolap-core>=1.0.0,<2", "httpx>=0.27,<1"]
+dependencies = ["tolap-core>=1.1.0,<2", "httpx>=0.27,<1"]
 
 [project.urls]
 Homepage = "https://github.com/awslabs/tolap"

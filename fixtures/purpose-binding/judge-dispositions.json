@@ -1,0 +1,114 @@
+{
+  "description": "The judge's verdict maps to a disposition through the two thresholds, and every ambiguous or unusable result escalates. Escalate is NOT allow: a wrapper with no escalation handler denies, or 'escalate to human review' silently means 'permit' in every deployment that has not built the review step. An inverted threshold pair (escalation above confidence) is unusable configuration and escalates rather than guessing which bound was intended.",
+  "action": "getDisposition",
+  "cases": [
+    {
+      "name": "aligned-above-confidence-allows",
+      "result": { "aligned": true, "confidence": 0.95, "reasoning": "counts only, no identifiers" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "allow"
+    },
+    {
+      "name": "aligned-exactly-at-confidence-allows",
+      "result": { "aligned": true, "confidence": 0.85, "reasoning": "boundary case" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "allow"
+    },
+    {
+      "name": "misaligned-above-confidence-blocks",
+      "result": { "aligned": false, "confidence": 0.95, "reasoning": "row-level export attempt" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "block"
+    },
+    {
+      "name": "misaligned-exactly-at-confidence-blocks",
+      "result": { "aligned": false, "confidence": 0.85, "reasoning": "boundary case" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "block"
+    },
+    {
+      "name": "aligned-in-the-ambiguous-band-escalates",
+      "result": { "aligned": true, "confidence": 0.7, "reasoning": "probably fine" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "escalate"
+    },
+    {
+      "name": "misaligned-in-the-ambiguous-band-escalates",
+      "result": { "aligned": false, "confidence": 0.7, "reasoning": "possibly off-task" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "escalate"
+    },
+    {
+      "name": "below-escalation-escalates-even-when-aligned",
+      "result": { "aligned": true, "confidence": 0.4, "reasoning": "cannot tell" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "escalate"
+    },
+    {
+      "name": "below-escalation-escalates-when-misaligned",
+      "result": { "aligned": false, "confidence": 0.4, "reasoning": "cannot tell" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "escalate"
+    },
+    {
+      "name": "exactly-at-escalation-is-not-below-it",
+      "result": { "aligned": true, "confidence": 0.6, "reasoning": "boundary case" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "escalate"
+    },
+    {
+      "name": "zero-confidence-escalates",
+      "result": { "aligned": true, "confidence": 0.0, "reasoning": "no signal" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "escalate"
+    },
+    {
+      "name": "full-confidence-misaligned-blocks",
+      "result": { "aligned": false, "confidence": 1.0, "reasoning": "explicit exfiltration" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "block"
+    },
+    {
+      "name": "absent-thresholds-use-the-documented-defaults",
+      "result": { "aligned": true, "confidence": 0.9, "reasoning": "above the 0.85 default" },
+      "config": {},
+      "expected": "allow"
+    },
+    {
+      "name": "absent-thresholds-escalate-in-the-default-band",
+      "result": { "aligned": true, "confidence": 0.7, "reasoning": "between the 0.6 and 0.85 defaults" },
+      "config": {},
+      "expected": "escalate"
+    },
+    {
+      "name": "equal-thresholds-leave-no-ambiguous-band",
+      "result": { "aligned": true, "confidence": 0.8, "reasoning": "at both bounds" },
+      "config": { "confidenceThreshold": 0.8, "escalationThreshold": 0.8 },
+      "expected": "allow"
+    },
+    {
+      "name": "inverted-thresholds-escalate",
+      "result": { "aligned": true, "confidence": 0.95, "reasoning": "would otherwise allow" },
+      "config": { "confidenceThreshold": 0.6, "escalationThreshold": 0.9 },
+      "expected": "escalate"
+    },
+    {
+      "name": "inverted-thresholds-escalate-rather-than-block",
+      "result": { "aligned": false, "confidence": 0.95, "reasoning": "would otherwise block" },
+      "config": { "confidenceThreshold": 0.6, "escalationThreshold": 0.9 },
+      "expected": "escalate"
+    },
+    {
+      "name": "confidence-below-zero-escalates",
+      "result": { "aligned": true, "confidence": -0.1, "reasoning": "out of range" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "escalate"
+    },
+    {
+      "name": "confidence-above-one-escalates",
+      "result": { "aligned": true, "confidence": 1.5, "reasoning": "out of range" },
+      "config": { "confidenceThreshold": 0.85, "escalationThreshold": 0.6 },
+      "expected": "escalate"
+    }
+  ]
+}

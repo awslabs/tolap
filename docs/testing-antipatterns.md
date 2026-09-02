@@ -96,13 +96,16 @@ differently from where you are used to putting it.
 
 The server suite skips its database-backed tests when `TOLAP_TEST_DB_DSN` is unset, and it does
 this *properly* — the skip condition is asserted from outside the skip, exactly as above. It is
-still a hazard: **209 of 544 tests vanish**, including every §3 `[]`-versus-`null` persistence
-assertion and every §12 revocation assertion. Those are the two properties the whole store design
-exists to protect.
+still a hazard: **227 of 610 tests vanish** — 37% of the suite — including every
+[canonical spec §3](canonical-enforcement-spec.md#3-null-vs-empty-array--the-denyunrestricted-distinction)
+`[]`-versus-`null` persistence assertion and every
+[canonical spec §12](canonical-enforcement-spec.md#12-revocation) revocation assertion — named
+with their document, as §8 below does, because this file has its own §3 and no §12. Those are the
+two properties the whole store design exists to protect.
 
 A correctly-implemented gate catches "the gate broke." It does not catch "the gate was never
-opened," because a suite reporting `330 passed` looks like success rather than like a third of the
-assertions having evaporated.
+opened," because a suite reporting `383 passed` looks like success rather than like more than a
+third of the assertions having evaporated.
 
 **What is done about it.** `.github/workflows/ci.yml` runs a `Policy server DB suites actually ran`
 step that parses the JSON reporter and **fails the build** if any test whose name matches
@@ -201,6 +204,99 @@ Twice, results were not what they appeared:
 code you edited. `python3 -c "import pkg; print(pkg.__file__)"` costs nothing.
 
 ---
+
+## 8. A coverage gap that is a compiler artefact, not a missing test
+
+`PolicyResolutionEngine` sat at 94% branch coverage on two lines that looked like obvious
+gaps:
+
+```csharp
+.Where(a => a.RevokedAt is null || a.RevokedAt > now)
+```
+
+The apparent reading is "nothing tests a future-dated `revokedAt`". Both branch arms of the
+`is null` test were covered; the missing arm was on a *second* branch a few IL offsets later.
+That second branch is the `HasValue` re-check C#'s **lifted** `>` operator emits — and
+control can only reach it when the first `HasValue` already returned true, so one arm is
+unreachable IL. Worse, the `> now` comparison emits **no branch at all**: its bool is the
+return value. So the future-versus-past distinction the coverage number appeared to be
+complaining about was not a branch point in the model, and a test for scheduled revocation
+(which already existed) could never have moved the figure.
+
+Two lessons, and the second is the important one:
+
+- **Read the IL before believing a branch gap.** `coverlet`'s per-offset hit counts name the
+  offset; disassembling it distinguishes "no test covers this" from "no execution can". Here
+  Path 0 had 0 hits and Path 1 had exactly as many as there were non-null evaluations —
+  the signature of dead code rather than of a missing case.
+- **A misread coverage gap sends you to write the wrong test.** The genuinely missing
+  coverage on those lines was the *cross-control* kind this document's §2 describes: two
+  fields sharing one filter pipeline, each individually tested, with nothing asserting they
+  treat the same instant identically. That gap was real and the branch number was silent
+  about it.
+
+The fix for the artefact is a source change, not a test: `a.RevokedAt is not { } r || r > now`
+unwraps to a non-nullable local, so the comparison is unlifted and the dead arm disappears.
+Behaviour is identical — the property is `init`-only, so the two reads were provably the same
+value — and the coverage figure becomes honest. Prefer that spelling wherever a nullable is
+null-tested and then compared.
+
+### The narrow rule about unreachable defensive code
+
+The same run removed **two** guards — not two `catch` blocks. One was a
+`catch (ArgumentException)` in `PolicyResolutionEngine.GlobMatch`; the other was a
+`JsonValueKind` check in `BedrockJudge.Parse`, after a slice taken from the first `{` to the
+last `}`, which is necessarily an object if it parses at all. Both were replaced by a test
+asserting the property that makes them unreachable —
+`GlobMatch_RegexMetacharacters_AreLiteral_SoTheInvalidPatternCatchIsUnreachable` names it in
+its own name.
+
+**This is not a repo-wide policy, and reading it as one would be a mistake.** There are three
+treatments in this codebase, and the choice between them is a judgement about *why* the code
+is unreachable:
+
+| Treatment | Where | When it is right |
+| --- | --- | --- |
+| **Delete**, and assert the property instead | `PolicyResolutionEngine.GlobMatch`'s `ArgumentException` catch; `BedrockJudge.Parse`'s `ValueKind` check | The unreachability is a property of the *same function*, provable in one place and cheap to pin with a test. Nothing a future caller does can reintroduce the case without changing that function. |
+| **Keep**, with a comment saying why | `EnforcementEngine.GlobMatch` retains its `catch (ArgumentException)` — deliberately, with the opposite justification | A row value can be any CLR type a driver produces, and [connector-spec §7](connector-spec.md) requires a non-comparable pair to be a non-match rather than an exception that aborts the whole result pass. The guard is unreachable *today* and load-bearing if the glob-to-regex translation ever changes. |
+| **Suppress the coverage measurement**, leaving the code | Python's `# pragma: no cover` (`enforcement.py`, `resolution.py`, `merger.py`), TypeScript's `/* c8 ignore */` (`enforcement.ts`, `sql-rewriter.ts`, `context-wrapper.ts`, `extractors.ts`) | The same reasoning as "keep", in runtimes where the coverage tool offers an in-source annotation. The comment on the pragma carries the justification, exactly as the retained `catch` does. |
+
+So the rule is not "delete unreachable code to reach 100%". It is: **an unreachable branch must
+carry either a test that proves why it cannot run, or a comment that says why it is kept.** What
+is forbidden is the third state — an unreachable branch with neither, which reads to the next
+reviewer as a handled case that a test simply forgot, and costs them the time it took to reach
+the same conclusion.
+
+The two SDKs that suppress rather than delete are the honest tell that a coverage number is a
+*measurement*, not the objective.
+
+Where the figure is enforced, it is enforced **narrowly**.
+[`tools/purpose-binding-coverage-gate.py`](../tools/purpose-binding-coverage-gate.py) is a
+build-blocking CI step (`.github/workflows/ci.yml`) demanding 100% line *and* branch coverage on
+sixteen named files — the six .NET, five Python and five TypeScript modules purpose binding added.
+It reads the Cobertura and lcov reports the existing test steps already emit, so it adds no
+second test run, and it prints the uncovered lines and one-sided branches so a failure says
+*which arm* stopped being tested rather than only that a number moved.
+
+Three properties of that gate are the interesting ones:
+
+- **Scoped to those files, deliberately not repo-wide.** The script says so itself. A blanket
+  100% rule across a codebase this size produces pressure to write tests that reach lines rather
+  than tests that check behaviour — which is the failure this entire document is about.
+- **A gated file missing from every report is a failure, not a pass.** A module that stopped
+  being *measured* is indistinguishable from one that stopped being *tested*, and the silent
+  version is worse. This is §4's lesson applied to coverage tooling.
+- **It matches on basename**, because the three coverage tools disagree about the root they
+  report against and are not even self-consistent about it.
+
+The reason 100% is worth demanding *here* and nowhere else: purpose binding is four
+access-control decisions, and every one has a fail-closed arm that only runs on the path nobody
+exercises by hand — an unclassified tool, a widened delegation hop, a malformed judge verdict, an
+empty allow-list. Those arms *are* the feature, and a repo-wide percentage is far too coarse to
+notice one branch in four thousand going missing.
+
+`PolicyResolutionEngine.cs`, the file this section opened with, is **not** on that list — which
+is why its 94% had to be read by hand.
 
 ## What "100% coverage" has to mean here
 

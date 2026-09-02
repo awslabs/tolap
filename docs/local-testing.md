@@ -136,9 +136,25 @@ Skips are the failure mode to watch for. Ask pytest to report their reasons:
 cd sdk/python && python3 -m pytest tests/integration/ -q -rs
 ```
 
-With both databases up, the Python integration suite runs 117 tests and skips 3
-(the `TOLAP_TEST_LIVE` fixture-refresh tests). With neither database, all 120 skip
-and the run still reports success.
+The suite collects **384** tests. With both databases up it reports **338 passed, 46
+skipped**. The 46 are *not* all the same thing, and only 3 are the `TOLAP_TEST_LIVE`
+network tests:
+
+| Skipped | Why | How to enable |
+| --: | --- | --- |
+| 39 | AWS integration (`test_s3_storage.py` 23, `test_athena_db.py` 12, `test_bedrock_kb_filter.py` 4) | `TOLAP_TEST_AWS=1` plus credentials |
+| 4 | Bedrock KB end-to-end — needs a provisioned knowledge base | `TOLAP_TEST_KB_ID` (see `provision_bedrock_kb.py`) |
+| 3 | Live network (`test_openfda_record.py`) | `TOLAP_TEST_LIVE=1` |
+
+With **neither** database reachable the run reports **140 passed, 244 skipped** — and
+still exits 0. Note what that means: the suite does not collapse to all-skipped, because
+198 of the 384 are database-dependent and the rest (the live-HTTP-API, KB and openFDA
+fixture tests) run regardless. So a green run tells you nothing about how much of it
+executed. **Compare the counts, not the exit code** — 140 and 338 are both "success".
+
+This is the hazard `testing-antipatterns.md` §4 describes in its "gate that is correct and
+still not enough" note, which is why CI asserts that named suites *ran* rather than that a
+variable was set.
 
 ## Coverage
 

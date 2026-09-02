@@ -4,7 +4,7 @@
  * Types for MCP (Model Context Protocol) tool wrapping with TOLAP enforcement.
  */
 
-import type { EffectivePolicy } from "@aws/tolap-core";
+import type { ActionCategoryMap, EffectivePolicy } from "@aws/tolap-core";
 
 // ---------------------------------------------------------------------------
 // Enforcement Mode
@@ -114,7 +114,40 @@ export interface SecureMcpServerOptions {
     userId: string,
     tenantId: string,
     sourceConnectionId: string,
+    /**
+     * The purpose to resolve for, taken from {@link SecureMcpServerOptions.declaredPurpose}
+     * (canonical-enforcement-spec §15.1).
+     *
+     * Passed as a fourth argument rather than being left to the callback's own closure, because
+     * this wrapper resolves its own policy: without it, resolution excludes every
+     * purpose-scoped definition and returns deny-all, so a purpose-bound policy was simply
+     * unusable through this wrapper family. Fail-closed, but the symptom was a working request
+     * that granted nothing — the hardest kind to diagnose, and a capability the configuration
+     * implied and did not have.
+     *
+     * Optional in the callback so an existing implementation keeps type-checking; it may ignore
+     * the argument, in which case purpose-bound policies remain unresolvable and that is the
+     * integrator's choice rather than a silent default.
+     */
+    declaredPurpose?: string,
   ) => Promise<EffectivePolicy>;
+
+  /**
+   * The purpose this server declares when resolving (§15.1).
+   *
+   * Configuration rather than a per-call argument, for the same reason
+   * {@link toolActionCategories} is: the purpose is what the deployment was authorized for, not
+   * something the caller of a tool picks per invocation.
+   */
+  declaredPurpose?: string;
+
+  /**
+   * Tool name to semantic action category, for purpose-bound action validation (§15.2).
+   *
+   * Set alongside {@link declaredPurpose}: a purpose that constrains actions denies every call
+   * from a wrapper with no map, which is correct and loud but not what an operator intends.
+   */
+  toolActionCategories?: ActionCategoryMap;
   /** Identity extractor. */
   identityExtractor?: RequestIdentityExtractor;
   /** Callback invoked on enforcement decisions (for logging/audit). */

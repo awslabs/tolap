@@ -39,11 +39,29 @@ export interface PolicyStore {
     assigneeIdentifier: string,
   ): Promise<boolean>;
 
-  /** Resolve an effective policy for a user, tenant, and source. */
+  /**
+   * Resolve an effective policy for a user, tenant, and source.
+   *
+   * @param declaredPurpose
+   * The purpose the caller declares, or omitted to declare none. Omitted resolves
+   * exactly the policies it did before purpose binding existed (canonical spec §15.1).
+   *
+   * Threaded through rather than left to the caller to apply afterwards, because
+   * purpose filtering has to happen **before** the merge: a policy scoped to a purpose
+   * the caller did not declare must not fold its rules into the effective policy at
+   * all, and there is no later point at which to undo that. A store that dropped the
+   * parameter would resolve a policy nobody asked for.
+   *
+   * Optional with no default so every existing call site keeps compiling and keeps its
+   * meaning. An external implementor of this interface does have to accept the
+   * parameter; there is no way to extend a resolution contract without that, and
+   * silently ignoring a declared purpose is the outcome worth breaking a build over.
+   */
   resolvePolicy(
     userId: string,
     tenantId: string,
     sourceConnectionId: string,
+    declaredPurpose?: string,
   ): Promise<EffectivePolicy>;
 
   /** Register a listener for audit events. */

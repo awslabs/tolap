@@ -10,6 +10,7 @@ import {
   type AccessResult,
   type FieldAccessResult,
   type MaskingRule,
+  type PurposeProfile,
   type RowFilter,
   FilterOperator,
   WriteOperation,
@@ -209,6 +210,81 @@ export function validateAccess(
   }
 
   return { allowed: true };
+}
+
+// ---------------------------------------------------------------------------
+// Purpose-bound action validation (canonical spec §15.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate a tool call's action category against the purpose it runs under.
+ *
+ * @param actionCategory
+ * The semantic category of the operation, for example `aggregate_overlap`. This
+ * comes from the wrapper's administrator-supplied tool-to-category map, **never**
+ * from the agent: a caller that can name its own category can name an allowed one.
+ * See `validateToolAction` / `validateHttpRequestAction` in `purpose-action.ts`
+ * for the lookup that produces it.
+ *
+ * @param purposeProfile
+ * The profile from the resolved {@link EffectivePolicy}. Purpose-agnostic policies
+ * carry none and never reach here.
+ *
+ * Prohibited is checked before allowed, so a category in both lists is denied and
+ * keeps the more specific reason — the same ordering {@link validateEndpoint} uses
+ * for hidden before allowed.
+ *
+ * `allowedActions` follows spec §3: `undefined` is unrestricted, an empty array
+ * denies everything. The `undefined` case is a real grant rather than an oversight
+ * here, because a purpose may legitimately constrain only what is *forbidden* —
+ * unlike `allowedMethods`, where absence defaults to the read methods (spec §9).
+ *
+ * Comparison is **case-insensitive**, unlike the purposeId comparison at
+ * resolution. The two point the same way: a mis-cased purpose resolves nothing,
+ * and a mis-cased category is still caught by a prohibition. Comparing
+ * case-sensitively here would let `EXPORT_PII` walk past a prohibition on
+ * `export_pii`, which is the one outcome neither reading should permit. The reason
+ * string echoes the category **as supplied** rather than normalized, so a log
+ * shows what was attempted.
+ */
+export function validateAction(
+  actionCategory: string,
+  purposeProfile: PurposeProfile,
+): AccessResult {
+  if (
+    purposeProfile.prohibitedActions !== undefined &&
+    containsIgnoreCase(purposeProfile.prohibitedActions, actionCategory)
+  ) {
+    return {
+      allowed: false,
+      reason:
+        `action '${actionCategory}' is prohibited under purpose ` +
+        `'${purposeProfile.purposeId}'`,
+    };
+  }
+
+  // Retention tested against `undefined` rather than emptiness: an empty
+  // allow-list is the most restrictive outcome the model can express, and a
+  // truthiness check would turn it into no restriction at all (spec §3).
+  if (
+    purposeProfile.allowedActions !== undefined &&
+    !containsIgnoreCase(purposeProfile.allowedActions, actionCategory)
+  ) {
+    return {
+      allowed: false,
+      reason:
+        `action '${actionCategory}' not in allowed actions for purpose ` +
+        `'${purposeProfile.purposeId}'`,
+    };
+  }
+
+  return { allowed: true };
+}
+
+/** Exact membership, case-insensitively — not a glob: a category is an identifier. */
+function containsIgnoreCase(haystack: string[], needle: string): boolean {
+  const lowered = needle.toLowerCase();
+  return haystack.some((entry) => entry.toLowerCase() === lowered);
 }
 
 // ---------------------------------------------------------------------------

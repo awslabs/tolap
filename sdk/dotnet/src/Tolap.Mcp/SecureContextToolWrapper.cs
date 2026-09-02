@@ -25,13 +25,27 @@ namespace Tolap.Mcp;
 /// changing it changes every masked value.
 /// </para>
 /// </param>
+/// <param name="ToolActionCategories">
+/// Tool name to semantic action category, for purpose-bound action validation
+/// (canonical-enforcement-spec.md section 15.2). Set this alongside
+/// <paramref name="AllowedTools"/> whenever any policy the wrapper may resolve carries a
+/// <c>purposeProfile</c> that constrains actions.
+/// <para>
+/// Configuration rather than a caller argument, deliberately: an agent that can name its own
+/// action category can name a permitted one, which reduces the check to a formality. Unset,
+/// a purpose-agnostic policy behaves exactly as before — and a purpose-bound one that
+/// constrains actions denies every call, because a tool the map does not classify cannot be
+/// shown to serve the purpose.
+/// </para>
+/// </param>
 public sealed record SecureContextWrapperOptions(
     string SigningKey,
     bool EnforceSignatures = true,
     bool EnforceExpiry = true,
     string[]? AllowedTools = null,
     bool AllowUnenforceableShapes = false,
-    string? HashSalt = null);
+    string? HashSalt = null,
+    IReadOnlyDictionary<string, string>? ToolActionCategories = null);
 
 /// <summary>
 /// Pre-execution arguments describing what the tool is about to do.
@@ -83,6 +97,25 @@ public sealed class SecureContextToolWrapper
             }
         }
 
+        // The delegation chain, if the context carries one (spec section 15.3).
+        //
+        // Here rather than left to the integrator, because the validator had no call site at
+        // all: `SecurityContextBuilder` *records* a chain and does not check one, so a context
+        // could be built, signed and accepted with a hop that widened its parent's purpose. The
+        // signature proved only that the chain had not been *modified* in transit — which is a
+        // different claim from the chain being valid, and the weaker one.
+        //
+        // After the signature deliberately. Validating an unsigned chain checks the attacker's
+        // own arithmetic, so the order is what makes this worth doing rather than theatre.
+        //
+        // Backward compatible: a context with no chain, or a single hop, is allowed, so every
+        // context predating this feature is unaffected.
+        var chainResult = DelegationChainValidator.Validate(context.DelegationChain);
+        if (!chainResult.Allowed)
+        {
+            return chainResult;
+        }
+
         return new AccessResult(true);
     }
 
@@ -108,6 +141,16 @@ public sealed class SecureContextToolWrapper
         {
             return new AccessResult(false, "query not permitted");
         }
+
+        // Purpose-bound action validation, after the read gate and before the object rules.
+        // The ordering matters in both directions: after canQuery, because a policy that
+        // grants no reads should say so rather than complain about a category; before the
+        // object rules, because "this action does not serve the declared purpose" is the more
+        // specific answer when both would deny, and it is the one that tells an operator what
+        // actually went wrong.
+        var actionResult = PurposeActionResolver.ValidateTool(
+            policy, args.ToolName, _options.ToolActionCategories);
+        if (!actionResult.Allowed) return actionResult;
 
         if (args.ObjectName is not null)
         {

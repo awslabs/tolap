@@ -347,6 +347,113 @@ Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new {
   });
 });
 
+describe("cross-SDK purpose binding", () => {
+  /**
+   * A purpose-bound policy, whose profile must survive the trip into another runtime.
+   *
+   * The purpose rides inside the signed `policies[]` array rather than being projected
+   * separately, so "it is covered by the signature for free" is a claim worth checking in a
+   * second language rather than asserting in a comment. A serializer that dropped
+   * `purposeProfile` would still produce a verifying artifact -- and an enforcement engine
+   * with no profile to consult permits every action, which is the fail-open.
+   */
+  function purposeBoundPolicy(): EffectivePolicy {
+    const now = new Date();
+    return {
+      version: "1.0",
+      userId: "user-marketing-001",
+      tenantId: "tenant-acme-retail",
+      sourceConnectionId: "db:marketing:customer_segments",
+      resolvedAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + TTL_MS).toISOString(),
+      sourceProfiles: ["campaign-x-overlap-agent"],
+      permissions: { canQuery: true, readOnly: true },
+      purposeProfile: {
+        purposeId: "campaign-x-overlap",
+        description: "Identify overlapping opted-in customer segments for Campaign X.",
+        allowedActions: ["aggregate_overlap", "count_segments"],
+        prohibitedActions: ["export_pii"],
+      },
+      integrity: { algorithm: "none", signature: "" },
+    } as EffectivePolicy;
+  }
+
+  it("TypeScript signs and verifies a purpose-bound artifact", () => {
+    const artifact = buildSignedArtifact(purposeBoundPolicy(), KEY, TTL_MS);
+
+    expect(validateContext(artifact, KEY)).toBe(true);
+    expect(artifact.effectivePolicy.purposeProfile?.purposeId).toBe("campaign-x-overlap");
+  });
+
+  it("rejects a widened purpose profile", () => {
+    // The point of carrying the profile inside the signed policy. Emptying
+    // `prohibitedActions` is the edit an attacker wants: it is the difference between
+    // `export_pii` being refused and permitted, and it changes no other field.
+    const artifact = buildSignedArtifact(purposeBoundPolicy(), KEY, TTL_MS);
+    const widened = {
+      ...artifact,
+      effectivePolicy: {
+        ...artifact.effectivePolicy,
+        purposeProfile: {
+          ...artifact.effectivePolicy.purposeProfile!,
+          prohibitedActions: [],
+        },
+      },
+    };
+
+    expect(validateContext(widened, KEY)).toBe(false);
+    expect(validatePolicy(widened.effectivePolicy, KEY)).toBe(false);
+  });
+
+  it.skipIf(!HAVE_PYTHON)(
+    "python reads the purpose profile out of the artifact and enforces on it",
+    () => {
+      const artifact = buildSignedArtifact(purposeBoundPolicy(), KEY, TTL_MS);
+      const encoded = encodeArtifact(artifact);
+
+      // Asserts the action decision, not just that the profile deserialized. A profile
+      // present but never consulted is the same fail-open as a profile that vanished.
+      const script = `
+import json, sys
+sys.path.insert(0, ${JSON.stringify(path.join(REPO, "sdk/python/tolap-core"))})
+sys.path.insert(0, ${JSON.stringify(path.join(REPO, "sdk/python/tolap-mcp"))})
+from tolap_core.context import deserialize_context
+from tolap_core.enforcement import validate_action
+
+ctx = deserialize_context(open(sys.argv[1]).read().strip(), ${JSON.stringify(KEY)})
+profile = ctx.effective_policy.purpose_profile
+
+print(json.dumps({
+    "purposeId": None if profile is None else profile.purpose_id,
+    "allowed": None if profile is None else validate_action("aggregate_overlap", profile).allowed,
+    "prohibited": None if profile is None else validate_action("export_pii", profile).allowed,
+    "unlisted": None if profile is None else validate_action("train_model", profile).allowed,
+}))
+`;
+      const stdout = withArtifactFile(encoded, (file) =>
+        execFileSync("python3", ["-c", script, file], {
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
+      );
+
+      const result = JSON.parse(stdout.trim()) as {
+        purposeId: string | null;
+        allowed: boolean | null;
+        prohibited: boolean | null;
+        unlisted: boolean | null;
+      };
+
+      expect(result.purposeId).toBe("campaign-x-overlap");
+      expect(result.allowed).toBe(true);
+      expect(result.prohibited).toBe(false);
+      // Not in allowedActions, so refused -- the case that proves the allow-list is
+      // consulted rather than only the deny-list.
+      expect(result.unlisted).toBe(false);
+    },
+  );
+});
+
 describe("known-answer signing conformance", () => {
   it("reproduces the shared fixture signature through the server's signing path", async () => {
     // The server calls signContext, so it inherits the cross-SDK canonical form.

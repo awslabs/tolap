@@ -25,7 +25,10 @@ import {
   type PolicyPermissions,
   type MaskingRule,
   type RowFilter,
+  type PurposeProfile,
+  type JudgeConfig,
   maskRestrictiveness,
+  createDenyAllPolicy,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -280,6 +283,160 @@ function mergeObjectRules(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+// ---------------------------------------------------------------------------
+// Purpose profiles (canonical spec §15.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The maximum of the defined values, or `undefined` when every one is absent.
+ *
+ * `undefined` is not folded in as a zero: a policy silent on a threshold is not
+ * asking for a threshold of nothing, and the documented default is applied when
+ * the field is *read* (see `judge.ts`) rather than when it is merged. Baking a
+ * default in here would serialize a value the author never wrote and so change the
+ * signed bytes of every purpose-bound policy.
+ */
+function maxDefined(values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((v): v is number => v !== undefined);
+  return defined.length > 0 ? Math.max(...defined) : undefined;
+}
+
+/** The minimum of the defined values, or `undefined` when every one is absent. */
+function minDefined(values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((v): v is number => v !== undefined);
+  return defined.length > 0 ? Math.min(...defined) : undefined;
+}
+
+/**
+ * Combine judge configurations toward more escalation, or `undefined` when the
+ * profiles name different models — which the caller reads as a **refusal**, not as
+ * "no judge".
+ *
+ * `enabled` ORs so any policy can switch the judge on, while preserving the
+ * three-state `undefined`/`false`/`true`: absent everywhere stays absent rather
+ * than materializing as `false`. Both thresholds take the **maximum** — a higher
+ * confidence bar sends more calls to review rather than letting them through, and
+ * a higher escalation floor does the same. `maxLatencyMs` takes the minimum, and
+ * `historyWindow` the maximum, since more context is the direction that helps a
+ * judge notice drift. Two different models cannot be reconciled at all: a verdict
+ * is only meaningful against the model that produced it.
+ */
+function mergeJudgeConfigs(
+  profiles: PurposeProfile[],
+): JudgeConfig | undefined {
+  const configs = profiles
+    .map((profile) => profile.judge)
+    .filter((judge): judge is JudgeConfig => judge !== undefined);
+
+  if (configs.length === 0) return undefined;
+
+  const models = [
+    ...new Set(
+      configs
+        .map((config) => config.model)
+        .filter((model): model is string => model !== undefined),
+    ),
+  ];
+
+  if (models.length > 1) return undefined;
+
+  const merged: JudgeConfig = {};
+
+  // Tested against `true`/`!== undefined` rather than for truthiness so an
+  // explicit `false` is not mistaken for "nothing said".
+  if (configs.some((config) => config.enabled === true)) {
+    merged.enabled = true;
+  } else if (configs.some((config) => config.enabled !== undefined)) {
+    merged.enabled = false;
+  }
+
+  if (models.length === 1) merged.model = models[0];
+
+  const historyWindow = maxDefined(configs.map((c) => c.historyWindow));
+  if (historyWindow !== undefined) merged.historyWindow = historyWindow;
+
+  const confidenceThreshold = maxDefined(
+    configs.map((c) => c.confidenceThreshold),
+  );
+  if (confidenceThreshold !== undefined) {
+    merged.confidenceThreshold = confidenceThreshold;
+  }
+
+  const escalationThreshold = maxDefined(
+    configs.map((c) => c.escalationThreshold),
+  );
+  if (escalationThreshold !== undefined) {
+    merged.escalationThreshold = escalationThreshold;
+  }
+
+  const maxLatencyMs = minDefined(configs.map((c) => c.maxLatencyMs));
+  if (maxLatencyMs !== undefined) merged.maxLatencyMs = maxLatencyMs;
+
+  return merged;
+}
+
+/**
+ * Combine the purpose profiles of the merged definitions, or `undefined` when none
+ * carry one — and also `undefined` when they *disagree*, which {@link merge} reads
+ * as a refusal.
+ *
+ * The profile is carried onto the effective policy rather than consumed during
+ * resolution because enforcement only ever sees an `EffectivePolicy`. It also
+ * means the purpose travels inside the signed bytes with no change to the signing
+ * projection: the policy is already part of the signed envelope.
+ *
+ * `allowedActions` intersects and `prohibitedActions` unions, so both fold
+ * most-restrictively. Disjoint allow-lists intersect to an empty array, which per
+ * spec §3 denies every action — deliberately **not** collapsed to `undefined`,
+ * which would mean the opposite.
+ *
+ * @param policies Already sorted by priority, so the description a reader sees is
+ * the one from the highest-precedence policy that wrote one.
+ */
+function mergePurposeProfiles(
+  policies: PolicyDefinition[],
+): PurposeProfile | undefined {
+  const profiles = policies
+    .map((p) => p.purposeProfile)
+    .filter((profile): profile is PurposeProfile => profile !== undefined);
+
+  if (profiles.length === 0) return undefined;
+
+  // Case-sensitive, matching the resolution-time comparison. Two spellings of the
+  // same intent are two different purposes as far as this SDK is concerned, and
+  // saying so loudly beats quietly treating them as one.
+  const purposeIds = [...new Set(profiles.map((profile) => profile.purposeId))];
+  if (purposeIds.length > 1) return undefined;
+
+  const judge = mergeJudgeConfigs(profiles);
+  if (judge === undefined && profiles.some((p) => p.judge !== undefined)) {
+    return undefined;
+  }
+
+  const merged: PurposeProfile = { purposeId: purposeIds[0] };
+
+  const description = profiles
+    .map((profile) => profile.description)
+    .find((d) => d !== undefined);
+  if (description !== undefined) merged.description = description;
+
+  const allowedActions = intersectOptional(
+    profiles.map((profile) => profile.allowedActions),
+  );
+  if (allowedActions !== undefined) merged.allowedActions = allowedActions;
+
+  const prohibitedActions = unionArrays(
+    profiles.map((profile) => profile.prohibitedActions),
+  );
+  if (prohibitedActions !== undefined) {
+    merged.prohibitedActions = prohibitedActions;
+  }
+
+  if (judge !== undefined) merged.judge = judge;
+
+  return merged;
+}
+
 function mergeLimits(policies: PolicyDefinition[]): PolicyLimits | undefined {
   const allLimits = policies.map((p) => p.limits);
   const defined = allLimits.filter(
@@ -324,26 +481,58 @@ export interface MergeResult {
   permissions: PolicyPermissions;
   objectRules?: ObjectRules;
   limits?: PolicyLimits;
+  /**
+   * The merged purpose binding (spec §15.2), carried onto the effective policy so
+   * enforcement can read it. Absent when no contributing definition was
+   * purpose-bound.
+   */
+  purposeProfile?: PurposeProfile;
+}
+
+/**
+ * The deny-all merge outcome, derived from {@link createDenyAllPolicy}.
+ *
+ * Projected from the one canonical deny-all rather than restated as a literal, so
+ * "deny-all" has a single definition: `canQuery: false`, `readOnly: true`, no
+ * source profiles, and no rules of any kind. Two places reach it — an empty policy
+ * set and a purpose conflict — and they must agree.
+ */
+function denyAllMergeResult(): MergeResult {
+  const denyAll = createDenyAllPolicy("", "", "");
+  return {
+    sourceProfiles: denyAll.sourceProfiles,
+    permissions: denyAll.permissions,
+  };
 }
 
 /**
  * Merge multiple PolicyDefinitions into a single MergeResult.
+ *
+ * Merges the purpose profiles first, because that step can refuse the whole merge:
+ * two policies bound to *different* purposes have no most-restrictive combination.
+ * Picking one would silently apply rules authored for a purpose the caller did not
+ * declare, and dropping the profile would turn a purpose-scoped policy into an
+ * unscoped one, so the outcome is deny-all (spec §15.2). Resolution never produces
+ * this input, having filtered to a single purpose already; `merge` is public and
+ * must not rely on its caller having done that.
  */
 export function merge(policies: PolicyDefinition[]): MergeResult {
   if (policies.length === 0) {
-    return {
-      sourceProfiles: [],
-      permissions: {
-        canQuery: false,
-        readOnly: true,
-      },
-    };
+    return denyAllMergeResult();
   }
 
   // Sort by priority (lower = higher precedence) for deterministic ordering
   const sorted = [...policies].sort(
     (a, b) => (a.priority ?? 100) - (b.priority ?? 100),
   );
+
+  const purposeProfile = mergePurposeProfiles(sorted);
+  if (
+    purposeProfile === undefined &&
+    sorted.some((p) => p.purposeProfile !== undefined)
+  ) {
+    return denyAllMergeResult();
+  }
 
   const sourceProfiles = sorted.map((p) => p.name);
   const permissions = mergePermissions(sorted);
@@ -353,6 +542,7 @@ export function merge(policies: PolicyDefinition[]): MergeResult {
   const result: MergeResult = { sourceProfiles, permissions };
   if (objectRules !== undefined) result.objectRules = objectRules;
   if (limits !== undefined) result.limits = limits;
+  if (purposeProfile !== undefined) result.purposeProfile = purposeProfile;
 
   return result;
 }

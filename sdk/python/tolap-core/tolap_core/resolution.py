@@ -6,7 +6,12 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from tolap_core.merger import merge
-from tolap_core.models import EffectivePolicy, PolicyAssignment, PolicyDefinition
+from tolap_core.models import (
+    EffectivePolicy,
+    PolicyAssignment,
+    PolicyDefinition,
+    PurposeProfile,
+)
 
 
 # Source-pattern globbing. Bounded like the row-filter patterns for the same
@@ -76,6 +81,8 @@ def resolve(
     definitions: dict[str, PolicyDefinition],
     get_groups: Callable[[str], list[str]],
     get_roles: Callable[[str], list[str]],
+    *,
+    declared_purpose: str | None = None,
 ) -> EffectivePolicy:
     """Resolve the effective policy for a user + tenant + source connection.
 
@@ -83,11 +90,20 @@ def resolve(
     2. Filter by scope (tenant, source connection)
     3. Filter by active status and expiry
     4. Match source patterns from referenced policy definitions
-    5. Sort by priority and delegate to merger
+    5. Match the declared purpose against each definition's ``purpose_profile``
+    6. Sort by priority and delegate to merger
 
     Step 4 excludes a definition whose ``source_patterns`` do not cover
     ``source_connection_id`` (spec section 10), so the effective policy for a source
     is assembled only from rules intended to apply to it.
+
+    ``declared_purpose`` is the purpose the caller declares for this resolution, or
+    ``None`` to declare none (spec section 15.1). It is keyword-only and trailing, so
+    every existing positional call site keeps compiling and keeps meaning what it did.
+    A definition carrying no ``purpose_profile`` resolves either way, so omitting this
+    reproduces the pre-purpose behaviour exactly. A definition that *is* purpose-scoped
+    resolves only on an exact, case-sensitive match -- including not at all when no
+    purpose is declared.
     """
     user_groups = get_groups(user_id)
     user_roles = get_roles(user_id)
@@ -136,6 +152,22 @@ def resolve(
 
         matching_policies.append(policy)
 
+    # Purpose filtering runs BEFORE the merge, and for the same reason source-pattern
+    # filtering does: a definition that does not apply must not fold its rules into the
+    # effective policy at all. Filtering afterwards would mean the rules had already
+    # merged, and whether that widens or narrows access depends on the policies
+    # involved -- either way the resolved policy is not the one the administrator
+    # authored (spec sections 10, 15.1).
+    #
+    # A per-element comprehension rather than a set operation: the same definition
+    # object is appended once per matching assignment, so de-duplicating here would
+    # change which rules merge.
+    matching_policies = [
+        policy
+        for policy in matching_policies
+        if _matches_declared_purpose(policy.purpose_profile, declared_purpose)
+    ]
+
     # Sort by priority (lower values first)
     matching_policies.sort(key=lambda p: p.priority if p.priority is not None else 100)
 
@@ -146,6 +178,36 @@ def resolve(
     result.resolved_at = now.isoformat().replace("+00:00", "Z")
 
     return result
+
+
+def _matches_declared_purpose(
+    profile: PurposeProfile | None,
+    declared_purpose: str | None,
+) -> bool:
+    """Whether a definition's purpose profile admits the caller's declared purpose.
+
+    Three cases, in this order (spec section 15.1):
+
+    - No profile -- the definition is purpose-agnostic and always applies. This is what
+      keeps every pre-purpose policy resolving unchanged.
+    - A profile but no declared purpose -- excluded. A purpose-scoped policy is not a
+      default grant, so the absence of a purpose cannot satisfy it. An empty string
+      normalizes to absent, matching how the signing projection treats it: ``""`` and
+      omitted must not behave as two different declarations.
+    - Both present -- an exact, case-sensitive comparison. Deliberately **not** the
+      glob matching used for chain narrowing or source patterns: those are authored
+      patterns meant to span a family of values, whereas this compares one asserted
+      identifier against one declared identifier. A case-insensitive or glob comparison
+      here would let a caller declaring ``Campaign-X`` -- or ``*`` -- resolve a policy
+      written for ``campaign-x``.
+    """
+    if profile is None:
+        return True
+
+    if not declared_purpose:
+        return False
+
+    return profile.purpose_id == declared_purpose
 
 
 def _is_revoked(assignment: PolicyAssignment, now: datetime) -> bool:
