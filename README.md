@@ -1,18 +1,23 @@
 # TOLAP -- Tool-Object Level Access Protocol
 
-**The missing security layer for AI agent tools.**
+**The security layer your agent tools are missing.**
 
-When an AI agent queries a database, calls an API, or searches a knowledge base on behalf of a user, it does so through tools -- MCP servers, plugins, function calls. These tools connect directly to data sources. The agent constructs its own queries, decides which endpoints to call, and determines what data to retrieve.
+Your agent talks to a database, an API, a knowledge base. It does that through tools: MCP servers,
+plugins, function calls. Those tools hold a live connection to the data, and the agent writes its
+own queries against it.
 
-**The problem:** the tool has unrestricted access to the underlying data. RBAC checks whether a user can access a resource. ABAC evaluates attributes at a gateway. Neither operates where agents actually touch data -- *inside the tool itself*. If the agent constructs a query the application layer did not anticipate, sensitive data leaks through.
+So the tool can read everything. RBAC asks whether a user may reach a resource. ABAC evaluates
+attributes at a gateway. Neither one is standing where the agent actually touches the data, which is
+inside the tool. Write a query nobody anticipated and out comes something sensitive.
 
-**TOLAP fixes this** by moving security enforcement inside the tool, at the data-object level. Column-level masking, row-level filtering, field-level redaction, tag-based access, endpoint restrictions -- enforced transparently before any data reaches the agent. The agent never receives data the user is not authorized to see.
+TOLAP puts the check inside the tool instead, down at the level of individual objects. Hide columns,
+filter rows, mask fields, gate on tags, restrict endpoints. It all happens before a single row
+reaches the agent, and the agent doesn't have to know any of it is going on.
 
 ## The Problem in Practice
 
-Both paths below start the same way and pass the same authorization check. They differ at
-exactly one point -- what the tool is allowed to return -- and everything downstream
-follows from that.
+Both paths below start identically and clear the same authorization check. They part company at one
+point: what the tool is allowed to hand back. Everything after that follows from it.
 
 ```mermaid
 flowchart TD
@@ -48,39 +53,43 @@ flowchart TD
     style T3 fill:#51cf66,color:#fff,stroke:#2b8a3e
 ```
 
-The dark red step is the whole argument, and note **where** it sits: before the
-guardrails, not after. By the time anything filters the output, the unrestricted data is
-already in the agent's context window. Guardrails constrain what the model *says*, not
-what the model *saw* -- so a prompt injection, a tool-call trace, or a follow-up question
-can still surface it.
+Look at where the dark red step sits. It's *before* the guardrails, not after. By the time anything
+filters the output, the data is already sitting in the agent's context window. Guardrails control
+what the model says. They have nothing to say about what the model saw, so a prompt injection, a
+tool-call trace or an innocent follow-up question can still pull it back out.
 
-Note what the two paths share. The IAM/OAuth check passes in both, because it answers a
-different question: *may this agent call this tool?* Neither RBAC at the identity layer
-nor ABAC at a gateway can answer *which columns and rows may this particular user see
-through this particular call* -- that decision has to be made where the query meets the
-data. Every major agent framework -- AWS Bedrock Agents, Azure AI Agent Service, Google
-Vertex AI Agents, LangChain -- acknowledges this and tells you to solve it yourself inside
-your tool code.
+Notice what both paths have in common: the IAM/OAuth check passes either way. It's answering a
+different question, namely *may this agent call this tool at all?* Neither RBAC at the identity
+layer nor ABAC at a gateway can tell you which columns and rows this particular user should see
+through this particular call. That has to be decided where the query meets the data. Bedrock Agents,
+Azure AI Agent Service, Vertex AI Agents, LangChain: they all say the same thing, which is that
+it's on you to handle inside your tool code.
 
-On the green path there is nothing to bypass, because the restricted data never left the
-source.
+On the green path there's nothing to bypass. The restricted data never left the source.
 
-## Three Principles
+## What it comes down to
 
-**Source-Point Enforcement** -- Security is enforced where data originates, not in a layer above it. The tool wraps the data source and applies policies before any data crosses the boundary. There is no path to the data that bypasses enforcement.
+**Enforce at the source, not above it.** The tool wraps the data source and applies the policy
+before anything crosses the boundary. If the wrapper is the only way in, there's no route around it.
 
-**Object Granularity** -- Policies operate on individual data objects: columns, rows, fields, tags, endpoints, HTTP methods, similarity thresholds, file prefixes, result limits. A single policy can say "this user can query the patients table but cannot see the SSN column, rows are filtered to their region, and the email field is returned as a SHA-256 hash."
+**Work at the object level.** Columns, rows, fields, tags, endpoints, HTTP methods, similarity
+thresholds, file prefixes, result caps. One policy can say: this user may query `patients`, but not
+the SSN column, only rows in their own region, and the email comes back as a SHA-256 hash.
 
-**Agent Transparency** -- The calling agent requires zero security-awareness code. Restricted data simply does not exist from the agent's perspective. This eliminates an entire class of prompt injection and data exfiltration risks.
+**Keep the agent out of it.** You write no security-aware code in the agent. From where it sits, the
+restricted data was never there. That takes a whole category of prompt-injection and exfiltration
+problems off the table.
 
 ## Purpose Binding
 
-The three principles above answer "what may this identity see?". A signed context binds
-identity, tenant, source and expiry -- but not the *reason* the data is being read. An
-agent holding a legitimate context can use it for anything its policy happens to permit,
-so an agent that drifts off-task looks identical to one that has not.
+Everything above answers "what may this identity see?" A signed context pins down identity, tenant,
+source and expiry. What it never pins down is *why* the data is being read.
 
-A policy can optionally declare the purpose it serves:
+That's a bigger deal for an agent than for a person. An agent holding a perfectly legitimate context
+can use it for anything its policy happens to allow, which means an agent that has wandered off task
+looks exactly like one that hasn't.
+
+So a policy can say what it's for:
 
 ```json
 "purposeProfile": {
@@ -91,7 +100,7 @@ A policy can optionally declare the purpose it serves:
 }
 ```
 
-That gives three deterministic checks, and one optional non-deterministic one:
+You get three checks that always give the same answer, plus one that doesn't:
 
 | | What it does |
 |---|---|
@@ -100,15 +109,15 @@ That gives three deterministic checks, and one optional non-deterministic one:
 | **Delegation chains** | A human → agent → sub-agent chain may only narrow. A sub-agent cannot grant itself a wider purpose than it was delegated. |
 | **Semantic judge** (opt-in) | An LLM check on whether a call plausibly serves the purpose, across the recent trajectory rather than one call. Strictly subtractive: it can only take away an allowance the deterministic checks already granted. |
 
-**Opt-in and additive.** A policy with no `purposeProfile`, and a caller declaring no
-purpose, behave exactly as they did before -- down to the signed bytes. The purpose and
-the delegation chain are inside the HMAC, so a captured context cannot be repurposed.
+All of it is opt-in. Leave `purposeProfile` off a policy, declare no purpose when you resolve, and
+nothing changes. Not the behaviour, not even the signed bytes. Both the purpose and the delegation
+chain live inside the HMAC, so nobody can lift a context and reuse it for something else.
 
-What it does not do: purpose is *asserted* by the caller. TOLAP verifies the assertion
-matches a policy and that a chain is internally consistent; it cannot verify the caller
-was honest. This constrains a cooperative agent that drifts and bounds the damage from one
-compromised mid-task -- it is not a defence against a lying integrator. See
-[§15](docs/canonical-enforcement-spec.md#15-purpose-binding).
+Here's what it won't do: the caller is the one asserting the purpose, and TOLAP can't tell whether
+they're being honest. It checks that the assertion matches a real policy and that a delegation chain
+doesn't contradict itself. That's enough to catch an agent that drifts, and enough to limit the
+damage when one gets compromised halfway through a task. It is not a defence against an integrator
+who lies to you. Details in [§15](docs/canonical-enforcement-spec.md#15-purpose-binding).
 
 ## What TOLAP Covers
 
@@ -119,48 +128,47 @@ compromised mid-task -- it is not a defence against a lying integrator. See
 | **Knowledge Bases** (Bedrock KB, OpenSearch, Elasticsearch, ...) | Tag-based filtering (classification levels are expressed as tags), similarity thresholds |
 | **Object Storage** (S3, Azure Blob, GCS, ...) | Prefix allow/deny, size limits, metadata masking |
 
-One policy schema covers all source types. No category-specific schemas.
+One schema for every source type. No per-category variants.
 
-Enforcement is applied to results **after** the tool executes — that pass is the
-security boundary and always runs. The agent never receives an excluded row.
+The policy is applied to results *after* the tool runs, and that pass always happens. It's the actual
+security boundary. An excluded row never reaches the agent.
 
-### For SQL sources, you choose where the policy is applied
+### With SQL, you pick where the filtering happens
 
-All three SDKs can restrict database results in two places, and you pick which with
-`SqlEnforcementMode`:
+All three SDKs can cut down database results in two places. `SqlEnforcementMode` decides which:
 
 | Mode | What happens |
 |---|---|
 | **`rewriteAndPost`** (default) | TOLAP pushes row filters into a `WHERE` clause, the result limit into a `LIMIT`, and hidden columns out of the `SELECT`, so the database returns less data. Enforcement still runs on the results. |
 | **`postOnly`** | Your query runs byte for byte as written. Enforcement happens entirely on the rows that come back. |
 
-**Both modes return the same rows.** The mode is a resource decision, not an
-access-control one — which is what makes it safe to expose. It is asserted directly against
-live PostgreSQL and MySQL rather than assumed.
+**Both modes give you the same rows.** That's the point: this is a decision about how much data
+crosses the wire, not about who can see what, which is why it's safe to hand you the switch. And it's
+verified against live PostgreSQL and MySQL, not assumed.
 
-Choose `postOnly` when you will not have your SQL edited: a statement the rewriter's parser
-does not handle, a stored procedure, an ORM that owns its own SQL, or a reviewer who needs
-the query that ran to be the query they wrote. The cost is that the database returns rows
-and columns the post pass then discards, so push limits into your own queries when a
-collection may be large.
+Reach for `postOnly` when your SQL has to stay exactly as written. Maybe the rewriter's parser
+doesn't cover your statement, maybe it's a stored procedure, maybe an ORM owns the SQL, maybe a
+reviewer needs the query that ran to be the query they signed off on. The trade is that the database
+hands back rows and columns the post pass then throws away, so put your own limits in the query if
+the result set could get big.
 
-**There is deliberately no rewrite-only mode**, because the post-execution pass is the
-enforcement boundary and two things have no SQL form at all. Masking is one — no `SELECT`
-returns `[REDACTED]` or a salted hash. The `contains`, `startsWith` and `matches` operators
-are the other: not portably expressible, so the rewriter declines to push them and reports
-them in `unpushableFilters`. Skipping the post pass would return unmasked values *and* rows
-the policy excludes.
+**There's no rewrite-only mode, on purpose.** The post-execution pass *is* the enforcement boundary,
+and two things simply have no SQL equivalent. Masking is the first: no `SELECT` returns `[REDACTED]`
+or a salted hash. The `contains`, `startsWith` and `matches` operators are the second, because
+there's no portable way to express them, so the rewriter leaves them alone and tells you about it in
+`unpushableFilters`. Skip the post pass and you get unmasked values *and* rows the policy said no
+to.
 
 See [`examples/python/enforcement_mode_example.py`](examples/python/enforcement_mode_example.py)
 for a runnable side-by-side comparison.
 
 ## How It Works
 
-1. **Define policies** -- Declarative JSON policies specify what each user/group/role can access, at the object level
-2. **Assign policies** -- Link policies to users, groups, roles, or service accounts with mandatory audit trails
-3. **Resolve** -- The SDK merges all applicable policies using most-restrictive-wins rules
-4. **Sign** -- The merged policy is HMAC-signed for tamper-proof cross-boundary transport
-5. **Enforce** -- The secure tool wrapper applies the policy transparently on every tool call
+1. **Write a policy.** Plain JSON, saying what a user, group or role may reach, object by object.
+2. **Assign it** to a user, group, role or service account. The audit fields aren't optional.
+3. **Resolve.** The SDK pulls every policy that applies and merges them, most restrictive winning.
+4. **Sign.** The merged result gets an HMAC so it survives the trip across a boundary intact.
+5. **Enforce.** The wrapper applies it on every call, and the agent notices nothing.
 
 ```json
 {
@@ -185,12 +193,13 @@ for a runnable side-by-side comparison.
 }
 ```
 
-The agent sees: `J*********` for the name, a SHA-256 hash for the email, no SSN column at all, and only rows from us-east and us-west. The restricted data never crosses the tool boundary.
+What the agent actually gets: `J*********` for the name, a hash where the email was, no SSN column
+at all, and rows only from us-east and us-west. Nothing else made it past the tool.
 
 ## SDK Packages
 
-The TOLAP SDK ships in three languages, each with three packages. **Build them from this
-repository** -- they are not distributed through a package registry.
+Three languages, three packages each. You build them from this repo. They're not on any package
+registry.
 
 ```bash
 git clone https://github.com/awslabs/tolap && cd tolap
@@ -199,10 +208,10 @@ git clone https://github.com/awslabs/tolap && cd tolap
 ./tools/build-local.sh --artifacts  # build only, do not install
 ```
 
-That produces the same artifacts a registry would serve -- wheels, npm tarballs and
-`.nupkg` files under `dist/` -- and installs them locally. A language whose toolchain is
-absent is skipped with a note rather than failing the run. The per-language steps are
-below if you would rather run them yourself.
+You end up with exactly what a registry would have served you: wheels, npm tarballs and `.nupkg`
+files under `dist/`, installed locally. Missing a toolchain for one language? It gets skipped with a
+note instead of taking the whole run down. If you'd rather do it by hand, the per-language steps are
+below.
 
 ### .NET
 
@@ -211,8 +220,8 @@ dotnet pack sdk/dotnet/src/Tolap.Core/Tolap.Core.csproj -c Release -o dist/nuget
 dotnet nuget add source "$PWD/dist/nuget" --name tolap-local
 ```
 
-With that local feed registered, `dotnet add package Tolap.Core` resolves normally. Or
-skip packaging entirely and reference the projects directly:
+Once that feed's registered, `dotnet add package Tolap.Core` just works. Or skip packaging and point
+straight at the projects:
 
 ```xml
 <ProjectReference Include="path/to/tolap/sdk/dotnet/src/Tolap.Core/Tolap.Core.csproj" />
@@ -244,9 +253,9 @@ cd sdk/typescript && npm ci
 for pkg in core store mcp; do (cd "packages/$pkg" && npx tsc -p tsconfig.json); done
 ```
 
-The three are an npm workspace, so a dependent project can reference them by path
-(`file:../tolap/sdk/typescript/packages/core`), which is how [`examples/`](examples/) and
-[`server/`](server/) consume them.
+They're an npm workspace, so you can reference them by path
+(`file:../tolap/sdk/typescript/packages/core`). That's how [`examples/`](examples/) and
+[`server/`](server/) pull them in.
 
 | Package | Description |
 |---------|-------------|
@@ -254,9 +263,17 @@ The three are an npm workspace, so a dependent project can reference them by pat
 | **@aws/tolap-store** | `PolicyStore` interface + in-memory implementation. Pluggable for any backend. |
 | **@aws/tolap-mcp** | Enforcement wrappers for the function your tool layer calls -- MCP servers, agent-framework tools, Lambda handlers. Speaks no wire protocol of its own. |
 
-**Core packages have zero external dependencies** in all three languages. Crypto, JSON, and collections use standard library only. The enforcement engine is embeddable anywhere -- MCP servers, Lambda functions, edge workers, Semantic Kernel plugins. [`examples/`](examples/) shows it wired into fourteen agent frameworks; none of the integrations adds a dependency to your enforcement path.
+**The core packages have no external dependencies at all**, in any of the three languages. Crypto,
+JSON, collections: standard library only. Which means you can drop the enforcement engine wherever you
+like, whether that's an MCP server, a Lambda, an edge worker or a Semantic Kernel plugin.
+[`examples/`](examples/) wires it into fourteen agent frameworks and not one of them puts a dependency
+on your enforcement path.
 
-The `store` packages add nothing beyond `core`. One `mcp` package does: **`tolap-mcp` requires `httpx`**, because its HTTP wrapper uses `httpx.URL` for the same-origin check that stops a redirect leaving the policy's host. The TypeScript and .NET wrappers take a caller-supplied fetch function or `HttpClient` instead and so declare no runtime dependency. If you embed only the enforcement engine, depend on `core` and the question does not arise.
+The `store` packages add nothing on top of `core`. One `mcp` package does: **`tolap-mcp` needs
+`httpx`**, because the HTTP wrapper uses `httpx.URL` for the same-origin check that keeps a redirect
+from walking off the policy's host. TypeScript and .NET take a fetch function or an `HttpClient` from
+you instead, so they declare nothing. Embedding just the engine? Depend on `core` and the question
+never comes up.
 
 ## Quick Start
 
@@ -304,8 +321,8 @@ const policy = await store.resolvePolicy("user-123", "tenant-acme", "ds-postgres
 const context = signContext(buildSecurityContext("user-123", "tenant-acme", policy), signingKey);
 ```
 
-For a runnable version of this wired into an actual agent framework, see
-[`examples/`](examples/) -- 14 integrations, each CI-tested.
+Want to see this running inside a real agent framework? [`examples/`](examples/) has 14 of them, all
+CI-tested.
 
 ### Enforce on Query Results (Python)
 
@@ -342,23 +359,25 @@ var merged = PolicyMerger.Merge(new[] { policyA, policyB });
 
 ## Centralizing the Policy Store
 
-The Quick Start examples above use the built-in `InMemoryPolicyStore` -- great for development, testing, and single-process deployments. In production, you will want a centralized store backed by a database so that all services share the same policies.
+The Quick Start uses `InMemoryPolicyStore`, which is fine for development, tests and a single
+process. In production you'll want a real store behind a database so every service is reading the
+same policies.
 
-> **There is a working implementation of this.** [`server/`](server/) is a policy
-> server with a PostgreSQL store, a `GET /v1/resolve` endpoint that returns a signed
-> policy every one of the three SDKs can verify, schema validation, immutable policy
-> versions with publish and rollback, an audit trail, and Cognito-authenticated
-> admin access. [`console/`](console/) is its UI: it authors every rule in the policy
-> model from a catalog imported from your OpenAPI document or SQL DDL, so a policy names
-> columns and endpoints that exist -- `hiddenFields: ["ssn"]` protects nothing when the
-> column is `ssn_number`, and nothing in TOLAP can detect that. Start with
-> [`docs/policy-server.md`](docs/policy-server.md) if you would rather run one than
-> build one.
+> **You don't have to build one.** [`server/`](server/) already is one: PostgreSQL store, a
+> `GET /v1/resolve` endpoint handing back a signed policy that all three SDKs verify, schema
+> validation, immutable policy versions with publish and rollback, an audit trail, Cognito on the
+> admin side. [`console/`](console/) is the UI for it. It authors every rule in the model against a
+> catalog imported from your OpenAPI document or SQL DDL, so the policy names columns and endpoints
+> that actually exist. Worth caring about: `hiddenFields: ["ssn"]` protects nothing at all if the
+> column is really `ssn_number`, and TOLAP has no way to notice. Start at
+> [`docs/policy-server.md`](docs/policy-server.md) if running one beats building one.
 >
-> The rest of this section is for integrators embedding TOLAP directly, or building
-> a store against a different backend.
+> The rest of this section is for you if you're embedding TOLAP directly or writing a store against
+> some other backend.
 
-The SDK defines a store interface (`IPolicyStore` in .NET, `PolicyStore` protocol in Python, `PolicyStore` interface in TypeScript). Implement it against any backend. Here is a PostgreSQL example for each language:
+There's a store interface in each SDK: `IPolicyStore` in .NET, a `PolicyStore` protocol in Python, a
+`PolicyStore` interface in TypeScript. Implement it against whatever you're using. Here's PostgreSQL
+in all three:
 
 ### Schema
 
@@ -519,7 +538,7 @@ export class PostgresPolicyStore implements PolicyStore {
 
 ### Other Backends
 
-The same interface works with any backend:
+Same interface, any backend:
 
 | Backend | Best for |
 |---------|----------|
@@ -532,7 +551,7 @@ For caching, architecture diagrams, and a complete policy service API design, se
 
 ## Policy Merge Rules
 
-When multiple policies apply to a user, TOLAP merges them using most-restrictive-wins:
+When several policies apply to one user, they get merged. Most restrictive wins, every time:
 
 | Field Type | Strategy | Example |
 |-----------|----------|---------|
@@ -548,9 +567,10 @@ When multiple policies apply to a user, TOLAP merges them using most-restrictive
 | `purposeProfile.purposeId` | Must agree | Two different purposes cannot merge -> deny-all |
 | `purposeProfile.judge.model` | Must agree | Two different models cannot merge -> deny-all. Same hazard class as `purposeId`: a verdict is only meaningful against the model that produced it, so picking one would apply a judgement nobody asked for |
 
-The two **deny-all** rows are the ones to know: everywhere else the merge narrows, but a
-disagreement about *which purpose* or *which judge model* has no most-restrictive combination, so
-it refuses. The full table, including the judge thresholds and window, is
+Pay attention to the two **deny-all** rows. Everywhere else the merge just narrows things. But
+two policies disagreeing about *which purpose* or *which judge model* have no most-restrictive
+combination to pick — one of them has to lose, and picking would apply rules the caller never
+asked for. So it refuses instead. Full table, thresholds and window included, in
 [spec §15.5](docs/canonical-enforcement-spec.md#155-merging-purpose-profiles).
 
 ## TOLAP vs Traditional Approaches
@@ -566,52 +586,51 @@ it refuses. The full table, including the judge thresholds and window, is
 
 ## Policy Schema
 
-Four published schemas: three policy layers, plus the envelope that carries the resolved policy.
+Four schemas. Three for the policy layers, one for the envelope that carries the resolved policy
+around.
 
 1. **[Policy Definition](schema/v1.0/policy-definition.schema.json)** -- Declares access rules: objects, fields, rows, tags, endpoints, masking, limits, and an optional `purposeProfile`
 2. **[Policy Assignment](schema/v1.0/policy-assignment.schema.json)** -- Links a policy to a user/group/role with scope, expiry, and audit trail
 3. **[Effective Policy](schema/v1.0/effective-policy.schema.json)** -- The merged result enforced at the tool layer
-4. **[Security Context](schema/v1.0/security-context.schema.json)** -- **New in 1.1.0.** The signed envelope, which had no published schema at all before this release: it was prose plus two known-answer fixtures. It describes the **canonical signing projection** rather than any SDK's native context type, since the three deliberately differ and converge only at the signed form. It gives `delegationHop` and `principalType` a published contract, and it makes every `fixtures/signing/*.json` canonical payload schema-checked rather than merely described — before it, a signing fixture could carry any field at all and nothing would notice.
+4. **[Security Context](schema/v1.0/security-context.schema.json)** — **new in 1.1.0.** The signed envelope. It had no schema at all before this release, just prose and two known-answer fixtures. It describes the *canonical signing projection*, not any one SDK's context type, because the three differ on purpose and only meet at the signed form. Practical upshot: `delegationHop` and `principalType` finally have a published contract, and every `fixtures/signing/*.json` payload is checked against it. Before, a signing fixture could carry any field it liked and nothing noticed.
 
-All four set `additionalProperties: false`. Schema version: **v1.0** (strict versioning, no
-extension points) — every 1.1.0 addition is an optional property, so a v1.0 policy is still a
-valid v1.0 policy.
+All four are `additionalProperties: false`. The schema stays at **v1.0** — strict, no extension
+points. Everything 1.1.0 added is an optional property, so your v1.0 policies are still valid
+v1.0 policies.
 
 ## Security Properties
 
-- **Non-bypassable where the wrapper is the only path** -- Enforcement runs inside the
-  tool, so an agent cannot route around it. This holds only as far as the integrator
-  wires it: a tool that reaches a data source without going through a secure wrapper is
-  outside the boundary, and TOLAP cannot know about it.
-- **Tamper-proof** -- Effective policies are HMAC-signed over a canonical form that
-  covers the whole context including its expiry. Any modification invalidates the
-  signature, and a context signed by one SDK verifies in the other two.
-- **Replay-bounded** -- Signed contexts carry an expiry that is inside the signature, so
-  it cannot be extended without the key. Each context also carries a signed `jti`, and the
-  deserializers accept an optional `ReplayGuard` that makes a context single-use. Without a
-  guard a valid context is replayable until it expires, so keep TTLs short.
-- **Cross-boundary** -- Signed contexts can be transported across process, network, and
-  cloud boundaries without losing integrity.
-- **Revocation is enforced by the SDK** -- An assignment carrying `revokedAt` stops
-  resolving, overriding `active` and `expiresAt`, and an unreadable value fails closed.
-  If you write your own store, filter revoked rows anyway, but that filter is no longer
-  the only thing standing between a revoked grant and a resolved policy.
-- **Masking can be a confidentiality control** -- Configure a `hashSalt` and `hash`
-  becomes a keyed HMAC rather than a plain digest, so a masked SSN or date of birth is
-  not recoverable by rainbow table. The same salt yields the same pseudonym in every
-  SDK, so it still works as a cross-service join key.
-- **Access can be bound to a declared purpose** -- A policy carrying a `purposeProfile`
-  resolves only for a caller declaring a matching purpose, and the purpose is inside the
-  signature, so a captured context cannot be repurposed. A delegation chain may only
-  narrow, so a sub-agent cannot grant itself wider authority than it was handed. Both are
-  opt-in; the purpose is caller-asserted, which is what this does and does not buy you.
-- **Audit fields are mandatory in the schema** -- Every policy assignment must carry who
-  granted it, when, and why. This is a schema constraint on stored assignments; validate
-  assignments against the schema in your store, because the SDK does not reject an
-  assignment that omits them at load time.
+- **Nothing routes around it — as far as you wire it.** Enforcement lives inside the tool, so
+  the agent has no way past. The honest caveat: that only holds where the wrapper is the only
+  path. A tool that reaches a data source directly is outside the boundary and TOLAP has no way
+  to know it exists.
+- **You can't tamper with a signed policy.** The HMAC covers the whole canonical form, expiry
+  included. Change anything and the signature stops verifying. Sign in one SDK, verify in the
+  other two.
+- **Replay is bounded, not prevented.** The expiry is inside the signature, so nobody extends it
+  without the key. Every context carries a signed `jti`, and the deserializers take an optional
+  `ReplayGuard` if you want single-use. Without one, a valid context works until it expires —
+  so keep your TTLs short.
+- **It survives the trip.** Process, network, cloud boundary: integrity holds.
+- **Revocation is the SDK's job now.** An assignment with `revokedAt` stops resolving, beating
+  both `active` and `expiresAt`, and an unreadable value fails closed. Still filter revoked rows
+  in your own store if you write one — just know that filter is no longer the only thing between
+  a revoked grant and a live policy.
+- **Masking can actually be a confidentiality control.** Set a `hashSalt` and `hash` becomes a
+  keyed HMAC instead of a plain digest, so a masked SSN or date of birth doesn't fall to a
+  rainbow table. Same salt, same pseudonym, every SDK — so it still joins across services.
+- **Access can be tied to a purpose.** A policy with a `purposeProfile` resolves only for a
+  caller declaring the matching purpose, and that purpose is inside the signature, so a captured
+  context can't be pointed at something else. Delegation chains only narrow, so a sub-agent
+  can't hand itself more authority than it was given. Opt-in, and remember the purpose is
+  caller-asserted.
+- **The schema won't let you skip the audit fields.** Who granted it, when, and why are
+  required on every assignment. That's a constraint on the *stored* document, so validate
+  against the schema in your store — the SDK won't reject an assignment missing them at load
+  time.
 
-See [Known limitations](docs/canonical-enforcement-spec.md#13-known-limitations) for the
-full list of what TOLAP does not guarantee.
+[Known limitations](docs/canonical-enforcement-spec.md#13-known-limitations) has the full list of
+what TOLAP doesn't promise. Worth reading before you rely on any of the above.
 
 ## Documentation
 
@@ -638,8 +657,8 @@ full list of what TOLAP does not guarantee.
 
 ## Integration Examples
 
-Fourteen runnable integrations across three languages, each CI-tested to enforce the **same policy
-identically**. See [`examples/`](examples/).
+Fourteen runnable integrations across three languages. Every one is CI-tested to enforce the
+**same policy** and get the **same answer**. See [`examples/`](examples/).
 
 | Language | Frameworks | Tests |
 | --- | --- | --: |
@@ -647,19 +666,22 @@ identically**. See [`examples/`](examples/).
 | [TypeScript](examples/typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 49 |
 | [.NET](examples/dotnet/) | MCP SDK, Semantic Kernel | 36 |
 
-Each language also carries **two** examples that are not framework integrations — the
-enforcement-mode example and the purpose-binding example — so 20 example files in total. Those six
-are outside the fourteen and are counted in the test numbers above.
+Each language also has two examples that aren't framework integrations — one for enforcement mode,
+one for purpose binding. That's 20 files in total. Those six sit outside the fourteen, and their
+tests are included in the numbers above.
 
-**TOLAP is not an MCP server and does not speak the MCP protocol.** It ships no JSON-RPC, no stdio
-transport, no `tools/list`, and declares no MCP dependency in any package. The `*-mcp` packages
-provide enforcement *around the function your tool layer already calls* -- which is why the
-integration is the same substitution in **thirteen** of the fourteen cases, and why none of them
-takes a credential. Your code fetches the data; TOLAP decides what may leave. The fourteenth is
-Bedrock Agents, which invokes a Lambda: the signed context cannot be built locally, so it arrives
-as a session attribute and the handler verifies the signature before enforcing.
+**One thing to be clear about: TOLAP is not an MCP server and doesn't speak the MCP protocol.** No
+JSON-RPC, no stdio transport, no `tools/list`, and not one package declares an MCP dependency. The
+`*-mcp` packages wrap *the function your tool layer already calls*. That's why the integration is
+the same substitution in thirteen of the fourteen, and why none of them wants a credential. Your
+code fetches the data. TOLAP decides what's allowed to leave.
 
-Every example runs against a fake source returning **4 rows and 5 columns**, and every one returns:
+The fourteenth is Bedrock Agents, which invokes a Lambda. You can't build the signed context
+locally there, so it arrives as a session attribute and the handler checks the signature before
+enforcing anything.
+
+Every example hits a fake source with **4 rows and 5 columns**, and every single one comes back
+with this:
 
 ```
 { id: 1, name: "Alice Nguyen", region: "us-east", dob: "[REDACTED]" }
@@ -669,16 +691,15 @@ Every example runs against a fake source returning **4 rows and 5 columns**, and
 `ssn` hidden · `dob` redacted · `eu-west` filtered out · capped at 2 · `encounters` refused before
 any query runs.
 
-The expected output is written identically in all three test suites on purpose, and each suite is
-parametrised across its frameworks rather than written per framework. A per-framework test would
-pass if one integration quietly returned the raw rows, because nothing would compare it to the
-others. All three are mutation-verified: bypassing enforcement in the shared helper fails 30/42,
-20/30 and 8/12 assertions respectively.
+That expected output is written out identically in all three suites, deliberately, and each suite
+is parametrised across its frameworks rather than written framework by framework. Write one test
+per framework and any single integration could quietly start returning raw rows — nothing would be
+comparing it to the others. All three are mutation-verified too: rip enforcement out of the shared
+helper and you fail 30 of 42, 20 of 30 and 8 of 12 assertions.
 
-Thirteen of the fourteen are in-process. **Bedrock Agents** is the exception -- it invokes a Lambda,
-so the signed context arrives as a session attribute and the handler verifies the signature before
-enforcing. A handler that fell back to "no policy" on a missing attribute would be an
-unauthenticated read of the data source, so it returns `403`; that case is tested.
+Thirteen run in-process. Bedrock Agents is the exception, for the reason above. And note what its
+handler does with a *missing* session attribute: it returns `403`. Falling back to "no policy"
+there would be an unauthenticated read of the data source. That case has a test.
 
 ## Project Structure
 
@@ -705,21 +726,22 @@ tolap/
   .github/         CI: the SDK gate, plus a separate weekly examples workflow
 ```
 
-`fixtures/` and `examples/` both exist for the same reason. A behaviour difference between .NET,
-Python and TypeScript is a security defect, not an inconsistency -- so the shared fixtures demand
-byte-identical output from the three SDKs, and the examples demand the same enforced result from
-14 integrations across all three. Both are structured so a divergence shows up as a *different
-result* rather than hiding behind separately-written expectations.
+`fixtures/` and `examples/` are both here for one reason. If .NET, Python and TypeScript disagree
+about anything, that's a security defect, not an inconsistency — one signed policy would grant
+different access depending on which SDK read it. So the shared fixtures demand byte-identical
+output from all three, and the examples demand the same enforced result from 14 integrations
+across all three. Both are built so a divergence shows up as a *different result*, instead of
+hiding behind expectations that were written separately.
 
 ## Contributing
 
-TOLAP is protocol-agnostic: it enforces around the function your tool layer calls, so it works with
-MCP servers, Semantic Kernel plugins, LangChain tools, Bedrock Agents or any other tool-based agent
-architecture. [`examples/`](examples/) demonstrates fourteen of them.
+TOLAP doesn't care what protocol you're using. It wraps the function your tool layer calls, so MCP
+servers, Semantic Kernel plugins, LangChain tools, Bedrock Agents and anything else tool-shaped all
+work the same way. [`examples/`](examples/) has fourteen of them.
 
-Adding a framework is welcome, and the bar is a runnable example plus its assertions in the
-matching `test_examples` suite -- an example nothing executes will drift silently, and one that
-mis-wires enforcement teaches people to bypass it. Contributions welcome -- see
+Adding another is welcome. The bar is a runnable example plus its assertions in the matching
+`test_examples` suite — an example nothing runs will drift without anyone noticing, and one that
+wires enforcement wrongly teaches people to bypass it. See
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
