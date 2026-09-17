@@ -1,0 +1,19 @@
+{
+  "_comment": "TOLAP is a polyglot SDK + policy server, not a single-stack API. Recorded so scripts and the next audit agree.",
+  "routes": "server/src/routes",
+  "handlers": "server/src/routes",
+  "_handlers_note": "Fastify: handlers are inline closures in the route files, not a separate directory. Route-to-handler is 1:1 by construction, so the surface table's 'dispatched' column is not a meaningful gap axis here.",
+  "backend": "server",
+  "clients": ["console", "examples/typescript", "examples/python", "examples/dotnet", "sdk/typescript/packages/mcp", "sdk/python/tolap-mcp", "sdk/dotnet/src/Tolap.Mcp"],
+  "apiStack": null,
+  "apiStackName": null,
+  "_auth_note": "There is NO API Gateway. infra/lib has Network, Database, Identity, Server, Edge stacks; the server runs behind an ALB/CloudFront. Auth is enforced in Fastify (requireInstall on the resolve port, Cognito role guards on admin), NOT by an AuthorizationType on a Gateway method. Auth per route must be read from the route source and its guards, and that is a weaker signal than a synth template - stated rather than glossed.",
+  "excludeFromAllScans": ["infra/cdk.out", "node_modules", "dist", "bin", "obj", "coverage", "TestResults"],
+  "_exclude_note": "infra/cdk.out/asset.*/ contains a COMPLETE staged copy of the repo, including its own package.json files with test scripts and its own Tolap.sln. Any scan that does not exclude it double-counts everything.",
+  "testRoots": {
+    "typescript": ["console", "examples/typescript", "infra", "sdk/typescript/packages/core", "sdk/typescript/packages/store", "sdk/typescript/packages/mcp", "server"],
+    "python": ["sdk/python", "examples/python"],
+    "dotnet": ["sdk/dotnet/Tolap.sln", "examples/dotnet"]
+  },
+  "_dotnet_note": "Tolap.sln and examples/dotnet must run SERIALLY: both build Tolap.Core.dll and contend for the same obj/ output, which fails the build with CS2012 and looks like a test failure."
+}

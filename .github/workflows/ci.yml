@@ -255,6 +255,31 @@ jobs:
           print(f"all spec-compliance suites ran ({len(skipped)} unrelated skips)")
           PY
 
+      # -- Infrastructure --
+      #
+      # These 48 tests were in no workflow at all, so they had never run in CI. They are not
+      # incidental coverage: they assert that no security group admits 0.0.0.0/0, that the
+      # admin load balancer is internal-only, that the signing key is passed by reference
+      # rather than by value, that the seeded database password reaches no stack output, that
+      # Cognito's implicit flow and self sign-up are off, and that the seeding function holds
+      # exactly one Cognito action scoped to the pool.
+      #
+      # Every one of those is a property a refactor can silently reverse -- widen an ingress
+      # rule, flip a scheme to internet-facing, interpolate a secret into an output -- and
+      # nothing was checking. A CDK assertion suite that does not gate is documentation.
+      #
+      # No AWS credentials needed: these assert against a synthesized template, not a
+      # deployed stack.
+      - name: Infrastructure install
+        working-directory: infra
+        run: npm ci
+      - name: Infrastructure typecheck
+        working-directory: infra
+        run: npx tsc --noEmit
+      - name: Infrastructure test
+        working-directory: infra
+        run: npx vitest run
+
       # -- Console --
       #
       # Independent of the SDKs: the console talks to the server over HTTP and
