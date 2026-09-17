@@ -78,39 +78,14 @@ git clone https://github.com/awslabs/tolap && cd tolap
 Both paths below start identically and clear the same authorization check. They part company at one
 point: what the tool is allowed to hand back. Everything after that follows from it.
 
-```mermaid
-flowchart TD
-    A[User request] --> B[Agent framework]
-    B -->|"IAM / OAuth: may the agent invoke this tool? YES"| SPLIT{{"Tool executes<br/>the query it built"}}
+<div align="center">
 
-    SPLIT --> W1
-    SPLIT --> T1
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/problem-dark.svg">
+  <img src="assets/diagrams/problem-light.svg" alt="Two paths from a tool call. Both clear the same IAM/OAuth check. WITHOUT TOLAP the full result — ssn, plaintext email, every region — lands in the agent's context window before any gate, and content guardrails run too late to matter. WITH TOLAP the wrapper enforces the policy at the source, so the context window holds only a dropped ssn, a hashed email and in-region rows, and there is nothing left to leak." width="900">
+</picture>
 
-    subgraph gap ["❌ WITHOUT TOLAP — enforcement above the tool"]
-        direction TB
-        W1["Tool has full access<br/>to the data source"]
-        W1 --> W2["Every row and column<br/>returned to the agent"]
-        W2 --> LEAK(["Unauthorized data is now in<br/>the agent's context window"])
-        LEAK --> W3["Content guardrails<br/>redact PII in the output text"]
-        W3 --> W4["Response to user"]
-    end
-
-    subgraph fix ["✅ WITH TOLAP — enforcement inside the tool"]
-        direction TB
-        T1["TOLAP wrapper enforces<br/>columns · rows · fields · tags · endpoints"]
-        T1 --> T2["Only authorized data<br/>leaves the data source"]
-        T2 --> T3["Agent receives<br/>filtered results"]
-        T3 --> T4["Content guardrails"]
-        T4 --> T5["Response to user"]
-    end
-
-    style W1 fill:#ff6b6b,color:#fff,stroke:#cc0000
-    style W2 fill:#ff6b6b,color:#fff,stroke:#cc0000
-    style LEAK fill:#8a1c1c,color:#fff,stroke:#5c0000
-    style T1 fill:#51cf66,color:#fff,stroke:#2b8a3e
-    style T2 fill:#51cf66,color:#fff,stroke:#2b8a3e
-    style T3 fill:#51cf66,color:#fff,stroke:#2b8a3e
-```
+</div>
 
 Look at where the dark red step sits. It's *before* the guardrails, not after. By the time anything
 filters the output, the data is already sitting in the agent's context window. Guardrails control
@@ -167,6 +142,21 @@ You get three checks that always give the same answer, plus one that doesn't:
 | **Action validation** | A tool call must carry an action category the purpose permits. The category comes from an administrator-supplied map, never from the agent. |
 | **Delegation chains** | A human → agent → sub-agent chain may only narrow. A sub-agent cannot grant itself a wider purpose than it was delegated. |
 | **Semantic judge** (opt-in) | An LLM check on whether a call plausibly serves the purpose, across the recent trajectory rather than one call. Strictly subtractive: it can only take away an allowance the deterministic checks already granted. |
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/purpose-binding-dark.svg">
+  <img src="assets/diagrams/purpose-binding-light.svg" alt="A signed context declaring a purpose runs three deterministic checks in order — resolution filter, action validation, delegation-chain narrowing. Only if all three allow does an optional semantic judge run; it can only withdraw that allowance, never grant one, and escalate denies unless a reviewer is wired." width="760">
+</picture>
+
+</div>
+
+The judge is the only non-deterministic step, and it sits **last** on purpose. The three checks
+above it always give the same answer; the judge runs only on a call they already allowed, and it
+can only take the allowance away. That ordering is what makes a prompt-injected judge survivable —
+the worst it can do is deny something that was about to be allowed, never allow something that was
+denied.
 
 All of it is opt-in. Leave `purposeProfile` off a policy, declare no purpose when you resolve, and
 nothing changes. Not the behaviour, not even the signed bytes. Both the purpose and the delegation
