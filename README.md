@@ -1,18 +1,77 @@
-# TOLAP -- Tool-Object Level Access Protocol
+<div align="center">
+
+<img src="assets/logo/tolap.svg" alt="TOLAP" width="150" height="150" />
+
+# TOLAP
+
+### Tool-Object Level Access Protocol
+
+</div>
+
+<div align="center">
 
 **The security layer your agent tools are missing.**
 
-Your agent talks to a database, an API, a knowledge base. It does that through tools: MCP servers,
-plugins, function calls. Those tools hold a live connection to the data, and the agent writes its
-own queries against it.
+</div>
 
-So the tool can read everything. RBAC asks whether a user may reach a resource. ABAC evaluates
-attributes at a gateway. Neither one is standing where the agent actually touches the data, which is
-inside the tool. Write a query nobody anticipated and out comes something sensitive.
+<div align="center">
 
-TOLAP puts the check inside the tool instead, down at the level of individual objects. Hide columns,
-filter rows, mask fields, gate on tags, restrict endpoints. It all happens before a single row
-reaches the agent, and the agent doesn't have to know any of it is going on.
+Object-level access control enforced *inside the tool*, before any data reaches the agent.
+Hide columns, filter rows, mask fields, gate on tags and endpoints — one policy schema across
+databases, APIs, knowledge bases and object storage. Three SDKs, byte-identical. Apache 2.0.
+
+</div>
+
+<div align="center">
+
+![License](https://img.shields.io/badge/License-Apache_2.0-2DD4BF?style=flat-square)
+![SDKs](https://img.shields.io/badge/SDKs-.NET_·_Python_·_TypeScript-F59E0B?style=flat-square)
+![Schema](https://img.shields.io/badge/schema-v1.0-64748B?style=flat-square)
+![Version](https://img.shields.io/badge/packages-1.1.0-64748B?style=flat-square)
+
+**[Documentation](docs/architecture.md)** ·
+**[Quick Start](#quick-start)** ·
+**[Policy Server](docs/policy-server.md)** ·
+**[Examples](examples/)** ·
+**[Threat Model](docs/security/threat-model.md)**
+
+</div>
+
+---
+
+Your agent talks to a database, an API, a knowledge base — through tools: MCP servers, plugins,
+function calls. Those tools hold a live connection to the data and the agent writes its own queries
+against it. RBAC asks whether a user may reach a resource; ABAC evaluates attributes at a gateway.
+Neither one is standing where the agent actually touches the data, which is *inside the tool*. Write
+a query nobody anticipated and out comes something sensitive.
+
+TOLAP puts the check there instead. Wrap the function your tool already calls, and restricted data
+never crosses the boundary — the agent doesn't have to know any of it is happening.
+
+```python
+# Python — enforcement is transparent; the agent sees only what the policy allows
+from tolap_mcp import SecureMcpToolWrapper, SecureMcpServerOptions
+
+tool = SecureMcpToolWrapper(SecureMcpServerOptions(signing_key=KEY))
+rows = tool.post_execute(context, db.query("SELECT * FROM patients"))
+# ssn column dropped · email hashed · out-of-region rows removed — before the agent sees them
+```
+
+```typescript
+// TypeScript — same policy, same result, one function around your data
+import { applyResultPipeline } from "@aws/tolap-core";
+
+const rows = applyResultPipeline(await db.query("SELECT * FROM patients"), policy);
+// ssn column dropped · email hashed · out-of-region rows removed — before the agent sees them
+```
+
+```bash
+# Build from source — the SDKs are not published to a registry
+git clone https://github.com/awslabs/tolap && cd tolap
+./tools/build-local.sh          # wheels · npm tarballs · .nupkg under dist/, all three languages
+```
+
+---
 
 ## The Problem in Practice
 

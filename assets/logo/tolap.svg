@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-label="TOLAP boundary mark">
+  <rect width="400" height="400" rx="72" fill="#232F3E"/>
+  <line x1="200" y1="70" x2="200" y2="330" stroke="#F59E0B" stroke-width="10" stroke-linecap="round" opacity="0.55"/>
+  <g fill="#7D8B9E">
+    <rect x="70" y="120" width="70" height="16" rx="8"/>
+    <rect x="70" y="164" width="70" height="16" rx="8"/>
+    <rect x="70" y="208" width="70" height="16" rx="8"/>
+    <rect x="70" y="252" width="70" height="16" rx="8"/>
+  </g>
+  <rect x="260" y="120" width="70" height="16" rx="8" fill="#2DD4BF"/>
+  <rect x="260" y="164" width="34" height="16" rx="8" fill="#2DD4BF"/>
+  <rect x="300" y="164" width="30" height="16" rx="8" fill="#232F3E" stroke="#54637A" stroke-width="3"/>
+  <rect x="260" y="208" width="70" height="16" rx="8" fill="#2DD4BF"/>
+  <rect x="260" y="252" width="30" height="16" rx="8" fill="#232F3E" stroke="#54637A" stroke-width="3"/>
+  <circle cx="200" cy="200" r="26" fill="#232F3E" stroke="#F59E0B" stroke-width="10"/>
+  <circle cx="200" cy="200" r="7" fill="#F59E0B"/>
+</svg>
