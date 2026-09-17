@@ -1,7 +1,7 @@
 {
   "name": "tolap-examples-typescript",
   "overrides": {
-    "js-yaml": "^3.15.1"
+    "js-yaml": "^3.15.2"
   },
   "private": true,
   "type": "module",
