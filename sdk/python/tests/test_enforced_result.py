@@ -95,7 +95,7 @@ def _run(wrapper: SecureMcpToolWrapper, context: SecurityContext, result: Any) -
 
 def test_the_corpus_carries_the_expected_case_count() -> None:
     # A case dropped from the fixture is coverage lost silently.
-    assert len(FIXTURE["cases"]) == 33
+    assert len(FIXTURE["cases"]) == 36
 
 
 @pytest.mark.parametrize("case", FIXTURE["cases"], ids=[c["name"] for c in FIXTURE["cases"]])

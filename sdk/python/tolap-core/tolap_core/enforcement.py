@@ -570,35 +570,52 @@ def apply_similarity_floor(results: list, policy: EffectivePolicy) -> list:
     return kept
 
 
+def _field_is_removed(policy: EffectivePolicy, name: str) -> bool:
+    """Whether the field-level steps remove ``name``: it is hidden or projected out."""
+    if any(_field_name_matches(pattern, name) for pattern in _hidden_field_patterns(policy)):
+        return True
+    allowed = _allowed_field_patterns(policy)
+    return allowed is not None and not any(
+        _field_name_matches(pattern, name) for pattern in allowed
+    )
+
+
 def _apply_visible_similarity_floor(results: list, policy: EffectivePolicy) -> list:
     """The relevance floor over already-enforced output, per record.
 
-    Walks the score keys in the pipeline's precedence order and stops at the first
-    one that is either masked or present in the record:
+    The full pipeline applies the floor before it strips hidden and projected-out
+    fields, so already-enforced output tells the floor what the producer's pipeline
+    saw. Walks the score keys in the pipeline's precedence order and, per key:
 
-    - a masked key keeps the record: the mask hides the value, so it cannot be read;
-    - a present key is read and the floor applied to its value, which fails closed
-      on a non-numeric value exactly as :func:`apply_similarity_floor` does.
+    - present and not masked (including a hidden or projected-out key the tool left
+      in): apply the floor to its value, failing closed on a non-numeric value
+      exactly as :func:`apply_similarity_floor` does; stop;
+    - masked, meaning a masking rule matches it and it is neither hidden nor
+      projected out (a hidden and masked key counts as hidden): keep the record,
+      since the mask hides the value; stop;
+    - absent and hidden or projected out: keep the record, since the producer's
+      pipeline applied the floor to it before removing it; stop;
+    - absent and untouched: continue to the next key.
 
-    Only a masked key hides the value. A key that is hidden or that allowedFields
-    projects out, but that the tool left in the record, is still read, as deniedTags
-    reads a hidden tag key that is still present. A record with no masked and no
-    present score key is dropped, as :func:`apply_similarity_floor` drops an
-    unscored record, so an unscored record is kept only when a masked score key
-    could have held its score.
+    A record the walk does not stop on is unscored and dropped, as
+    :func:`apply_similarity_floor` drops it. When no score key is transformed this
+    is :func:`apply_similarity_floor` exactly.
     """
     if not policy.limits or policy.limits.min_similarity_score is None:
         return results
+    removed = {key for key in _SCORE_KEYS if _field_is_removed(policy, key)}
     rules = _masking_rules(policy)
-    masked = {key for key in _SCORE_KEYS if _rule_for_key(rules, key) is not None}
-    if not masked:
+    masked = {
+        key for key in _SCORE_KEYS if key not in removed and _rule_for_key(rules, key) is not None
+    }
+    if not removed and not masked:
         return apply_similarity_floor(results, policy)
 
     floor = policy.limits.min_similarity_score
     kept = []
     for record in results:
         lowered = {str(k).lower() for k in record} if isinstance(record, Mapping) else set()
-        # No masked and no present score key: unscored, so dropped (fails closed).
+        # A record the walk does not stop on is unscored, so dropped (fails closed).
         for key in _SCORE_KEYS:
             if key in masked:
                 kept.append(record)
@@ -607,6 +624,9 @@ def _apply_visible_similarity_floor(results: list, policy: EffectivePolicy) -> l
                 score = _numeric_field(record, (key,))
                 if score is not None and score >= floor:
                     kept.append(record)
+                break
+            if key in removed:
+                kept.append(record)
                 break
     return kept
 
@@ -734,10 +754,7 @@ def _field_is_transformed(policy: EffectivePolicy, name: str) -> bool:
     field is absent (hidden or projected out), so the filter fails closed and drops
     every record, or it holds the mask, so the filter compares against the mask.
     """
-    if any(_field_name_matches(pattern, name) for pattern in _hidden_field_patterns(policy)):
-        return True
-    allowed = _allowed_field_patterns(policy)
-    if allowed is not None and not any(_field_name_matches(pattern, name) for pattern in allowed):
+    if _field_is_removed(policy, name):
         return True
     return any(_field_name_matches(rule.field, name) for rule in _masking_rules(policy))
 
@@ -752,7 +769,7 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
       2. tag filters      deniedTags always, over the tag keys that are not masked;
                           allowedTags when no tag key is hidden, projected out or masked
       3. relevance floor  per record, walking the score keys in precedence order to
-                          the first masked (keep) or present (read) key
+                          the first that is present, masked or removed upstream
       5. hidden fields    removing an absent field is a no-op
       6. allowed fields   projecting a projection is a no-op
       8. result limit     truncating a truncated list is a no-op
@@ -767,10 +784,10 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
            record, so the filter fails closed and drops all of them, or it holds the
            mask, so the filter compares against the mask. deniedTags is never
            skipped (it cannot drop a record for a missing tag);
-      3.   a score key that is masked -- the floor keeps a record whose first masked
-           or present score key is masked. A hidden or projected-out score key the
-           tool left in the record is still read, and a record with no masked and no
-           present score key is dropped;
+      3.   the floor on a record whose first decisive score key is masked, or is
+           hidden or projected out and absent (the producer's pipeline applied the
+           floor before removing it). A score key the tool left in the record is
+           read, and a record with no decisive score key is dropped;
       4.   the size ceiling -- a record's size changes once it is projected and masked;
       7.   masking -- ``hash`` is not idempotent, so a second pass hashes the hash.
 

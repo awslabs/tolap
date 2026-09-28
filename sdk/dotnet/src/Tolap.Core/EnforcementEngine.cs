@@ -688,7 +688,7 @@ public static class EnforcementEngine
     /// <summary>
     /// Re-applies the pipeline steps that are no-ops over a result the tool's data layer
     /// already enforced: row filters and tag filters on visible fields, the similarity
-    /// floor on unmasked score keys, hidden-field removal, allowed-field projection and the result limit.
+    /// floor per record, hidden-field removal, allowed-field projection and the result limit.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -701,8 +701,10 @@ public static class EnforcementEngine
     /// always runs, reading tags only from tag keys that are not masked (it cannot drop a
     /// record for a missing tag); AllowedTags runs only when no tag key is transformed.
     /// The similarity floor runs per record, walking the score keys in precedence order
-    /// to the first that is masked (the record is kept) or present (its value is read,
-    /// even when the key is hidden or projected out); a record with neither is dropped.
+    /// to the first decisive key: a present key is read (even when hidden or projected
+    /// out); a masked key that is neither hidden nor projected out, or a hidden or
+    /// projected-out key that is absent (the producer's pipeline applied the floor before
+    /// removing it), keeps the record; a record with no decisive key is dropped.
     /// Over correctly
     /// enforced data those are no-ops, and they drop any record the data layer let
     /// through.
@@ -774,12 +776,21 @@ public static class EnforcementEngine
     /// </summary>
     private static bool FieldIsTransformed(EffectivePolicy policy, string name)
     {
+        if (FieldIsRemoved(policy, name)) return true;
+        return policy.ObjectRules?.FieldRules?.MaskedFields is { } masked
+            && masked.Any(rule => FieldNameMatches(rule.Field, name));
+    }
+
+    /// <summary>
+    /// Whether the field-level steps remove <paramref name="name"/>: it is hidden or
+    /// projected out.
+    /// </summary>
+    private static bool FieldIsRemoved(EffectivePolicy policy, string name)
+    {
         var fieldRules = policy.ObjectRules?.FieldRules;
         if (fieldRules?.HiddenFields is { } hidden && hidden.Any(p => FieldNameMatches(p, name)))
             return true;
-        if (fieldRules?.AllowedFields is { } allowed && !allowed.Any(p => FieldNameMatches(p, name)))
-            return true;
-        return fieldRules?.MaskedFields is { } masked && masked.Any(rule => FieldNameMatches(rule.Field, name));
+        return fieldRules?.AllowedFields is { } allowed && !allowed.Any(p => FieldNameMatches(p, name));
     }
 
     /// <summary>
@@ -852,16 +863,19 @@ public static class EnforcementEngine
     /// The similarity floor over already-enforced output, per record.
     /// </summary>
     /// <remarks>
-    /// Walks the score keys in the pipeline's precedence order and stops at the first one
-    /// that is either masked or present in the record. A masked key keeps the record: the
-    /// mask hides the value, so it cannot be read. A present key is read and the floor
-    /// applied to its value, which fails closed on a non-numeric value exactly as
-    /// <see cref="ApplySimilarityFloor"/> does. Only a masked key hides the value: a key
-    /// that is hidden or that AllowedFields projects out, but that the tool left in the
-    /// record, is still read, as DeniedTags reads a hidden tag key that is still present.
-    /// A record with no masked and no present score key is dropped, as
-    /// <see cref="ApplySimilarityFloor"/> drops an unscored record, so an unscored record
-    /// is kept only when a masked score key could have held its score.
+    /// The full pipeline applies the floor before it strips hidden and projected-out
+    /// fields, so already-enforced output tells the floor what the producer's pipeline
+    /// saw. Walks the score keys in the pipeline's precedence order and, per key: a key
+    /// that is present and not masked (including a hidden or projected-out key the tool
+    /// left in) has the floor applied to its value, failing closed on a non-numeric value
+    /// exactly as <see cref="ApplySimilarityFloor"/> does; a masked key (a masking rule
+    /// matches it and it is neither hidden nor projected out, so a hidden and masked key
+    /// counts as hidden) keeps the record, since the mask hides the value; a key that is
+    /// absent and hidden or projected out keeps the record, since the producer's pipeline
+    /// applied the floor to it before removing it; and a key that is absent and untouched
+    /// moves the walk to the next key. A record the walk does not stop on is unscored and
+    /// dropped. When no score key is transformed this is
+    /// <see cref="ApplySimilarityFloor"/> exactly.
     /// </remarks>
     private static IReadOnlyList<Dictionary<string, object?>> ApplyVisibleSimilarityFloor(
         IReadOnlyList<Dictionary<string, object?>> records,
@@ -869,9 +883,12 @@ public static class EnforcementEngine
     {
         var floor = policy.Limits?.MinSimilarityScore;
         if (floor is null) return records;
+        var removed = ScoreKeys.Where(key => FieldIsRemoved(policy, key)).ToHashSet();
         var rules = policy.ObjectRules?.FieldRules?.MaskedFields ?? [];
-        var masked = ScoreKeys.Where(key => RuleForKey(rules, key) is not null).ToHashSet();
-        if (masked.Count == 0) return ApplySimilarityFloor(records, policy);
+        var masked = ScoreKeys
+            .Where(key => !removed.Contains(key) && RuleForKey(rules, key) is not null)
+            .ToHashSet();
+        if (removed.Count == 0 && masked.Count == 0) return ApplySimilarityFloor(records, policy);
 
         return records.Where(record =>
         {
@@ -882,9 +899,10 @@ public static class EnforcementEngine
                 {
                     return NumericField(record, [key]) is double score && score >= floor.Value;
                 }
+                if (removed.Contains(key)) return true;
             }
 
-            // No masked and no present score key: unscored, so dropped (fails closed).
+            // A record the walk does not stop on is unscored, so dropped (fails closed).
             return false;
         }).ToList();
     }

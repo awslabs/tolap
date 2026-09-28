@@ -1,5 +1,5 @@
 {
-  "description": "Already-enforced results: a tool opts out of re-enforcement by returning an EnforcedResult marker bound to the signed context's signature. Honoured only on an exact, constant-time signature match, and only by executeWithEnforcement. An honoured marker skips masking, the size ceiling, each row filter or allowedTags filter whose field the policy hides, projects out or masks, and the similarity floor on a record whose first masked-or-present score key is masked. The filters on visible, unmasked, allowed fields, the hidden-field strip, the allowed-field projection and maxResults are re-applied, because over already-enforced output they are no-ops.",
+  "description": "Already-enforced results: a tool opts out of re-enforcement by returning an EnforcedResult marker bound to the signed context's signature. Honoured only on an exact, constant-time signature match, and only by executeWithEnforcement. An honoured marker skips masking, the size ceiling, each row filter or allowedTags filter whose field the policy hides, projects out or masks, and the similarity floor on a record whose first decisive score key is masked (and neither hidden nor projected out) or is hidden or projected out and absent, since the producer's pipeline applied the floor before removing it. A score key the tool left in the record is read, even a hidden one. The filters on visible, unmasked, allowed fields, the hidden-field strip, the allowed-field projection and maxResults are re-applied, because over already-enforced output they are no-ops.",
   "action": "executeWithEnforcement",
   "signingKey": "already-enforced-fixture-key-0123456789abcdef",
   "context": {
@@ -1282,7 +1282,7 @@
       ]
     },
     {
-      "name": "matching marker drops an unscored record when a score key is hidden but none is masked",
+      "name": "matching marker keeps records whose hidden score key is absent, scored or not",
       "policy": {
         "version": "1.0",
         "permissions": {
@@ -1309,11 +1309,19 @@
           "similarity": 0.1
         }
       ],
-      "expected": [],
-      "notes": "Only a masked score key hides the value. A hidden score key proves nothing about the record's score, so a record with no masked and no present score key is dropped (fails closed), and similarity is read on the other. Over-drops a record whose hidden score the data layer checked; see the next case."
+      "expected": [
+        {
+          "id": 1
+        },
+        {
+          "id": 2,
+          "similarity": 0.1
+        }
+      ],
+      "notes": "The full pipeline applies the floor before hiddenFields strips score, so an absent hidden score key means the producer's pipeline already checked it. The walk stops at score and keeps both records; similarity is never read."
     },
     {
-      "name": "matching marker reads the next score key in precedence when a hidden score key is absent",
+      "name": "matching marker agrees with the full pipeline when a hidden score key is absent and the next key is below the floor",
       "policy": {
         "version": "1.0",
         "permissions": {
@@ -1337,8 +1345,13 @@
           "similarity": 0.1
         }
       ],
-      "expected": [],
-      "notes": "Known residual. The marked record is what the full pipeline makes of {name: a, score: 0.9, similarity: 0.1}: the floor runs before hiddenFields, reads score (0.9) and keeps it, then score is stripped. Over the marked output score is absent and not masked, so the walk reads similarity (0.1) and drops it. The marker path over-drops here, which fails closed; it is pinned rather than special-cased."
+      "expected": [
+        {
+          "name": "a",
+          "similarity": 0.1
+        }
+      ],
+      "notes": "The marked record is what the full pipeline makes of {name: a, score: 0.9, similarity: 0.1}: the floor reads score (0.9) and keeps it, then score is stripped. The walk stops at the absent hidden score key and keeps it, so the two paths agree."
     },
     {
       "name": "matching marker reads a hidden score key the tool left in the record",
@@ -1405,6 +1418,99 @@
         }
       ],
       "notes": "score is first in precedence and masked, so the walk stops there and keeps the record: the mask hides the value the data layer checked. similarity is never read."
+    },
+    {
+      "name": "matching marker reads a hidden and masked score key the tool left in the record",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "score"
+            ],
+            "maskedFields": [
+              {
+                "field": "score",
+                "maskType": "redact"
+              }
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "score": 0.1
+        }
+      ],
+      "expected": [],
+      "notes": "A hidden and masked key counts as hidden: the full pipeline strips it before masking, so no mask ever lands. Present, so it is read and the record dropped."
+    },
+    {
+      "name": "matching marker keeps a record whose hidden and masked score key is absent",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "score"
+            ],
+            "maskedFields": [
+              {
+                "field": "score",
+                "maskType": "redact"
+              }
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "similarity": 0.1
+        }
+      ],
+      "expected": [
+        {
+          "name": "a",
+          "similarity": 0.1
+        }
+      ],
+      "notes": "A hidden and masked key counts as hidden. Absent, so the producer's pipeline already applied the floor to it; similarity is never read."
+    },
+    {
+      "name": "matching marker drops an unscored record when no score key is transformed",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a"
+        }
+      ],
+      "expected": [],
+      "notes": "With no score key hidden, projected out or masked the walk never stops, so the record is unscored and dropped, as the full pipeline drops it."
     },
     {
       "name": "matching marker skips the size ceiling",

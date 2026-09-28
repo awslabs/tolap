@@ -791,26 +791,33 @@ export function applySimilarityFloor<T>(
 /**
  * The similarity floor over already-enforced output, per record.
  *
- * Walks the score keys in the pipeline's precedence order and stops at the first
- * one that is either masked or present in the record:
+ * The full pipeline applies the floor before it strips hidden and projected-out
+ * fields, so already-enforced output tells the floor what the producer's pipeline
+ * saw. Walks the score keys in the pipeline's precedence order and, per key:
  *
- * - a masked key keeps the record: the mask hides the value, so it cannot be read;
- * - a present key is read and the floor applied to its value, which fails closed on
- *   a non-numeric value exactly as {@link applySimilarityFloor} does.
+ * - present and not masked (including a hidden or projected-out key the tool left
+ *   in): apply the floor to its value, failing closed on a non-numeric value exactly
+ *   as {@link applySimilarityFloor} does; stop;
+ * - masked, meaning a masking rule matches it and it is neither hidden nor projected
+ *   out (a hidden and masked key counts as hidden): keep the record, since the mask
+ *   hides the value; stop;
+ * - absent and hidden or projected out: keep the record, since the producer's
+ *   pipeline applied the floor to it before removing it; stop;
+ * - absent and untouched: continue to the next key.
  *
- * Only a masked key hides the value. A key that is hidden or that allowedFields
- * projects out, but that the tool left in the record, is still read, as deniedTags
- * reads a hidden tag key that is still present. A record with no masked and no
- * present score key is dropped, as {@link applySimilarityFloor} drops an unscored
- * record, so an unscored record is kept only when a masked score key could have
- * held its score.
+ * A record the walk does not stop on is unscored and dropped, as
+ * {@link applySimilarityFloor} drops it. When no score key is transformed this is
+ * {@link applySimilarityFloor} exactly.
  */
 function applyVisibleSimilarityFloor<T>(results: T[], policy: EffectivePolicy): T[] {
   const floor = policy.limits?.minSimilarityScore;
   if (floor === undefined || floor === null) return results;
+  const removed = new Set(SCORE_KEYS.filter((key) => fieldIsRemoved(policy, key)));
   const rules = maskingRules(policy);
-  const masked = new Set(SCORE_KEYS.filter((key) => ruleForKey(rules, key) !== undefined));
-  if (masked.size === 0) return applySimilarityFloor(results, policy);
+  const masked = new Set(
+    SCORE_KEYS.filter((key) => !removed.has(key) && ruleForKey(rules, key) !== undefined),
+  );
+  if (removed.size === 0 && masked.size === 0) return applySimilarityFloor(results, policy);
 
   return results.filter((record) => {
     const present = isRecord(record)
@@ -822,8 +829,9 @@ function applyVisibleSimilarityFloor<T>(results: T[], policy: EffectivePolicy): 
         const score = numericField(record, [key]);
         return score !== undefined && score >= floor;
       }
+      if (removed.has(key)) return true;
     }
-    // No masked and no present score key: unscored, so dropped (fails closed).
+    // A record the walk does not stop on is unscored, so dropped (fails closed).
     return false;
   });
 }
@@ -987,12 +995,15 @@ export function applyResultPipeline(
  * output no longer carries its raw value.
  */
 function fieldIsTransformed(policy: EffectivePolicy, name: string): boolean {
+  if (fieldIsRemoved(policy, name)) return true;
+  return maskingRules(policy).some((rule) => fieldNameMatches(rule.field, name));
+}
+
+/** Whether the field-level steps remove `name`: it is hidden or projected out. */
+function fieldIsRemoved(policy: EffectivePolicy, name: string): boolean {
   if (hiddenFieldPatterns(policy).some((p) => fieldNameMatches(p, name))) return true;
   const allowed = allowedFieldPatterns(policy);
-  if (allowed !== undefined && !allowed.some((p) => fieldNameMatches(p, name))) {
-    return true;
-  }
-  return maskingRules(policy).some((rule) => fieldNameMatches(rule.field, name));
+  return allowed !== undefined && !allowed.some((p) => fieldNameMatches(p, name));
 }
 
 /**
@@ -1005,7 +1016,7 @@ function fieldIsTransformed(policy: EffectivePolicy, name: string): boolean {
  *   2. tag filters        deniedTags always, over the tag keys that are not
  *                         masked; allowedTags only if no tag key is transformed
  *   3. similarity floor   per record, walking the score keys in precedence order
- *                         to the first masked (keep) or present (read) key
+ *                         to the first that is present, masked or removed upstream
  *   5. hidden fields      removing an absent field is a no-op
  *   6. allowed fields     projecting a projection is a no-op
  *   8. result limit       truncating a truncated list is a no-op
@@ -1018,10 +1029,11 @@ function fieldIsTransformed(policy: EffectivePolicy, name: string): boolean {
  * a no-op, and it drops any record the data layer let through.
  *
  * deniedTags is never skipped: it cannot drop a record for a missing tag. The
- * similarity floor skips only a masked score key: it keeps a record whose first
- * masked or present score key is masked. A hidden or projected-out score key the
- * tool left in the record is still read, and a record with no masked and no
- * present score key is dropped.
+ * similarity floor reads a score key the tool left in the record, even a hidden
+ * or projected-out one; keeps a record whose first decisive score key is masked
+ * (and neither hidden nor projected out), or is hidden or projected out and absent,
+ * since the producer's pipeline applied the floor before removing it; and drops a
+ * record with no decisive score key.
  *
  * Always skipped:
  *
