@@ -42,8 +42,9 @@ in TypeScript, and `EnforcedResult.For(data, context)` in .NET.
 - An honoured marker skips masking and the size ceiling. A row filter still runs unless its
   field is hidden, projected out or masked. `deniedTags` always runs, reading only the tag
   keys that are not masked; `allowedTags` runs unless a tag key is transformed. The relevance
-  floor runs per record over the score keys that are not transformed, and keeps a record
-  with none of them only when a score key is. Hidden-field removal, allowed-field projection
+  floor walks the score keys in precedence order to the first that is masked (the record is
+  kept) or present (its value is read, even when hidden or projected out); a record with
+  neither is dropped. Hidden-field removal, allowed-field projection
   and `maxResults` still run.
   Pre-execution checks are unchanged.
 - A marker is bound to a context, not to one call: it is honoured on every call made with that

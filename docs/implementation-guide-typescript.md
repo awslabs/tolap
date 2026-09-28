@@ -307,9 +307,12 @@ it.
   `classification`) that are not masked. A denylist never drops an untagged record, so a tag
   key the data layer removed cannot make it over-drop. `allowedTags` runs unless a tag key is
   transformed, because it does drop an untagged record.
-- The relevance floor runs per record, over the score keys (`score`, `similarity`,
-  `similarityScore`, `_score`) that are not transformed. When some score key is transformed, a
-  record carrying none of the others is kept, since its score may have been removed.
+- The relevance floor runs per record, walking the score keys in precedence order (`score`,
+  `similarity`, `similarityScore`, `_score`) to the first that is masked or present. A masked
+  key keeps the record, since the mask hides the value. A present key is read, even when it is
+  hidden or projected out, as `deniedTags` reads a tag key the tool left in. A record with no
+  masked and no present score key is dropped. This can over-drop: when `score` is hidden, a
+  record the data layer kept on its `score` is re-checked on its next score key.
 - Hidden fields are stripped again, the result is projected to `allowedFields` again, and
   `maxResults` still truncates it.
 

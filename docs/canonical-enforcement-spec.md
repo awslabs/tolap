@@ -524,13 +524,16 @@ is set and no pattern matches it) or masks it. An honoured marker's data gets:
   `classification`) that are not masked: a denylist never drops an untagged record,
   so a removed tag key cannot make it over-drop;
 - `allowedTags`, if no tag key is transformed;
-- the relevance floor, per record, over the score keys that are not transformed; when
-  some score key is transformed, a record carrying none of the others is kept;
+- the relevance floor, per record, walking the score keys in precedence order to the
+  first that is masked or present: a masked key keeps the record (the mask hides the
+  value), a present key is read even when it is hidden or projected out, and a record
+  with neither is dropped. When `score` is hidden, a record the data layer kept on its
+  `score` is re-checked on its next score key, which can over-drop;
 - hidden-field removal, allowed-field projection and the result limit.
 
 Over correctly enforced data these are no-ops, and they drop what the data layer let
 through. Skipped: masking, because `hash` is not idempotent; a row filter,
-`allowedTags` or score key over a transformed field, because the output no longer
+or `allowedTags` over a transformed field, and a masked score key, because the output no longer
 carries its value, so the step would fail closed on every record or compare against
 the mask; and the size ceiling, because a record's size changes once it is projected
 and masked.
