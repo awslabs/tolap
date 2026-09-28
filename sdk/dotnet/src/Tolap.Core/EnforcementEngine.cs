@@ -134,17 +134,35 @@ public static class EnforcementEngine
     /// <c>ssn</c>. <c>allowedFields</c> uses the allow-direction rule
     /// (<see cref="AllowedFieldMatches"/>), so an entry does not allow another object's field:
     /// <c>*.name</c> does not allow <c>encounters.name</c> (issue #36).
+    /// This overload keeps its original signature for binary compatibility. The object the
+    /// fields belong to is unknown, so it is
+    /// <see cref="ValidateFieldAccess(string[], EffectivePolicy, string?)"/> with a null
+    /// object name.
+    /// </remarks>
+    /// <param name="fields">The fields being accessed.</param>
+    /// <param name="policy">The effective policy.</param>
+    public static FieldAccessResult ValidateFieldAccess(string[] fields, EffectivePolicy policy)
+        => ValidateFieldAccess(fields, policy, null);
+
+    /// <summary>
+    /// Validates which fields of a named object are accessible under the given policy.
+    /// Returns lists of allowed and denied fields.
+    /// </summary>
+    /// <remarks>
+    /// The rules are those of <see cref="ValidateFieldAccess(string[], EffectivePolicy)"/>.
     /// </remarks>
     /// <param name="fields">The fields being accessed.</param>
     /// <param name="policy">The effective policy.</param>
     /// <param name="objectName">
-    /// The object the fields belong to, or null when unknown. A bare field is then checked
-    /// against <c>allowedFields</c> as <c>objectName.field</c>, so under <c>patients.name</c> a
-    /// bare <c>name</c> read from <c>encounters</c> is denied and one read from
-    /// <c>patients</c> is allowed.
+    /// The object the fields belong to, or null when unknown. The entry is still matched
+    /// against the field as written; a bare field is read as <c>objectName.field</c> only to
+    /// detect a qualifier conflict (<see cref="AllowedFieldInObject"/>). So under
+    /// <c>patients.name</c> a bare <c>name</c> read from <c>encounters</c> is denied and one
+    /// read from <c>patients</c> is allowed, while <c>p*</c> does not allow a bare <c>ssn</c>
+    /// read from <c>patients</c>.
     /// </param>
     public static FieldAccessResult ValidateFieldAccess(
-        string[] fields, EffectivePolicy policy, string? objectName = null)
+        string[] fields, EffectivePolicy policy, string? objectName)
     {
         var fieldRules = policy.ObjectRules?.FieldRules;
 
@@ -164,8 +182,8 @@ public static class EnforcementEngine
             // Check allowed fields (if specified, field must be in the set)
             if (fieldRules?.AllowedFields is not null)
             {
-                var key = QualifyWithObject(field, objectName);
-                var isAllowed = fieldRules.AllowedFields.Any(a => AllowedFieldMatches(a, key));
+                var isAllowed = fieldRules.AllowedFields.Any(
+                    a => AllowedFieldInObject(a, field, objectName));
                 if (!isAllowed)
                 {
                     denied.Add(field);
@@ -180,9 +198,25 @@ public static class EnforcementEngine
     }
 
     /// <summary>
+    /// Whether an <c>allowedFields</c> entry allows <paramref name="field"/> read from or
+    /// written to <paramref name="objectName"/>.
+    /// </summary>
+    /// <remarks>
+    /// The entry is matched against the field <em>as written</em>. The object name is used only
+    /// to detect a qualifier conflict: a bare field is read as <c>objectName.field</c> for that
+    /// check alone. Matching the qualified form instead would let a bare glob reach a field it
+    /// never names, because <c>*</c> crosses <c>.</c>: <c>p*</c> would allow a bare <c>ssn</c>
+    /// of <c>patients</c> through <c>patients.ssn</c> (issue #36).
+    /// </remarks>
+    private static bool AllowedFieldInObject(string pattern, string field, string? objectName)
+        => FieldNameMatches(pattern, field)
+            && !QualifiersConflict(pattern, QualifyWithObject(field, objectName));
+
+    /// <summary>
     /// <c>objectName.field</c> for a bare field when the object is known, else <c>field</c>.
-    /// Used only for the <c>allowedFields</c> check (issue #36). A field that already carries
-    /// a qualifier keeps it, and the deny-direction rules always see the field as written.
+    /// Used only for the <c>allowedFields</c> qualifier-conflict check (issue #36), never for
+    /// the match itself. A field that already carries a qualifier keeps it, and the
+    /// deny-direction rules always see the field as written.
     /// </summary>
     private static string QualifyWithObject(string field, string? objectName) =>
         !string.IsNullOrEmpty(objectName) && !field.Contains('.')
@@ -1511,11 +1545,13 @@ public static class EnforcementEngine
     /// read path uses (section 3.2), so a <c>readOnlyFields</c> entry of
     /// <c>patients.created_at</c> blocks a payload key of <c>created_at</c>. The
     /// <c>allowedFields</c> check additionally refuses a key qualified with a different object
-    /// than the entry (<see cref="AllowedFieldMatches"/>), so <c>patients.name</c> does not make
+    /// than the entry (<see cref="AllowedFieldInObject"/>), so <c>patients.name</c> does not make
     /// <c>encounters.name</c> writable. When the write names its target object, a bare payload
-    /// key is checked against <c>allowedFields</c> as <c>objectName.key</c>, so under
+    /// key is read as <c>objectName.key</c> for that conflict check only, so under
     /// <c>patients.name</c> an insert into <c>encounters</c> carrying <c>{"name": ...}</c> is
-    /// refused. The hidden and read-only checks see the key as written.
+    /// refused. The entry is always matched against the key as written, so <c>p*</c> does not
+    /// make a bare <c>ssn</c> writable in <c>patients</c>. The hidden and read-only checks see
+    /// the key as written.
     /// </para>
     /// <para>
     /// The field is named in the reason. That discloses nothing: the caller supplied it. Row
@@ -1550,10 +1586,11 @@ public static class EnforcementEngine
             // A null allow-list is unrestricted; an empty one denies every field (spec
             // section 3), so this tests for null rather than for emptiness. The allow
             // direction does not let a qualified entry reach another object's key (issue #36),
-            // and a bare key is read as belonging to the write's target object.
+            // and a bare key is read as belonging to the write's target object for the
+            // conflict check only.
             if (fieldRules.AllowedFields is not null
                 && !fieldRules.AllowedFields.Any(
-                    p => AllowedFieldMatches(p, QualifyWithObject(name, objectName))))
+                    p => AllowedFieldInObject(p, name, objectName)))
             {
                 return new AccessResult(false, $"field not in allowed set: {name}");
             }

@@ -51,7 +51,7 @@ public class EnforcementEngineTests
     private const string FieldAccessAllowedSetFixture = "enforcement/validate-field-access-allowed-set.json";
 
     /// <summary>Asserted so that a dropped case fails the suite rather than shrinking it quietly.</summary>
-    private const int FieldAccessAllowedSetCaseCount = 13;
+    private const int FieldAccessAllowedSetCaseCount = 16;
 
     private static IReadOnlyList<JsonElement> FieldAccessAllowedSetCases()
         => FixtureHelper.ReadFixtureAsJson(FieldAccessAllowedSetFixture).Clone()
@@ -90,6 +90,44 @@ public class EnforcementEngineTests
             expected.GetProperty("allowed").EnumerateArray().Select(f => f.GetString()), caseName);
         result.Denied.Should().Equal(
             expected.GetProperty("denied").EnumerateArray().Select(f => f.GetString()), caseName);
+    }
+
+    /// <summary>
+    /// The original two-argument overload must keep its exact signature, so assemblies
+    /// compiled against it still bind, and must behave as the three-argument overload with a
+    /// null object name.
+    /// </summary>
+    [Fact]
+    public void ValidateFieldAccess_TwoArgumentOverload_KeepsItsSignatureAndDelegatesWithNullObject()
+    {
+        var method = typeof(EnforcementEngine).GetMethod(
+            nameof(EnforcementEngine.ValidateFieldAccess),
+            new[] { typeof(string[]), typeof(EffectivePolicy) });
+        method.Should().NotBeNull("the two-argument overload is part of the binary contract");
+        method!.ReturnType.Should().Be(typeof(FieldAccessResult));
+        method.IsStatic.Should().BeTrue();
+        method.IsPublic.Should().BeTrue();
+
+        var threeArg = typeof(EnforcementEngine).GetMethod(
+            nameof(EnforcementEngine.ValidateFieldAccess),
+            new[] { typeof(string[]), typeof(EffectivePolicy), typeof(string) });
+        threeArg.Should().NotBeNull();
+        threeArg!.GetParameters()[2].HasDefaultValue.Should().BeFalse(
+            "the object-name overload is separate and has no default value");
+
+        var policy = CreatePolicyWithFieldRules(
+            allowedFields: new[] { "patients.name", "*.id" },
+            hiddenFields: null);
+        var fields = new[] { "name", "encounters.name", "id", "patients.id" };
+
+        // Called directly: a bare 'name' stays bare, so 'patients.name' allows it.
+        var result = EnforcementEngine.ValidateFieldAccess(fields, policy);
+        var viaNull = EnforcementEngine.ValidateFieldAccess(fields, policy, null);
+
+        result.Allowed.Should().Equal("name", "id");
+        result.Denied.Should().Equal("encounters.name", "patients.id");
+        result.Allowed.Should().Equal(viaNull.Allowed);
+        result.Denied.Should().Equal(viaNull.Denied);
     }
 
     [Fact]

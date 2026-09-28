@@ -110,9 +110,11 @@ def validate_field_access(
     field: ``*.name`` does not allow ``encounters.name`` (issue #36).
 
     ``object_name`` is the object the fields belong to, when the caller knows it.
-    A bare field is then checked against ``allowedFields`` as
-    ``object_name.field``, so under ``patients.name`` a bare ``name`` read from
-    ``encounters`` is denied and one read from ``patients`` is allowed.
+    The entry is still matched against the field as written; a bare field is
+    read as ``object_name.field`` only to detect a qualifier conflict
+    (:func:`_allowed_field_in_object`). So under ``patients.name`` a bare
+    ``name`` read from ``encounters`` is denied and one read from ``patients`` is
+    allowed, while ``p*`` does not allow a bare ``ssn`` read from ``patients``.
     """
     result = FieldAccessResult()
     field_rules = None
@@ -128,9 +130,9 @@ def validate_field_access(
 
         # Check allowed fields (if specified, field must be in the set)
         if field_rules and field_rules.allowed_fields is not None:
-            key = _qualify_with_object(f, object_name)
             if not any(
-                _allowed_field_matches(pattern, key) for pattern in field_rules.allowed_fields
+                _allowed_field_in_object(pattern, f, object_name)
+                for pattern in field_rules.allowed_fields
             ):
                 result.denied.append(f)
                 continue
@@ -140,12 +142,27 @@ def validate_field_access(
     return result
 
 
+def _allowed_field_in_object(pattern: str, field: str, object_name: str | None) -> bool:
+    """Whether an ``allowedFields`` entry allows ``field`` read from or written to ``object_name``.
+
+    The entry is matched against the field *as written*. The object name is used
+    only to detect a qualifier conflict: a bare field is read as
+    ``object_name.field`` for that check alone. Matching the qualified form
+    instead would let a bare glob reach a field it never names, because ``*``
+    crosses ``.``: ``p*`` would allow a bare ``ssn`` of ``patients`` through
+    ``patients.ssn`` (issue #36).
+    """
+    return _field_name_matches(pattern, field) and not _qualifiers_conflict(
+        pattern, _qualify_with_object(field, object_name)
+    )
+
+
 def _qualify_with_object(field: str, object_name: str | None) -> str:
     """``object_name.field`` for a bare field when the object is known, else ``field``.
 
-    Used only for the ``allowedFields`` check (issue #36). A field that already
-    carries a qualifier keeps it, and the deny-direction rules always see the
-    field as written.
+    Used only for the ``allowedFields`` qualifier-conflict check (issue #36),
+    never for the match itself. A field that already carries a qualifier keeps
+    it, and the deny-direction rules always see the field as written.
     """
     if object_name and "." not in field:
         return f"{object_name}.{field}"
@@ -1350,12 +1367,13 @@ def _validate_written_fields(
     the read path uses (section 3.2), so a ``readOnlyFields`` entry of
     ``patients.created_at`` blocks a payload key of ``created_at``. The
     ``allowedFields`` check additionally refuses a key qualified with a different
-    object than the entry (:func:`_allowed_field_matches`), so ``patients.name``
+    object than the entry (:func:`_allowed_field_in_object`), so ``patients.name``
     does not make ``encounters.name`` writable. When the write names its target
-    object, a bare payload key is checked against ``allowedFields`` as
-    ``object_name.key``, so under ``patients.name`` an insert into ``encounters``
-    carrying ``{"name": ...}`` is refused. The hidden and read-only checks see the
-    key as written.
+    object, a bare payload key is read as ``object_name.key`` for that conflict
+    check only, so under ``patients.name`` an insert into ``encounters`` carrying
+    ``{"name": ...}`` is refused. The entry is always matched against the key as
+    written, so ``p*`` does not make a bare ``ssn`` writable in ``patients``. The
+    hidden and read-only checks see the key as written.
 
     The field is named in the reason. That discloses nothing: the caller supplied
     it. Row denials, by contrast, never name a value.
@@ -1383,11 +1401,12 @@ def _validate_written_fields(
         # None is unrestricted; [] denies every field (canonical spec section 3).
         if field_rules.allowed_fields is not None:
             # The allow direction does not let a qualified entry reach another
-            # object's key (issue #36); see _allowed_field_matches. A bare key is
-            # read as belonging to the write's target object.
-            key = _qualify_with_object(name, object_name)
+            # object's key (issue #36); see _allowed_field_in_object. A bare key is
+            # read as belonging to the write's target object for the conflict
+            # check only.
             if not any(
-                _allowed_field_matches(pattern, key) for pattern in field_rules.allowed_fields
+                _allowed_field_in_object(pattern, name, object_name)
+                for pattern in field_rules.allowed_fields
             ):
                 return AccessResult(
                     allowed=False, reason=f"field not in allowed set: {name}"

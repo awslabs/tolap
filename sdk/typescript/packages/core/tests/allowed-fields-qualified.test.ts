@@ -33,7 +33,7 @@ const FIXTURE_PATH = path.resolve(
 );
 
 /** Asserted so that a dropped case fails the suite rather than shrinking it quietly. */
-const EXPECTED_CASE_COUNT = 49;
+const EXPECTED_CASE_COUNT = 53;
 
 const ACTIONS = ["projectAllowedFields", "applyResultPipeline", "validateWrite"];
 

@@ -65,7 +65,7 @@ class TestValidateObjectAccess:
                 )
 
 
-_FIELD_ACCESS_ALLOWED_SET_CASE_COUNT = 13
+_FIELD_ACCESS_ALLOWED_SET_CASE_COUNT = 16
 
 
 class TestValidateFieldAccess:

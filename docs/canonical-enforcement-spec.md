@@ -449,10 +449,12 @@ pre-check (`validateFieldAccess`), and the write path's allowed-field check (con
 The rule compares the qualifiers the keys themselves carry. A bare key is not attributed to
 any object, so a qualified entry allows it, with one exception: when the caller names the
 object, the field pre-check and the write path read a bare field or payload key as
-`object.field` for the `allowedFields` test only. Under `patients.name`, a bare `name` checked
-against `encounters` is refused and one checked against `patients` is allowed. The deny rules
-always see the key as written, and the pre-check matches `hiddenFields` with the broad matcher
-above.
+`object.field` for the qualifier comparison only. Under `patients.name`, a bare `name` checked
+against `encounters` is refused and one checked against `patients` is allowed. The entry itself
+is always matched against the key as written: because `*` crosses `.`, matching the qualified
+form would let a bare glob reach a key it never names, so `p*` must not allow a bare `ssn` of
+`patients` through `patients.ssn`. The deny rules always see the key as written, and the
+pre-check matches `hiddenFields` with the broad matcher above.
 
 The object qualifier is the one row filters use (§7): everything before the last `.`, compared
 ASCII case-insensitively (only `A`–`Z` folds). So:

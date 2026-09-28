@@ -26,7 +26,7 @@ public class AllowedFieldsQualifiedTests
     private const string FixturePath = "enforcement/allowed-fields-qualified.json";
 
     /// <summary>Asserted so that a dropped case fails the suite rather than shrinking it quietly.</summary>
-    private const int ExpectedCaseCount = 49;
+    private const int ExpectedCaseCount = 53;
 
     private static readonly string[] Actions =
         ["projectAllowedFields", "applyResultPipeline", "validateWrite"];

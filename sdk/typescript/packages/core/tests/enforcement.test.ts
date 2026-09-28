@@ -105,7 +105,7 @@ describe("validateFieldAccess (allowed set)", () => {
 
   it("carries every case", () => {
     // Asserted so that a dropped case fails the suite rather than shrinking it quietly.
-    expect(cases).toHaveLength(13);
+    expect(cases).toHaveLength(16);
     expect(new Set(cases.map((c) => c.name)).size).toBe(cases.length);
   });
 

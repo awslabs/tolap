@@ -30,7 +30,7 @@ from tolap_core.serialization import deserialize_effective_policy
 FIXTURE_PATH = "enforcement/allowed-fields-qualified.json"
 
 #: Asserted so that a dropped case fails the suite rather than shrinking it quietly.
-EXPECTED_CASE_COUNT = 49
+EXPECTED_CASE_COUNT = 53
 
 _FIXTURE = load_fixture(FIXTURE_PATH)
 

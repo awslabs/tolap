@@ -1,6 +1,6 @@
 {
   "description": "validateFieldAccess against allowedFields and hiddenFields when fields and entries may be bare or qualified with an object name.",
-  "notes": "Rule, identical in every SDK. hiddenFields uses the field-name matcher, which drops qualifiers. allowedFields uses the allow-direction rule of allowed-fields-qualified.json: an entry allows a field when the matcher accepts it and the two are not qualified with different objects (issue #36). When 'input.objectName' is given, a bare field is checked against allowedFields as 'objectName.field'. 'expected' lists the allowed and denied fields in input order.",
+  "notes": "Rule, identical in every SDK. hiddenFields uses the field-name matcher, which drops qualifiers. allowedFields uses the allow-direction rule of allowed-fields-qualified.json: an entry allows a field when the matcher accepts it and the two are not qualified with different objects (issue #36). When 'input.objectName' is given, the entry is still matched against the field as written, and a bare field is read as 'objectName.field' only to detect a qualifier conflict. Matching the qualified form would let a bare glob reach a field it never names, because '*' crosses '.'. 'expected' lists the allowed and denied fields in input order.",
   "action": "validateFieldAccess",
   "cases": [
     {
@@ -412,6 +412,102 @@
         ],
         "denied": [
           "ssn"
+        ]
+      }
+    },
+    {
+      "name": "bare-glob-does-not-reach-a-bare-field-through-the-object-name",
+      "notes": "'p*' does not match 'ssn'. Reading the bare field as 'patients.ssn' for the match would let 'p*' allow it, because '*' crosses '.'. The object name is used only for the qualifier-conflict check. 'pid' is the control.",
+      "input": {
+        "fields": [
+          "ssn",
+          "pid"
+        ],
+        "objectName": "patients"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "p*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "pid"
+        ],
+        "denied": [
+          "ssn"
+        ]
+      }
+    },
+    {
+      "name": "infix-glob-does-not-reach-a-bare-field-through-the-object-name",
+      "notes": "'*s*' does not match 'name', though it matches 'patients.name'. 'ssn' is the control.",
+      "input": {
+        "fields": [
+          "name",
+          "ssn"
+        ],
+        "objectName": "patients"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*s*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "ssn"
+        ],
+        "denied": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "glob-does-not-reach-a-bare-field-through-a-short-object-name",
+      "notes": "'o*f' does not match 'f', though it matches 'o.f'. 'of' is the control.",
+      "input": {
+        "fields": [
+          "f",
+          "of"
+        ],
+        "objectName": "o"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "o*f"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "of"
+        ],
+        "denied": [
+          "f"
         ]
       }
     }

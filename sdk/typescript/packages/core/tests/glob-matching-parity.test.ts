@@ -4,9 +4,13 @@
  * One case corpus, one outcome table, asserted with identical expected allow/deny
  * outcomes **and** identical denial reasons in all three SDKs. Every expectation in
  * this file was produced by running Python's `validate_access`,
- * `validate_field_access` and `validate_endpoint` over the same rules and subjects,
- * and independently confirmed against .NET's `EnforcementEngine.GlobMatch` compiled
- * and executed rather than read.
+ * `validate_field_access` and `validate_endpoint` over the same rules and subjects.
+ * The object and endpoint expectations were independently confirmed against .NET's
+ * `EnforcementEngine.GlobMatch`, compiled and executed rather than read. The field
+ * expectations are backed by the field pre-check rule (`hiddenFields` through the
+ * broad field-name matcher, `allowedFields` through the allow-direction rule of
+ * issue #36), not by a plain glob, and were cross-checked against Python's
+ * `validate_field_access` and .NET's `EnforcementEngine.ValidateFieldAccess`.
  *
  * §3.1 states two rules for the enforcement dialect — objects, fields, endpoints and
  * storage prefixes — and TypeScript diverged on both, in opposite directions:

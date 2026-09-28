@@ -1,6 +1,6 @@
 {
   "description": "How an allowedFields entry decides whether a key is allowed when entries and keys may be bare or qualified with an object name. Exists because allowedFields used the field-name matcher, which drops qualifiers, so 'patients.name' also allowed 'encounters.name' in the read projection and on the write path (issue #36).",
-  "notes": "Rule, identical in every SDK, for the ALLOW direction only: an entry allows a key when the field-name matcher accepts it AND the two are not both qualified with different objects. The qualifier is everything before the last '.', compared ASCII case-insensitively (only A-Z folds to a-z), and glob characters in the entry's qualifier are literal for that comparison. This is the same qualifier rule row filters use (#32). A qualified entry still allows a bare key, a bare entry still allows qualified keys of every object, 'patients.*' allows the object's own columns and bare keys, and a bare '*' allows everything. hiddenFields, readOnlyFields and maskedFields keep the broad matcher. Actions: 'projectAllowedFields' projects 'records' and compares them to 'expected'; 'applyResultPipeline' runs the full post-execution pipeline over 'records'; 'validateWrite' validates the 'operation' ('insert' or 'update') of 'payload' into 'objectName' (null when no object is named) and compares 'allowed' and, when given, 'reason'. When 'objectName' is set, a bare payload key is read as 'objectName.key' for the allowedFields check only. Each case carries a full policy so the shared corpus walk validates it against policy-definition.schema.json.",
+  "notes": "Rule, identical in every SDK, for the ALLOW direction only: an entry allows a key when the field-name matcher accepts it AND the two are not both qualified with different objects. The qualifier is everything before the last '.', compared ASCII case-insensitively (only A-Z folds to a-z), and glob characters in the entry's qualifier are literal for that comparison. This is the same qualifier rule row filters use (#32). A qualified entry still allows a bare key, a bare entry still allows qualified keys of every object, 'patients.*' allows the object's own columns and bare keys, and a bare '*' allows everything. hiddenFields, readOnlyFields and maskedFields keep the broad matcher. Actions: 'projectAllowedFields' projects 'records' and compares them to 'expected'; 'applyResultPipeline' runs the full post-execution pipeline over 'records'; 'validateWrite' validates the 'operation' ('insert' or 'update') of 'payload' into 'objectName' (null when no object is named) and compares 'allowed' and, when given, 'reason'. When 'objectName' is set, the entry is still matched against the payload key as written, and a bare key is read as 'objectName.key' only for the qualifier-conflict check, so a bare glob such as 'p*' does not reach a bare 'ssn' through 'patients.ssn'. Each case carries a full policy so the shared corpus walk validates it against policy-definition.schema.json.",
   "cases": [
     {
       "name": "qualified-entry-drops-other-object-key",
@@ -1447,6 +1447,123 @@
       "expected": [
         {}
       ]
+    },
+    {
+      "name": "write-bare-glob-does-not-reach-a-bare-key-through-the-object-name",
+      "notes": "'p*' does not match 'ssn'. Reading the bare key as 'patients.ssn' for the match would make it writable, because '*' crosses '.'. The target object is used only for the qualifier-conflict check. 'pid' comes first and passes.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "pid": 1,
+        "ssn": "x"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "p*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: ssn"
+      }
+    },
+    {
+      "name": "write-update-bare-glob-does-not-reach-a-bare-key-through-the-object-name",
+      "notes": "The update twin: 'p*' does not make a bare 'ssn' writable in 'patients'.",
+      "action": "validateWrite",
+      "operation": "update",
+      "objectName": "patients",
+      "payload": {
+        "ssn": "x"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canUpdate": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "p*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: ssn"
+      }
+    },
+    {
+      "name": "write-infix-glob-does-not-reach-a-bare-key-through-the-object-name",
+      "notes": "'*s*' does not match 'name', though it matches 'patients.name'.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*s*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: name"
+      }
+    },
+    {
+      "name": "write-glob-does-not-reach-a-bare-key-through-a-short-object-name",
+      "notes": "'o*f' does not match 'f', though it matches 'o.f'.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "o",
+      "payload": {
+        "f": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "o*f"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: f"
+      }
     }
   ]
 }

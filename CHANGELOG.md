@@ -55,8 +55,10 @@ it on writes with `field not in allowed set` (#36).
 **The field pre-check and the write path now use the object they are given.**
 `validate_field_access` (and its TypeScript and .NET counterparts) takes an optional object
 name, and the MCP and context wrappers pass the object the tool call names. When it is known, a
-bare field is checked against `allowedFields` as `object.field`, and `validate_write` does the
-same for bare payload keys when it is given the target object. Under `patients.name`, a bare
+bare field is read as `object.field` for the `allowedFields` qualifier comparison, and
+`validate_write` does the same for bare payload keys when it is given the target object. The
+entry is still matched against the field as written, so a bare glob such as `p*` does not
+allow a bare `ssn` of `patients` through `patients.ssn`. Under `patients.name`, a bare
 `name` read from or written to `encounters` is now refused, while one read from or written to
 `patients` is still allowed. The pre-check's `allowedFields` test also moves from a plain glob
 to the allow rule above, and its `hiddenFields` test to the broad field-name matcher the
