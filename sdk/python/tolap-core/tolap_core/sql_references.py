@@ -234,10 +234,10 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
         if ch == "-" and nxt == "-":
             after = sql[i + 2] if i + 2 < n else ""
             if mode != "mysql" or after == "" or after in _WHITESPACE:
-                i = _line_comment_end(sql, i)
+                i = _line_comment_end(sql, i, mode)
                 continue
         if ch == "#" and mode == "mysql":
-            i = _line_comment_end(sql, i)
+            i = _line_comment_end(sql, i, mode)
             continue
         if ch == "/" and nxt == "*":
             if mode == "mysql" and i + 2 < n and sql[i + 2] == "!":
@@ -341,10 +341,15 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
     return toks
 
 
-def _line_comment_end(sql: str, start: int) -> int:
-    """Index just past a line comment. PostgreSQL also ends one at a carriage return,
-    and ending it early can only expose more tokens to the check."""
-    ends = [k for k in (sql.find("\n", start), sql.find("\r", start)) if k >= 0]
+def _line_comment_end(sql: str, start: int, mode: str) -> int:
+    """Index just past a line comment. PostgreSQL also ends one at a carriage return;
+    MySQL and SQLite end one only at a line feed. Each mode models its own engine,
+    because ending a comment too early can open a string literal that hides the rest
+    of the query from the check."""
+    ends = [sql.find("\n", start)]
+    if mode == "postgres":
+        ends.append(sql.find("\r", start))
+    ends = [k for k in ends if k >= 0]
     return min(ends) + 1 if ends else len(sql)
 
 
@@ -878,6 +883,21 @@ class _Analysis:
                 and following.is_word("WITH", "WITHOUT")
             ):
                 return i + 1
+            before = toks[i - 1] if i > 0 else None
+            if (
+                word == "TIME"
+                and before is not None
+                and before.is_word("WITH", "WITHOUT")
+                and following is not None
+                and following.is_word("ZONE")
+            ):
+                return i + 1  # TIMESTAMP WITH TIME ZONE
+            if (
+                word in ("INTEGER", "INT")
+                and before is not None
+                and before.is_word("SIGNED", "UNSIGNED")
+            ):
+                return i + 1  # CAST(x AS UNSIGNED INTEGER)
             if word in _DATE_PARTS and following is not None and following.is_word("FROM"):
                 return i + 1  # EXTRACT(YEAR FROM ...)
         self._check_bare(tok.text, scope)

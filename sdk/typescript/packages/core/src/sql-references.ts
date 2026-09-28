@@ -226,12 +226,12 @@ function lex(sql: string, mode: Mode): Tok[] {
     if (ch === "-" && nxt === "-") {
       const after = i + 2 < n ? sql[i + 2]! : "";
       if (mode !== "mysql" || after === "" || WHITESPACE.has(after)) {
-        i = lineCommentEnd(sql, i);
+        i = lineCommentEnd(sql, i, mode);
         continue;
       }
     }
     if (ch === "#" && mode === "mysql") {
-      i = lineCommentEnd(sql, i);
+      i = lineCommentEnd(sql, i, mode);
       continue;
     }
     if (ch === "/" && nxt === "*") {
@@ -354,11 +354,15 @@ function lex(sql: string, mode: Mode): Tok[] {
 }
 
 /**
- * Index just past a line comment. PostgreSQL also ends one at a carriage return, and
- * ending it early can only expose more tokens to the check.
+ * Index just past a line comment. PostgreSQL also ends one at a carriage return;
+ * MySQL and SQLite end one only at a line feed. Each mode models its own engine,
+ * because ending a comment too early can open a string literal that hides the rest
+ * of the query from the check.
  */
-function lineCommentEnd(sql: string, start: number): number {
-  const ends = [sql.indexOf("\n", start), sql.indexOf("\r", start)].filter((k) => k >= 0);
+function lineCommentEnd(sql: string, start: number, mode: Mode): number {
+  const candidates = [sql.indexOf("\n", start)];
+  if (mode === "postgres") candidates.push(sql.indexOf("\r", start));
+  const ends = candidates.filter((k) => k >= 0);
   return ends.length > 0 ? Math.min(...ends) + 1 : sql.length;
 }
 
@@ -934,6 +938,23 @@ class Analysis {
         following.isWord("WITH", "WITHOUT")
       ) {
         return i + 1;
+      }
+      const before = i > 0 ? toks[i - 1] : undefined;
+      if (
+        word === "TIME" &&
+        before !== undefined &&
+        before.isWord("WITH", "WITHOUT") &&
+        following !== undefined &&
+        following.isWord("ZONE")
+      ) {
+        return i + 1; // TIMESTAMP WITH TIME ZONE
+      }
+      if (
+        (word === "INTEGER" || word === "INT") &&
+        before !== undefined &&
+        before.isWord("SIGNED", "UNSIGNED")
+      ) {
+        return i + 1; // CAST(x AS UNSIGNED INTEGER)
       }
       if (DATE_PARTS.has(word) && following !== undefined && following.isWord("FROM")) {
         return i + 1; // EXTRACT(YEAR FROM ...)

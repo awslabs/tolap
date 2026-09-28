@@ -412,13 +412,13 @@ public static class SqlQueryReferences
                 var afterEnd = i + 2 >= n;
                 if (mode != Mode.MySql || afterEnd || Whitespace.Contains(sql[i + 2]))
                 {
-                    i = LineCommentEnd(sql, i);
+                    i = LineCommentEnd(sql, i, mode);
                     continue;
                 }
             }
             if (ch == '#' && mode == Mode.MySql)
             {
-                i = LineCommentEnd(sql, i);
+                i = LineCommentEnd(sql, i, mode);
                 continue;
             }
             if (ch == '/' && hasNext && nxt == '*')
@@ -586,11 +586,15 @@ public static class SqlQueryReferences
     private static string Body(string sql, int start, int end) =>
         sql.Substring(start + 1, Math.Min(end - 1, sql.Length) - (start + 1));
 
-    // Index just past a line comment. PostgreSQL also ends one at a carriage return,
-    // and ending it early can only expose more tokens to the check.
-    private static int LineCommentEnd(string sql, int start)
+    // Index just past a line comment. PostgreSQL also ends one at a carriage return;
+    // MySQL and SQLite end one only at a line feed. Each mode models its own engine,
+    // because ending a comment too early can open a string literal that hides the rest
+    // of the query from the check.
+    private static int LineCommentEnd(string sql, int start, Mode mode)
     {
-        var end = sql.IndexOfAny(new[] { '\n', '\r' }, start);
+        var end = mode == Mode.Postgres
+            ? sql.IndexOfAny(new[] { '\n', '\r' }, start)
+            : sql.IndexOf('\n', start);
         return end < 0 ? sql.Length : end + 1;
     }
 
@@ -1397,6 +1401,17 @@ public static class SqlQueryReferences
                 if (word is "TIME" or "TIMESTAMP" && following is not null && following.IsWord("WITH", "WITHOUT"))
                 {
                     return i + 1;
+                }
+                var before = i > 0 ? _toks[i - 1] : null;
+                if (word == "TIME" && before is not null && before.IsWord("WITH", "WITHOUT")
+                    && following is not null && following.IsWord("ZONE"))
+                {
+                    return i + 1; // TIMESTAMP WITH TIME ZONE
+                }
+                if (word is "INTEGER" or "INT" && before is not null
+                    && before.IsWord("SIGNED", "UNSIGNED"))
+                {
+                    return i + 1; // CAST(x AS UNSIGNED INTEGER)
                 }
                 if (DateParts.Contains(word) && following is not null && following.IsWord("FROM"))
                 {

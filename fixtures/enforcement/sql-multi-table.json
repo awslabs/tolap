@@ -7184,6 +7184,540 @@
         "allowed": false,
         "reason": "query uses a construct the pre-execution check cannot resolve: FROM clause"
       }
+    },
+    {
+      "name": "probe-comments-cr-opens-string-dash",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id -- x\r'\nWHERE (e.pid, e.diagnosis) IN ((1, 2)) -- '",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-comments-cr-opens-string-hash",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id # x\r'\nWHERE (e.pid, e.diagnosis) IN ((1, 2)) # '",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-comments-cr-opens-string-single-table",
+      "query": "SELECT name FROM patients -- x\r'\nWHERE (id, ssn) IN ((1, 2)) -- '",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "single-table-crlf-comment-allowed",
+      "query": "SELECT name FROM patients WHERE id = 1 -- note\r\nAND dept = 'x'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "join-crlf-comment-allowed",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id -- note\r\nWHERE e.visit_date > '2024-01-01'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-pyformat-placeholder",
+      "query": "SELECT name FROM patients WHERE id = %s",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "single-table-pyformat-named-placeholder",
+      "query": "SELECT name FROM patients WHERE id = %(id)s",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "single-table-cast-timestamptz",
+      "query": "SELECT CAST(created_at AS TIMESTAMP WITH TIME ZONE) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-cast-unsigned-integer",
+      "query": "SELECT CAST(id AS UNSIGNED INTEGER) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-cast-signed-int",
+      "query": "SELECT CAST(id AS SIGNED INT) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-between-symmetric-refused",
+      "query": "SELECT name FROM patients WHERE id BETWEEN SYMMETRIC 1 AND 5",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-time-still-checked",
+      "query": "SELECT CAST(name AS TIMESTAMP WITH TIME ZONE), time FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.time",
+              "patients.integer"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-time-before-zone",
+      "query": "SELECT name FROM patients WHERE time = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.time",
+              "patients.integer"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-integer-still-checked",
+      "query": "SELECT integer FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.time",
+              "patients.integer"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "from-table-non-ascii-other-number",
+      "query": "SELECT a FROM x²y",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "x²y"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII identifier"
+      }
+    },
+    {
+      "name": "from-table-non-ascii-spacing-mark",
+      "query": "SELECT a FROM xःy",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "xःy"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII identifier"
+      }
+    },
+    {
+      "name": "from-table-non-ascii-connector",
+      "query": "SELECT a FROM x‿y",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "x‿y"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII identifier"
+      }
+    },
+    {
+      "name": "from-table-non-ascii-astral",
+      "query": "SELECT a FROM x𝐀y",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "x𝐀y"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII identifier"
+      }
+    },
+    {
+      "name": "hidden-column-named-integer-in-row-value",
+      "query": "SELECT name FROM patients WHERE (id, integer) IN ((1, 2))",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.time",
+              "patients.integer"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-time-in-row-value",
+      "query": "SELECT name FROM patients WHERE (id, time) IN ((1, 2))",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.time",
+              "patients.integer"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
     }
   ]
 }

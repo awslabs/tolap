@@ -25,7 +25,7 @@ const FIXTURE_PATH = path.resolve(
 );
 
 /** Asserted so that a dropped case fails the suite rather than shrinking it quietly. */
-const EXPECTED_CASE_COUNT = 245;
+const EXPECTED_CASE_COUNT = 265;
 
 interface MultiTableCase {
   name: string;

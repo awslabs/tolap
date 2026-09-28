@@ -399,12 +399,25 @@ const POST_FROM_CLAUSES: RegExp[] = [
 ];
 
 /**
- * The table reference immediately after `FROM`: a bare, dotted, or quoted name. A name
- * character is any Unicode letter, digit, mark or connector, as `\w` is in the Python and
- * .NET SDKs; JavaScript's `\w` is ASCII-only and would miss a non-ASCII table name.
+ * The table reference immediately after `FROM`: a bare, dotted, or quoted name. All
+ * three SDKs build it from the same text, so each captures the same name. A name
+ * character is an ASCII letter, digit or underscore, or any non-ASCII character except
+ * the non-ASCII spaces the reference check refuses; a regex's own `\w` and `\s` differ
+ * between engines, and the capture decides which refusal a query gets.
  */
-const FROM_TABLE_PATTERN =
-  /(?<![\p{L}\p{N}\p{M}\p{Pc}])FROM\s+((?:"[^"]+"|[\p{L}\p{N}\p{M}\p{Pc}]+)(?:\.(?:"[^"]+"|[\p{L}\p{N}\p{M}\p{Pc}]+))*)/iu;
+const NON_ASCII_SPACES =
+  String.raw`\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006` +
+  String.raw`\u2007\u2008\u2009\u200a\u200b\u2028\u2029\u202f\u205f\u3000\ufeff`;
+const NAME_CHAR = String.raw`[^\x00-\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f` + NON_ASCII_SPACES + "]";
+const NAME_PART = `(?:"[^"]+"|${NAME_CHAR}+)`;
+const FROM_TABLE_PATTERN = new RegExp(
+  `(?<!${NAME_CHAR})FROM` +
+    String.raw`[\t\n\v\f\r ` +
+    NON_ASCII_SPACES +
+    "]+" +
+    `(${NAME_PART}(?:\\.${NAME_PART})*)`,
+  "i",
+);
 
 // -- Clause-body patterns, used only by validateQuery's field extraction --
 

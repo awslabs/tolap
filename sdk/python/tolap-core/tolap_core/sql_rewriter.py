@@ -348,9 +348,22 @@ _POST_FROM_CLAUSES = [
     re.compile(r"\bEXCEPT\b", re.IGNORECASE),
 ]
 
-# The table reference immediately after FROM: a bare, dotted, or quoted name.
+# The table reference immediately after FROM: a bare, dotted, or quoted name. All
+# three SDKs build it from the same text, so each captures the same name. A name
+# character is an ASCII letter, digit or underscore, or any non-ASCII character except
+# the non-ASCII spaces the reference check refuses; a regex's own \w and \s differ
+# between engines, and the capture decides which refusal a query gets.
+_NON_ASCII_SPACES = (
+    r"\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    r"\u2007\u2008\u2009\u200a\u200b\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+_NAME_CHAR = r"[^\x00-\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f" + _NON_ASCII_SPACES + "]"
+_NAME_PART = r'(?:"[^"]+"|' + _NAME_CHAR + "+)"
 _FROM_TABLE_PATTERN = re.compile(
-    r'\bFROM\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))*)', re.IGNORECASE
+    "(?<!" + _NAME_CHAR + ")FROM"
+    + r"[\t\n\v\f\r " + _NON_ASCII_SPACES + "]+"
+    + "(" + _NAME_PART + r"(?:\." + _NAME_PART + ")*)",
+    re.IGNORECASE,
 )
 
 # -- Clause-body patterns, used only by validate_query's field extraction --
