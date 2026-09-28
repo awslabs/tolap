@@ -524,11 +524,14 @@ is set and no pattern matches it) or masks it. An honoured marker's data gets:
   `classification`) that are not masked: a denylist never drops an untagged record,
   so a removed tag key cannot make it over-drop;
 - `allowedTags`, if no tag key is transformed;
-- the relevance floor, per record, walking the score keys in precedence order to the
-  first that is masked or present: a masked key keeps the record (the mask hides the
-  value), a present key is read even when it is hidden or projected out, and a record
-  with neither is dropped. When `score` is hidden, a record the data layer kept on its
-  `score` is re-checked on its next score key, which can over-drop;
+- the relevance floor, per record, walking the score keys in precedence order. The
+  full pipeline applies the floor before it strips hidden and projected-out fields, so
+  for each key: present and not masked (even if hidden or projected out) -- apply the
+  floor to its value and stop; masked (a masking rule matches it and it is neither
+  hidden nor projected out; a hidden and masked key counts as hidden) -- keep and stop;
+  absent and hidden or projected out -- keep and stop, since the producer's pipeline
+  already applied the floor to it; absent and untouched -- continue. A record the walk
+  does not stop on is unscored and dropped;
 - hidden-field removal, allowed-field projection and the result limit.
 
 Over correctly enforced data these are no-ops, and they drop what the data layer let

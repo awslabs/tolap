@@ -316,11 +316,17 @@ it.
   key the data layer removed cannot make it over-drop. `allowedTags` runs unless a tag key is
   transformed, because it does drop an untagged record.
 - The relevance floor runs per record, walking the score keys in precedence order (`score`,
-  `similarity`, `similarityScore`, `_score`) to the first that is masked or present. A masked
-  key keeps the record, since the mask hides the value. A present key is read, even when it is
-  hidden or projected out, as `deniedTags` reads a tag key the tool left in. A record with no
-  masked and no present score key is dropped. This can over-drop: when `score` is hidden, a
-  record the data layer kept on its `score` is re-checked on its next score key.
+  `similarity`, `similarityScore`, `_score`). The full pipeline applies the floor before it
+  strips hidden and projected-out fields, so for each key in turn:
+  - present and not masked (even if hidden or projected out, but left in): the floor is applied
+    to its value, and the walk stops;
+  - masked, meaning a masking rule matches it and it is neither hidden nor projected out (a
+    hidden and masked key counts as hidden): the record is kept, since the mask hides the value;
+  - absent and hidden or projected out: the record is kept, since the producer's pipeline
+    applied the floor to it before removing it;
+  - absent and untouched: the walk moves to the next key.
+
+  A record the walk does not stop on is unscored and dropped.
 - Hidden fields are stripped again, the result is projected to `AllowedFields` again, and
   `MaxResults` still truncates it.
 
