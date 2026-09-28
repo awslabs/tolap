@@ -169,7 +169,7 @@ public class EnforcedResultTests
     public void TheCorpusCarriesTheExpectedCaseCount()
     {
         // A case dropped from the fixture is coverage lost silently.
-        Fixture.GetProperty("cases").GetArrayLength().Should().Be(36);
+        Fixture.GetProperty("cases").GetArrayLength().Should().Be(39);
     }
 
     public static TheoryData<string> CaseNames()

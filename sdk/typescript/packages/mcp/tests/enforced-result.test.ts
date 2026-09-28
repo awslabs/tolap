@@ -137,7 +137,7 @@ afterEach(() => {
 describe("shared fixture: already-enforced-results.json", () => {
   it("the corpus carries the expected case count", () => {
     // A case dropped from the fixture is coverage lost silently.
-    expect(FIXTURE.cases).toHaveLength(36);
+    expect(FIXTURE.cases).toHaveLength(39);
   });
 
   for (const testCase of FIXTURE.cases) {

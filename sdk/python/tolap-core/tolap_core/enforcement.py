@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Any
@@ -580,34 +580,40 @@ def _field_is_removed(policy: EffectivePolicy, name: str) -> bool:
     )
 
 
+def _field_is_masked(policy: EffectivePolicy, name: str) -> bool:
+    """Whether already-enforced output holds a mask for ``name``.
+
+    True when a masking rule matches it and it is neither hidden nor projected out.
+    The pipeline removes a field before it masks, so a hidden and masked field is
+    never masked in the output: it counts as removed.
+    """
+    return _rule_for_key(_masking_rules(policy), name) is not None and not _field_is_removed(
+        policy, name
+    )
+
+
 def _apply_visible_similarity_floor(results: list, policy: EffectivePolicy) -> list:
     """The relevance floor over already-enforced output, per record.
 
-    The full pipeline applies the floor before it strips hidden and projected-out
-    fields, so already-enforced output tells the floor what the producer's pipeline
-    saw. Walks the score keys in the pipeline's precedence order and, per key:
+    Walks the score keys in the pipeline's precedence order. The first key that is
+    present and not masked (including a hidden or projected-out key the tool left
+    in) decides: the floor is applied to its value, failing closed on a non-numeric
+    value exactly as :func:`apply_similarity_floor` does. A key that is masked (see
+    :func:`_field_is_masked`), or hidden or projected out and absent, is noted as a
+    transformed score key and the walk continues, so a visible low score is never
+    kept because a higher-precedence key was removed.
 
-    - present and not masked (including a hidden or projected-out key the tool left
-      in): apply the floor to its value, failing closed on a non-numeric value
-      exactly as :func:`apply_similarity_floor` does; stop;
-    - masked, meaning a masking rule matches it and it is neither hidden nor
-      projected out (a hidden and masked key counts as hidden): keep the record,
-      since the mask hides the value; stop;
-    - absent and hidden or projected out: keep the record, since the producer's
-      pipeline applied the floor to it before removing it; stop;
-    - absent and untouched: continue to the next key.
-
-    A record the walk does not stop on is unscored and dropped, as
-    :func:`apply_similarity_floor` drops it. When no score key is transformed this
-    is :func:`apply_similarity_floor` exactly.
+    A record with no present, unmasked score key is kept only when a transformed
+    score key was seen, since its score may have been masked or removed after the
+    producer's pipeline checked it; otherwise it is unscored and dropped. This
+    prefers over-dropping to under-dropping: with ``score`` hidden, a record the
+    producer kept on a high ``score`` is dropped when its next score key is low.
+    When no score key is transformed this is :func:`apply_similarity_floor` exactly.
     """
     if not policy.limits or policy.limits.min_similarity_score is None:
         return results
     removed = {key for key in _SCORE_KEYS if _field_is_removed(policy, key)}
-    rules = _masking_rules(policy)
-    masked = {
-        key for key in _SCORE_KEYS if key not in removed and _rule_for_key(rules, key) is not None
-    }
+    masked = {key for key in _SCORE_KEYS if _field_is_masked(policy, key)}
     if not removed and not masked:
         return apply_similarity_floor(results, policy)
 
@@ -615,19 +621,18 @@ def _apply_visible_similarity_floor(results: list, policy: EffectivePolicy) -> l
     kept = []
     for record in results:
         lowered = {str(k).lower() for k in record} if isinstance(record, Mapping) else set()
-        # A record the walk does not stop on is unscored, so dropped (fails closed).
+        transformed_seen = False
         for key in _SCORE_KEYS:
-            if key in masked:
-                kept.append(record)
-                break
-            if key in lowered:
+            if key in lowered and key not in masked:
                 score = _numeric_field(record, (key,))
                 if score is not None and score >= floor:
                     kept.append(record)
                 break
-            if key in removed:
+            if key in masked or key in removed:
+                transformed_seen = True
+        else:
+            if transformed_seen:
                 kept.append(record)
-                break
     return kept
 
 
@@ -766,10 +771,10 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
     ``EnforcedResult`` the context wrapper has verified). Runs, in pipeline order:
 
       1. row filters      each filter whose field is visible, unmasked and allowed
-      2. tag filters      deniedTags always, over the tag keys that are not masked;
+      2. tag filters      deniedTags always, over the tag keys that are not masked
+                          (a hidden or projected-out key counts as unmasked);
                           allowedTags when no tag key is hidden, projected out or masked
-      3. relevance floor  per record, walking the score keys in precedence order to
-                          the first that is present, masked or removed upstream
+      3. relevance floor  per record, on the first present, unmasked score key
       5. hidden fields    removing an absent field is a no-op
       6. allowed fields   projecting a projection is a no-op
       8. result limit     truncating a truncated list is a no-op
@@ -784,10 +789,9 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
            record, so the filter fails closed and drops all of them, or it holds the
            mask, so the filter compares against the mask. deniedTags is never
            skipped (it cannot drop a record for a missing tag);
-      3.   the floor on a record whose first decisive score key is masked, or is
-           hidden or projected out and absent (the producer's pipeline applied the
-           floor before removing it). A score key the tool left in the record is
-           read, and a record with no decisive score key is dropped;
+      3.   the floor on a record with no present, unmasked score key when a score key
+           is masked, or hidden or projected out and absent. A score key the tool
+           left in the record is read, and any other unscored record is dropped;
       4.   the size ceiling -- a record's size changes once it is projected and masked;
       7.   masking -- ``hash`` is not idempotent, so a second pass hashes the hash.
 
@@ -810,13 +814,17 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
     ]
     # deniedTags always re-runs: a denylist never drops an untagged record, so a tag
     # key the field-level steps removed cannot make it over-drop. A masked tag key
-    # holds the mask, not the tags, so it is not read. allowedTags does drop an
+    # holds the mask, not the tags, so it is not read; a hidden or projected-out key
+    # the tool left in holds the raw tags, so deniedTags reads it even when also
+    # masked. allowedTags keeps skipping every key a masking rule matches: reading
+    # more keys could only let it keep more. allowedTags does drop an
     # untagged record, so it runs only when every tag key is left untouched.
     filtered = _filter_by_tag_rules(
         filtered,
         policy,
         check_allowed=not any(_field_is_transformed(policy, key) for key in _TAG_KEYS),
-        masked_rules=_masking_rules(policy),
+        is_masked=lambda key: _field_is_masked(policy, key),
+        allowed_is_masked=lambda key: _rule_for_key(_masking_rules(policy), key) is not None,
     )
     filtered = _apply_visible_similarity_floor(filtered, policy)
 
@@ -1186,7 +1194,7 @@ def _harvest_tag_values(value: Any, into: list[str]) -> None:
 
 
 def _collect_tags(
-    node: Any, into: list[str], masked_rules: list[MaskingRule] | None = None
+    node: Any, into: list[str], is_masked: Callable[[str], bool] | None = None
 ) -> None:
     """Collect tags from every recognized tag key anywhere in ``node``.
 
@@ -1195,34 +1203,34 @@ def _collect_tags(
     removal use (spec section 4), so ``Tags`` and ``metadata.tags`` are found
     alongside ``tags``.
 
-    ``masked_rules`` skips every key a masking rule matches, value and all, as
-    masking replaces that value wholesale. Used over already-enforced output, where
-    such a key holds the mask rather than the tags.
+    ``is_masked`` skips every key it holds masked, value and all, as masking
+    replaces that value wholesale. Used over already-enforced output, where such a
+    key holds the mask rather than the tags.
     """
     if isinstance(node, Mapping):
         for key, value in node.items():
-            if masked_rules and _rule_for_key(masked_rules, str(key)) is not None:
+            if is_masked is not None and is_masked(str(key)):
                 continue
             if any(_field_name_matches(tag_key, str(key)) for tag_key in _TAG_KEYS):
                 _harvest_tag_values(value, into)
             # Walked whether or not the key matched: a matched key holding a
             # mapping may still nest a tag key of its own.
-            _collect_tags(value, into, masked_rules)
+            _collect_tags(value, into, is_masked)
         return
     if isinstance(node, (list, tuple)):
         for item in node:
-            _collect_tags(item, into, masked_rules)
+            _collect_tags(item, into, is_masked)
 
 
-def _extract_tags(record: Any, masked_rules: list[MaskingRule] | None = None) -> set[str]:
+def _extract_tags(record: Any, is_masked: Callable[[str], bool] | None = None) -> set[str]:
     """Every tag on a record, lower-cased, from any tag key at any depth.
 
     Lower-cased because tag values compare case-insensitively: ``deniedTags:
     ["Secret"]`` must drop a record tagged ``secret`` (connector spec section 7).
-    ``masked_rules`` skips masked keys, as in :func:`_collect_tags`.
+    ``is_masked`` skips masked keys, as in :func:`_collect_tags`.
     """
     collected: list[str] = []
-    _collect_tags(record, collected, masked_rules)
+    _collect_tags(record, collected, is_masked)
     return {tag.lower() for tag in collected}
 
 
@@ -1249,12 +1257,15 @@ def _filter_by_tag_rules(
     policy: EffectivePolicy,
     *,
     check_allowed: bool,
-    masked_rules: list[MaskingRule] | None = None,
+    is_masked: Callable[[str], bool] | None = None,
+    allowed_is_masked: Callable[[str], bool] | None = None,
 ) -> list:
     """:func:`filter_by_tags`, with the allowedTags half optional and masked keys skippable.
 
-    ``check_allowed=False`` applies deniedTags alone. ``masked_rules`` reads tags
-    only from keys no masking rule matches (see :func:`_collect_tags`).
+    ``check_allowed=False`` applies deniedTags alone. ``is_masked`` reads tags only
+    from keys it does not hold masked (see :func:`_collect_tags`).
+    ``allowed_is_masked``, when given, replaces it for the allowedTags half, so each
+    half can skip keys by its own test.
     """
     if not policy.object_rules or not policy.object_rules.tag_rules:
         return results
@@ -1271,15 +1282,19 @@ def _filter_by_tag_rules(
 
     filtered: list = []
     for item in results:
-        tags = _extract_tags(item, masked_rules)
+        tags = _extract_tags(item, is_masked)
 
         # Check denied tags first (takes precedence)
         if denied_tags and tags & denied_tags:
             continue
 
         # Check allowed tags
-        if allowed_tags is not None and not (tags & allowed_tags):
-            continue
+        if allowed_tags is not None:
+            allowed_over = (
+                tags if allowed_is_masked is None else _extract_tags(item, allowed_is_masked)
+            )
+            if not (allowed_over & allowed_tags):
+                continue
 
         filtered.append(item)
 

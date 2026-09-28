@@ -1,5 +1,5 @@
 {
-  "description": "Already-enforced results: a tool opts out of re-enforcement by returning an EnforcedResult marker bound to the signed context's signature. Honoured only on an exact, constant-time signature match, and only by executeWithEnforcement. An honoured marker skips masking, the size ceiling, each row filter or allowedTags filter whose field the policy hides, projects out or masks, and the similarity floor on a record whose first decisive score key is masked (and neither hidden nor projected out) or is hidden or projected out and absent, since the producer's pipeline applied the floor before removing it. A score key the tool left in the record is read, even a hidden one. The filters on visible, unmasked, allowed fields, the hidden-field strip, the allowed-field projection and maxResults are re-applied, because over already-enforced output they are no-ops.",
+  "description": "Already-enforced results: a tool opts out of re-enforcement by returning an EnforcedResult marker bound to the signed context's signature. Honoured only on an exact, constant-time signature match, and only by executeWithEnforcement. An honoured marker skips masking, the size ceiling, each row filter or allowedTags filter whose field the policy hides, projects out or masks, and the similarity floor on a record with no present, unmasked score key when a score key is masked (and neither hidden nor projected out) or is hidden or projected out and absent. The first present, unmasked score key is always read, even a hidden one the tool left in, so a visible low score is never kept because a higher-precedence key was removed. The filters on visible, unmasked, allowed fields, the hidden-field strip, the allowed-field projection and maxResults are re-applied, because over already-enforced output they are no-ops.",
   "action": "executeWithEnforcement",
   "signingKey": "already-enforced-fixture-key-0123456789abcdef",
   "context": {
@@ -1245,6 +1245,51 @@
       "notes": "A masked tag key holds the mask, not the tags, so the backstop does not read it."
     },
     {
+      "name": "matching marker reads deniedTags from a hidden and masked tag key the tool left in the record",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "tags"
+            ],
+            "maskedFields": [
+              {
+                "field": "tags",
+                "maskType": "redact"
+              }
+            ]
+          },
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "tags": [
+            "secret"
+          ]
+        },
+        {
+          "id": 2
+        }
+      ],
+      "expected": [
+        {
+          "id": 2
+        }
+      ],
+      "notes": "A hidden and masked key counts as hidden: the pipeline strips it before masking, so a tag key the tool left in holds the raw tags, not a mask. deniedTags reads it and drops the record; hidden-field removal then strips nothing from the survivor."
+    },
+    {
       "name": "matching marker still applies the similarity floor on a visible score key when allowedFields projects out the others",
       "policy": {
         "version": "1.0",
@@ -1282,7 +1327,7 @@
       ]
     },
     {
-      "name": "matching marker keeps records whose hidden score key is absent, scored or not",
+      "name": "matching marker keeps a record with no visible score key when a score key is hidden",
       "policy": {
         "version": "1.0",
         "permissions": {
@@ -1312,16 +1357,12 @@
       "expected": [
         {
           "id": 1
-        },
-        {
-          "id": 2,
-          "similarity": 0.1
         }
       ],
-      "notes": "The full pipeline applies the floor before hiddenFields strips score, so an absent hidden score key means the producer's pipeline already checked it. The walk stops at score and keeps both records; similarity is never read."
+      "notes": "score is hidden and absent, so a transformed score key is seen. {id: 1} has no present, unmasked score key and is kept, since its score may have been removed after the producer's pipeline checked it. {id: 2} carries a visible similarity, which is read and is below the floor."
     },
     {
-      "name": "matching marker agrees with the full pipeline when a hidden score key is absent and the next key is below the floor",
+      "name": "matching marker drops a record on a low visible score key when a higher-precedence score key is hidden (intentional over-drop)",
       "policy": {
         "version": "1.0",
         "permissions": {
@@ -1345,13 +1386,8 @@
           "similarity": 0.1
         }
       ],
-      "expected": [
-        {
-          "name": "a",
-          "similarity": 0.1
-        }
-      ],
-      "notes": "The marked record is what the full pipeline makes of {name: a, score: 0.9, similarity: 0.1}: the floor reads score (0.9) and keeps it, then score is stripped. The walk stops at the absent hidden score key and keeps it, so the two paths agree."
+      "expected": [],
+      "notes": "Intentional fail-closed over-drop. The marked record is what the full pipeline makes of {name: a, score: 0.9, similarity: 0.1}: the floor reads score (0.9) and keeps it, then score is stripped. The marker path cannot know the raw score was high, so it reads the visible similarity (0.1) and drops the record. Over-dropping is preferred to keeping a visible low score because a higher-precedence key was removed."
     },
     {
       "name": "matching marker reads a hidden score key the tool left in the record",
@@ -1382,7 +1418,7 @@
       "notes": "Only a masked score key hides the value. A hidden key still present is read, as deniedTags reads a hidden tag key that is still present."
     },
     {
-      "name": "matching marker keeps a record whose first score key is masked",
+      "name": "matching marker reads a visible score key past a masked one",
       "policy": {
         "version": "1.0",
         "permissions": {
@@ -1410,14 +1446,8 @@
           "similarity": 0.1
         }
       ],
-      "expected": [
-        {
-          "name": "a",
-          "score": "***",
-          "similarity": 0.1
-        }
-      ],
-      "notes": "score is first in precedence and masked, so the walk stops there and keeps the record: the mask hides the value the data layer checked. similarity is never read."
+      "expected": [],
+      "notes": "score is masked, so the walk notes it and continues. similarity is present and unmasked, so it is read and is below the floor."
     },
     {
       "name": "matching marker reads a hidden and masked score key the tool left in the record",
@@ -1454,7 +1484,7 @@
       "notes": "A hidden and masked key counts as hidden: the full pipeline strips it before masking, so no mask ever lands. Present, so it is read and the record dropped."
     },
     {
-      "name": "matching marker keeps a record whose hidden and masked score key is absent",
+      "name": "matching marker reads a visible score key past a hidden and masked one",
       "policy": {
         "version": "1.0",
         "permissions": {
@@ -1484,13 +1514,73 @@
           "similarity": 0.1
         }
       ],
+      "expected": [],
+      "notes": "A hidden and masked key counts as hidden. score is absent, so the walk notes it and continues; similarity is present and unmasked, so it is read and is below the floor."
+    },
+    {
+      "name": "matching marker keeps a record whose only score key is masked",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "score",
+                "maskType": "redact"
+              }
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "score": "***"
+        }
+      ],
       "expected": [
+        {
+          "name": "a",
+          "score": "***"
+        }
+      ],
+      "notes": "score holds the mask, so it is not read. No other score key is present, and a masked score key was seen, so the record is kept."
+    },
+    {
+      "name": "matching marker reads a visible score key when allowedFields projects out a higher-precedence one",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name",
+              "similarity"
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
         {
           "name": "a",
           "similarity": 0.1
         }
       ],
-      "notes": "A hidden and masked key counts as hidden. Absent, so the producer's pipeline already applied the floor to it; similarity is never read."
+      "expected": [],
+      "notes": "score is projected out and absent, so the walk notes it and continues. similarity is visible and below the floor, so the record is dropped: a removed higher-precedence key never keeps a visible low score."
     },
     {
       "name": "matching marker drops an unscored record when no score key is transformed",
