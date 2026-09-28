@@ -44,9 +44,11 @@ in TypeScript, and `EnforcedResult.For(data, context)` in .NET.
   keys that are not masked; `allowedTags` runs unless a tag key is transformed. The relevance
   floor reads the first present, unmasked score key in precedence order, even a hidden or
   projected-out one the tool left in. A record with none is kept only when a score key is
-  masked, or hidden or projected out and absent, and is otherwise dropped. With `score` hidden,
-  a record kept on a high raw `score` is dropped when its visible `similarity` is low: an
-  intentional fail-closed over-drop. A key that is both hidden and masked counts as hidden,
+  masked, or hidden or projected out and absent, and is otherwise dropped. A higher-precedence
+  score key that was removed or masked never keeps a record whose visible score is low: with
+  `score` hidden, a record kept on a high raw `score` is dropped when its visible `similarity`
+  is low, and with `score` masked and `similarity` 0.1 visible, the record is dropped. This is
+  an intentional fail-closed over-drop. A key that is both hidden and masked counts as hidden,
   for the floor and for `deniedTags`. Hidden-field removal, allowed-field projection
   and `maxResults` still run.
   Pre-execution checks are unchanged.

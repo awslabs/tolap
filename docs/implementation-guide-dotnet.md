@@ -326,9 +326,10 @@ it.
 
   A record with no present, unmasked score key is kept only if a transformed score key was
   seen, and is otherwise dropped. A visible low score is never kept because a higher-precedence
-  key was removed. This over-drops on purpose: with `score` hidden, a record the data layer
-  kept on a high `score` is dropped when its next visible score key is below the floor, since
-  the marker path cannot know the raw `score`.
+  key was removed or masked. This over-drops on purpose: with `score` hidden, a record the data
+  layer kept on a high `score` is dropped when its next visible score key is below the floor,
+  since the marker path cannot know the raw `score`. The same holds for a masked key: with
+  `score` masked and `similarity` 0.1 visible, the record is dropped.
 - `deniedTags` uses the same masked test, so it reads a hidden and masked tag key the tool left
   in. `allowedTags` still skips every key a masking rule matches, because reading more keys
   could only let it keep more.

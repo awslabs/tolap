@@ -531,9 +531,11 @@ is set and no pattern matches it) or masks it. An honoured marker's data gets:
   and it is neither hidden nor projected out; a hidden and masked key counts as
   hidden), or hidden or projected out and absent, is noted and the walk continues. A
   record with no present, unmasked score key is kept only if such a key was seen, and
-  is otherwise dropped. This is an intentional fail-closed over-drop: with `score`
-  hidden, a record the data layer kept on a high `score` is dropped when its next
-  visible score key is low, since the marker path cannot know the raw `score`;
+  is otherwise dropped. This is an intentional fail-closed over-drop for any
+  higher-precedence score key that was removed or masked: with `score` hidden, a
+  record the data layer kept on a high `score` is dropped when its next visible score
+  key is low, since the marker path cannot know the raw `score`; with `score` masked
+  and `similarity` 0.1 visible, the record is likewise dropped;
 - hidden-field removal, allowed-field projection and the result limit.
 
 Over correctly enforced data these are no-ops, and they drop what the data layer let
@@ -542,6 +544,22 @@ or `allowedTags` over a transformed field, and a masked score key, because the o
 carries its value, so the step would fail closed on every record or compare against
 the mask; and the size ceiling, because a record's size changes once it is projected
 and masked.
+
+Tag collection over an honoured marker's data skips every key it treats as masked,
+value and all, since masking replaces that value wholesale. A masked parent key is
+skipped with everything under it, so tags nested beneath it (a masked `metadata`
+holding `metadata.tags`) are not read. The two tag filters use different masked
+tests, and each fails closed:
+
+- `deniedTags` uses the strict test: a key is masked when a masking rule matches it
+  and it is neither hidden nor projected out. A hidden and masked key the tool left
+  in is therefore read. Reading more keys can only find more denied tags, so a
+  denylist over the strict test can only drop more records, never keep more.
+- `allowedTags` uses the loose test: any key a masking rule matches is skipped, hidden
+  or not. Reading fewer keys can only find fewer allowed tags, so an allowlist over
+  the loose test can only drop more. It can drop a record the full pipeline kept:
+  when the only allowed tag sits under a masked parent key, the record looks untagged
+  and fails the allowlist.
 
 The binding is to the context, not to one call. A marker bound to a context matches
 every call made with that context until the context expires. The marker is a claim
