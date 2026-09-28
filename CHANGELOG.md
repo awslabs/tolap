@@ -6,6 +6,22 @@ All notable changes to TOLAP are documented in this file. The format follows
 
 ## Unreleased
 
+### Added
+- `objectRules.toolRules` (`allowedTools`, `hiddenTools`): per-identity MCP tool gating,
+  enforced by every MCP wrapper entry point that takes a tool name whenever a policy carries
+  it. The write pre-checks take an optional tool name (`tool_name=` / `{ toolName }` /
+  `toolName:`); when it is passed, the tool gate runs before the write checks, without
+  requiring `canQuery`. A write without it, and a few query, field and endpoint helpers that
+  take no tool name, apply no tool rules (canonical spec §16). No code change is needed to adopt it; a policy without
+  `toolRules` is decided exactly as before. Merged like `endpointRules` and covered by the
+  context signature. Upgrade wrappers before authoring `toolRules`: released SDK versions up
+  to and including 1.1.0 do not enforce `toolRules`; enforcement ships in the next release
+  (threat model R-9).
+- `filter_tools` / `filterTools` / `FilterTools` on the signed-context MCP wrappers, for
+  `tools/list` handlers. They list nothing for a policy that grants no read or write
+  permission, and drop null and non-string entries.
+- Console editor for tool rules.
+
 ### Fixed
 
 **The SQL pre-checks validate every table a query references.** The SQL prepare paths

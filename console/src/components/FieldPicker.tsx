@@ -33,10 +33,19 @@ export interface FieldPickerProps {
    * there tells the author the exact opposite of the truth -- and the page's own hint
    * directly above it says the right thing, so they see two contradictory statements at
    * once and the wrong one is the one attached to the control.
+   *
+   * `unrestricted` is a list whose emptiness restricts nothing: a deny-list such as
+   * `hiddenTools`, or an allow-list that is absent rather than `[]`. The caller decides,
+   * because only it can tell absent from empty -- `selected` is always an array here.
    */
-  readonly emptyMeans?: "allowList" | "everySource";
+  readonly emptyMeans?: "allowList" | "everySource" | "unrestricted";
   readonly onChange: (next: string[]) => void;
   readonly describedBy?: string;
+  /**
+   * Input placeholder, for a list whose names do not come from the catalog (MCP tool
+   * names). Unset keeps the catalog wording.
+   */
+  readonly placeholder?: string;
 }
 
 /** Every field name a policy could name for this source. */
@@ -103,6 +112,7 @@ export function FieldPicker({
   onChange,
   describedBy,
   emptyMeans = "allowList",
+  placeholder,
 }: FieldPickerProps) {
   const [draft, setDraft] = useState("");
 
@@ -146,7 +156,11 @@ export function FieldPicker({
             Except for `sourcePatterns`, where both mean "every source" (section 10).
             Same control, opposite meaning -- so the message has to follow the list.
           */}
-          {emptyMeans === "everySource" ? (
+          {emptyMeans === "unrestricted" ? (
+            <>
+              Nothing selected. This list <strong>restricts nothing</strong>.
+            </>
+          ) : emptyMeans === "everySource" ? (
             <>
               Nothing selected. This policy applies to{" "}
               <strong>every source</strong> — which is what an empty list means here,
@@ -200,11 +214,12 @@ export function FieldPicker({
           list={listId}
           value={draft}
           placeholder={
-            manifest
+            placeholder ??
+            (manifest
               ? objects
                 ? "Select or type an object name"
                 : "Select or type a field name"
-              : "Select a source above to see suggestions"
+              : "Select a source above to see suggestions")
           }
           aria-label={`Add to ${label}`}
           aria-describedby={describedBy}

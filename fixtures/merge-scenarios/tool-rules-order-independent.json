@@ -1,0 +1,22 @@
+{
+  "description": "Matrix D2: the inputs of tool-rules-intersect-and-union.json with their priorities reversed. The merged toolRules must be identical -- intersection and union are commutative for T -- so allowedTools is still [] (disjoint lists, never absent) and hiddenTools is still [\"admin_reset\"] with tools-a's [] contributing nothing. Only sourceProfiles differs: merge lists them in input order, and the inputs here are in ascending priority order like every other merge fixture.",
+  "inputs": [
+    { "version": "1.0", "name": "no-tools", "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "allowedObjects": ["patients"] } },
+    { "version": "1.0", "name": "tools-b", "priority": 20,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "toolRules": { "allowedTools": ["export_segment_csv"], "hiddenTools": ["admin_reset"] } } },
+    { "version": "1.0", "name": "tools-a", "priority": 30,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "toolRules": { "allowedTools": ["query_patients", "count_patients"], "hiddenTools": [] } } }
+  ],
+  "expected": {
+    "sourceProfiles": ["no-tools", "tools-b", "tools-a"],
+    "permissions": { "canQuery": true, "readOnly": true },
+    "objectRules": {
+      "allowedObjects": ["patients"],
+      "toolRules": { "allowedTools": [], "hiddenTools": ["admin_reset"] }
+    }
+  }
+}

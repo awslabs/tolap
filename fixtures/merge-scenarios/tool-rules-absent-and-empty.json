@@ -1,0 +1,18 @@
+{
+  "description": "Matrix D4: one input leaves allowedTools absent (unrestricted), the other authors allowedTools [] (deny every tool). Absent contributes no restriction, so the intersection is the one contributing list -- [] -- and it MUST be retained as [], never collapsed to absent, which would silently turn deny-all into unrestricted. hiddenTools comes only from the first input and passes through.",
+  "inputs": [
+    { "version": "1.0", "name": "hide-only", "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "toolRules": { "hiddenTools": ["x"] } } },
+    { "version": "1.0", "name": "deny-all-tools", "priority": 20,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "toolRules": { "allowedTools": [] } } }
+  ],
+  "expected": {
+    "sourceProfiles": ["hide-only", "deny-all-tools"],
+    "permissions": { "canQuery": true, "readOnly": true },
+    "objectRules": {
+      "toolRules": { "allowedTools": [], "hiddenTools": ["x"] }
+    }
+  }
+}

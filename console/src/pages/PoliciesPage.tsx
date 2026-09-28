@@ -229,6 +229,32 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
     );
   };
 
+  /**
+   * Merge into `objectRules.toolRules`, dropping the key once no list is left.
+   *
+   * Shaped like `patchEndpointRules`, with one difference that matters: when every list is
+   * cleared the `toolRules` key is removed rather than left as `{}`. For the other rule
+   * groups an empty object is inert, but a present `toolRules` -- even `{}` -- switches on
+   * the tool-name grammar in every wrapper, so "cleared both boxes" must not save a policy
+   * that enforces differently from one that never had tool rules.
+   */
+  const patchToolRules = (
+    change: Partial<
+      NonNullable<NonNullable<PolicyDefinition["objectRules"]>["toolRules"]>
+    >,
+  ) => {
+    setDraft((current) => {
+      if (!current) return current;
+      const next = { ...current.objectRules?.toolRules, ...change };
+      const empty = Object.values(next).every((value) => value === undefined);
+      const { toolRules: _previous, ...otherRules } = current.objectRules ?? {};
+      return {
+        ...current,
+        objectRules: empty ? otherRules : { ...otherRules, toolRules: next },
+      };
+    });
+  };
+
   const patchTagRules = (
     change: Partial<
       NonNullable<NonNullable<PolicyDefinition["objectRules"]>["tagRules"]>
@@ -735,6 +761,53 @@ export function PoliciesPage({ readOnly }: { readonly readOnly: boolean }) {
                 />
               </fieldset>
             ) : null}
+
+            {/*
+              Tool rules, rendered for every source category and with no source at all:
+              they gate MCP tool names, which every wrapper sees whatever it fronts, so
+              there is no category for which they would be silently ignored. Names are
+              free text -- tool names are not in the source catalog -- so no manifest is
+              passed and nothing is flagged "not in catalog".
+            */}
+            <fieldset disabled={readOnly}>
+              <legend>Tool rules</legend>
+              {/*
+                The "leave empty" advice only holds while allowedTools is absent. A stored
+                `[]` denies every tool, so the hint must not tell the author the empty box
+                they are looking at restricts nothing.
+              */}
+              <p className="hint" data-testid="tool-rules-hint">
+                Enforced by MCP wrappers on calls that pass a tool name, from the next context
+                issued. Listing honours it where the tools/list handler uses filterTools.{" "}
+                {draft.objectRules?.toolRules?.allowedTools?.length === 0
+                  ? '"Allowed tools" is stored as an empty list, which denies every tool; add names to allow exactly those.'
+                  : 'Leave "Allowed tools" empty for no restriction; add names to restrict to exactly those.'}{" "}
+                Hidden tools match case-insensitively.
+              </p>
+              <FieldPicker
+                label="Allowed tools"
+                placeholder="Type a tool name"
+                // Absent is unrestricted; a stored `[]` denies every tool and must say so.
+                emptyMeans={
+                  draft.objectRules?.toolRules?.allowedTools === undefined
+                    ? "unrestricted"
+                    : "allowList"
+                }
+                selected={draft.objectRules?.toolRules?.allowedTools ?? []}
+                onChange={(next) =>
+                  patchToolRules({ allowedTools: next.length > 0 ? next : undefined })
+                }
+              />
+              <FieldPicker
+                label="Hidden tools"
+                placeholder="Type a tool name"
+                emptyMeans="unrestricted"
+                selected={draft.objectRules?.toolRules?.hiddenTools ?? []}
+                onChange={(next) =>
+                  patchToolRules({ hiddenTools: next.length > 0 ? next : undefined })
+                }
+              />
+            </fieldset>
 
             <fieldset disabled={readOnly}>
               <legend>Limits</legend>

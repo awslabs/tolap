@@ -14,6 +14,7 @@ from tolap_core.models import (
     PurposeProfile,
     RowFilter,
     TagRules,
+    ToolRules,
 )
 
 
@@ -199,6 +200,7 @@ def _merge_object_rules(policies: list[PolicyDefinition]) -> ObjectRules | None:
     row_filters = _merge_row_filters(policies)
     tag_rules = _merge_tag_rules(policies)
     endpoint_rules = _merge_endpoint_rules(policies)
+    tool_rules = _merge_tool_rules(policies)
 
     return ObjectRules(
         allowed_objects=allowed_objects,
@@ -207,6 +209,7 @@ def _merge_object_rules(policies: list[PolicyDefinition]) -> ObjectRules | None:
         row_filters=row_filters if row_filters else None,
         tag_rules=tag_rules if _has_tag_rules(tag_rules) else None,
         endpoint_rules=endpoint_rules if _has_endpoint_rules(endpoint_rules) else None,
+        tool_rules=tool_rules if _has_tool_rules(tool_rules) else None,
     )
 
 
@@ -294,6 +297,25 @@ def _merge_endpoint_rules(policies: list[PolicyDefinition]) -> EndpointRules | N
         hidden_endpoints=hidden,
         allowed_methods=methods,
     )
+
+
+def _merge_tool_rules(policies: list[PolicyDefinition]) -> ToolRules | None:
+    """``allowedTools`` intersects and ``hiddenTools`` unions, both retaining ``[]``.
+
+    Names are compared exactly here; the ASCII case fold for ``hiddenTools`` happens at
+    matching time, so the signed bytes carry every spelling an author wrote.
+    """
+    allowed = _intersect_optional_lists([
+        p.object_rules.tool_rules.allowed_tools
+        if p.object_rules and p.object_rules.tool_rules else None
+        for p in policies
+    ])
+    hidden = _union_optional_lists([
+        p.object_rules.tool_rules.hidden_tools
+        if p.object_rules and p.object_rules.tool_rules else None
+        for p in policies
+    ])
+    return ToolRules(allowed_tools=allowed, hidden_tools=hidden)
 
 
 def _merge_limits(policies: list[PolicyDefinition]) -> PolicyLimits | None:
@@ -447,6 +469,7 @@ def _has_object_rules(rules: ObjectRules | None) -> bool:
         rules.row_filters is not None,
         _has_tag_rules(rules.tag_rules),
         _has_endpoint_rules(rules.endpoint_rules),
+        _has_tool_rules(rules.tool_rules),
     ])
 
 
@@ -475,6 +498,12 @@ def _has_endpoint_rules(rules: EndpointRules | None) -> bool:
         rules.hidden_endpoints is not None,
         rules.allowed_methods is not None,
     ])
+
+
+def _has_tool_rules(rules: ToolRules | None) -> bool:
+    if rules is None:
+        return False
+    return rules.allowed_tools is not None or rules.hidden_tools is not None
 
 
 def _has_limits(limits: PolicyLimits | None) -> bool:

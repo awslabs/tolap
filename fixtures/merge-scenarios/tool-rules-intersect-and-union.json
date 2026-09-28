@@ -1,0 +1,22 @@
+{
+  "description": "objectRules.toolRules merges like endpointRules: allowedTools intersects (absent contributes no restriction; disjoint lists give [] = deny every tool, never absent), hiddenTools unions and retains [] (canonical spec section 3). The third input carries no toolRules at all and must not erase the others' rules.",
+  "inputs": [
+    { "version": "1.0", "name": "tools-a", "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "toolRules": { "allowedTools": ["query_patients", "count_patients"], "hiddenTools": [] } } },
+    { "version": "1.0", "name": "tools-b", "priority": 20,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "toolRules": { "allowedTools": ["export_segment_csv"], "hiddenTools": ["admin_reset"] } } },
+    { "version": "1.0", "name": "no-tools", "priority": 30,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "allowedObjects": ["patients"] } }
+  ],
+  "expected": {
+    "sourceProfiles": ["tools-a", "tools-b", "no-tools"],
+    "permissions": { "canQuery": true, "readOnly": true },
+    "objectRules": {
+      "allowedObjects": ["patients"],
+      "toolRules": { "allowedTools": [], "hiddenTools": ["admin_reset"] }
+    }
+  }
+}

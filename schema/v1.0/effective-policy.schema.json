@@ -348,6 +348,29 @@
               }
             }
           }
+        },
+        "toolRules": {
+          "type": "object",
+          "description": "Per-identity MCP tool gating. Enforced by every MCP wrapper whenever present. Tool names must match ^[A-Za-z0-9_.-]{1,128}$ (else \"invalid tool name\"); hiddenTools folds ASCII case only. allowedTools absent = unrestricted, [] = deny every tool; exact, case-sensitive. hiddenTools matched case-insensitively.",
+          "additionalProperties": false,
+          "properties": {
+            "allowedTools": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+              },
+              "uniqueItems": true
+            },
+            "hiddenTools": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+              },
+              "uniqueItems": true
+            }
+          }
         }
       }
     },

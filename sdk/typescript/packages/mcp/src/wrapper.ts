@@ -9,6 +9,7 @@
 
 import {
   validateAccess,
+  validateToolAccess,
   validateToolAction,
   validateFieldAccess,
   validateEndpoint,
@@ -194,7 +195,12 @@ export class SecureMcpToolWrapper {
     tool: McpToolDefinition,
     policy: EffectivePolicy,
   ): { allowed: boolean; reason?: string } {
-    // Purpose-bound action validation (§15.2). First among the policy checks, matching the
+    // Per-identity tool gating (§16). First among the policy checks, as in the context
+    // wrapper, so both families report "tool is hidden" when more than one rule would deny.
+    const toolResult = validateToolAccess(tool.name, policy);
+    if (!toolResult.allowed) return toolResult;
+
+    // Purpose-bound action validation (§15.2). Next among the policy checks, matching the
     // position the context wrapper and the .NET/Python families use, so all of them report the
     // same reason when more than one rule would deny.
     const action = validateToolAction(

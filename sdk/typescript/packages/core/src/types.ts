@@ -165,6 +165,52 @@ export interface EndpointRules {
   allowedMethods?: string[];
 }
 
+/**
+ * Per-identity MCP tool gating (canonical-enforcement-spec.md §16). Evaluated by every MCP
+ * wrapper whenever present. `allowedTools` absent is unrestricted;
+ * `[]` denies every tool. Allowed names match exactly; hidden names case-insensitively.
+ */
+export interface ToolRules {
+  allowedTools?: string[];
+  hiddenTools?: string[];
+}
+
+/**
+ * A list is absent (`undefined`/`null`) or a dense array of strings.
+ *
+ * An index loop rather than `every`, which skips the holes of a sparse array.
+ */
+function isNameList(v: unknown): boolean {
+  if (v === undefined || v === null) return true;
+  if (!Array.isArray(v)) return false;
+  for (let i = 0; i < v.length; i++) {
+    if (!(i in v) || typeof v[i] !== "string") return false;
+  }
+  return true;
+}
+
+/**
+ * Whether `r` is a well-formed `toolRules` block: a plain (non-array) object whose
+ * `allowedTools` and `hiddenTools` are each absent, `null`, or a dense array of strings.
+ *
+ * The one guard for both places a malformed block can arrive, because TS has no
+ * deserializer: `merge` throws on it (so resolution never signs it) and
+ * `validateToolAccess` denies on it (for a policy built by hand).
+ *
+ * Unknown keys are deliberately ignored, so a typo such as `{allowedTool: [...]}` is an
+ * unrestricted block. Rejecting them (matrix E3) is the schema's `additionalProperties:
+ * false` and the server's 400. Python's deserializer ignores them too.
+ */
+export function isToolRulesShape(r: unknown): r is ToolRules {
+  return (
+    typeof r === "object" &&
+    r !== null &&
+    !Array.isArray(r) &&
+    isNameList((r as ToolRules).allowedTools) &&
+    isNameList((r as ToolRules).hiddenTools)
+  );
+}
+
 export interface ObjectRules {
   allowedObjects?: string[];
   hiddenObjects?: string[];
@@ -172,6 +218,7 @@ export interface ObjectRules {
   rowFilters?: RowFilter[];
   tagRules?: TagRules;
   endpointRules?: EndpointRules;
+  toolRules?: ToolRules;
 }
 
 // ---------------------------------------------------------------------------

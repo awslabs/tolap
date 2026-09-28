@@ -354,6 +354,55 @@ invalidates the signature.
   (architecture.md section 1), so the factory returns one tool. Hold several contexts and
   call it per context.
 
+### Tool rules
+
+No code change is needed to enforce a policy's `objectRules.toolRules`: the
+`SecureMcpToolWrapper` you already construct (directly or through the factory) enforces them
+on every entry point that takes a tool name (`pre_execute` and `execute_with_enforcement`)
+whenever the policy carries them (canonical-enforcement-spec.md section 16). A policy without
+`toolRules` is decided exactly as before.
+
+`pre_write` and `execute_write_with_enforcement` take an optional keyword-only `tool_name`.
+When you pass it, the same tool gate runs before the write checks, with the same denial reasons,
+and it does not need `can_query`, so a write-only policy works. Without it, the write path
+applies no tool rules:
+
+```python
+result = wrapper.pre_write(context, WriteOperation.insert, "notes", payload, tool_name="write_note")
+```
+
+`execute_sql_with_enforcement` takes no tool name, so it applies neither the static
+`allowed_tools` option nor `toolRules`. If you rely on `toolRules`, route read tools through
+`pre_execute` or `execute_with_enforcement`, and pass `tool_name` on every write.
+
+For a `tools/list` handler, `filter_tools` returns the names this caller may see, in input
+order. It applies the static `allowed_tools` option, the policy's `toolRules` and the purpose
+action check, drops null and non-string entries, and returns `[]` for a context that fails
+validation or a policy that grants none of `can_query`, `can_insert`, `can_update` and
+`can_delete`. Listing is not permission:
+`pre_execute` re-checks every call.
+
+```python
+from tolap_mcp import SecureMcpServerOptions, SecureMcpToolWrapper
+
+# No new option: the wrapper enforces the caller's toolRules on every tool-name entry point.
+wrapper = SecureMcpToolWrapper(SecureMcpServerOptions(signing_key=key))
+
+@server.list_tools()
+async def list_tools(ctx):
+    # ctx.security_context stands for however your server carries the caller's
+    # signed context; TOLAP does not speak MCP, so that lookup is yours.
+    names = [t.name for t in ALL_TOOLS]
+    visible = set(wrapper.filter_tools(ctx.security_context, names))
+    return [t for t in ALL_TOOLS if t.name in visible]
+```
+
+Empty means opposite things in the two places: `allowed_tools=[]` on the options is
+*unrestricted*, while `toolRules.allowedTools: []` in a policy *denies every tool*; when both
+are set, a tool must pass both. Upgrade the wrappers before you author `toolRules`: released
+SDK versions up to and including 1.1.0 do not enforce `toolRules`; enforcement ships in the
+next release (threat model R-9).
+
 
 ## Step 5: Wire It Together
 

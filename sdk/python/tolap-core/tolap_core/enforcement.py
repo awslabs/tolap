@@ -1182,6 +1182,44 @@ def validate_endpoint(path: str, method: str, policy: EffectivePolicy) -> Access
     return AccessResult(allowed=True)
 
 
+# MCP's recommended tool-name characters, 1-128 long. Enforced only when a policy carries
+# toolRules, so a policy without them is decided exactly as before.
+_TOOL_NAME = re.compile(r"[A-Za-z0-9_.\-]{1,128}")
+
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+
+def _ascii_lower(value: str) -> str:
+    return value.translate(_ASCII_LOWER)
+
+
+def validate_tool_access(tool_name: str, policy: EffectivePolicy) -> AccessResult:
+    """Tool gating by ``objectRules.toolRules`` (canonical-enforcement-spec.md section 16).
+
+    Hidden before allowed, as for objects and endpoints. The hide is case-insensitive and
+    the allow exact: both deny a mis-cased name, which is the direction that matters when
+    the MCP server dispatches case-insensitively. ``can_query`` is deliberately not
+    consulted -- the wrapper checks it after this, so "you may not call this tool" is the
+    answer when both would deny. Reasons do not echo the name.
+    """
+    rules = policy.object_rules.tool_rules if policy.object_rules else None
+    if rules is None:
+        return AccessResult(allowed=True)
+    # Grammar first: with only [A-Za-z0-9_.-] left, an ASCII fold is exact in all three
+    # SDKs. Unicode folds are not (U+212A KELVIN SIGN folds to "k" in Python and JS but not
+    # under .NET OrdinalIgnoreCase), and whitespace would slip past a hide. fullmatch, not
+    # match with "$": "$" also matches before a trailing newline.
+    if not isinstance(tool_name, str) or not _TOOL_NAME.fullmatch(tool_name):
+        return AccessResult(allowed=False, reason="invalid tool name")
+    if rules.hidden_tools is not None:
+        folded = _ascii_lower(tool_name)
+        if any(_ascii_lower(hidden) == folded for hidden in rules.hidden_tools):
+            return AccessResult(allowed=False, reason="tool is hidden")
+    if rules.allowed_tools is not None and tool_name not in rules.allowed_tools:
+        return AccessResult(allowed=False, reason="tool not in allowed set")
+    return AccessResult(allowed=True)
+
+
 def validate_action(action_category: str, purpose_profile: PurposeProfile) -> AccessResult:
     """Validate a tool call's action category against its purpose (spec section 15.2).
 

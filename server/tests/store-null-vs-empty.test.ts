@@ -17,7 +17,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PolicyDefinition } from "@aws/tolap-core";
-import { validateFieldAccess } from "@aws/tolap-core";
+import { validateFieldAccess, validateToolAccess } from "@aws/tolap-core";
 import { PostgresPolicyStore } from "../src/db/store.ts";
 import { ADMIN, HAVE_DB, staticIdentity, testDb, type TestDb } from "./helpers/db.ts";
 
@@ -118,6 +118,7 @@ describe("null vs empty array (spec section 3)", () => {
           fieldRules: { allowedFields: [], hiddenFields: [], maskedFields: [] },
           tagRules: { allowedTags: [], deniedTags: [] },
           endpointRules: { allowedEndpoints: [], allowedMethods: [] },
+          toolRules: { allowedTools: [], hiddenTools: [] },
           rowFilters: [],
         },
       } as unknown as PolicyDefinition;
@@ -131,7 +132,63 @@ describe("null vs empty array (spec section 3)", () => {
       expect(loaded?.objectRules?.fieldRules?.hiddenFields).toEqual([]);
       expect(loaded?.objectRules?.tagRules?.allowedTags).toEqual([]);
       expect(loaded?.objectRules?.endpointRules?.allowedEndpoints).toEqual([]);
+      expect(loaded?.objectRules?.toolRules?.allowedTools, "allowedTools [] collapsed").toEqual([]);
+      expect(loaded?.objectRules?.toolRules?.hiddenTools, "hiddenTools [] collapsed").toEqual([]);
       expect(loaded?.objectRules?.rowFilters).toEqual([]);
+    });
+
+    it("G1: an empty allowedTools still denies every tool after a round trip", async () => {
+      // The decision, not just the shape: had the store coerced [] to null or dropped the
+      // key, validateToolAccess would allow the call.
+      const policy = {
+        version: "1.0",
+        name: "deny-all-tools",
+        permissions: { canQuery: true },
+        objectRules: { toolRules: { allowedTools: [], hiddenTools: [] } },
+      } as unknown as PolicyDefinition;
+
+      await store.putDefinitionAs(policy, ADMIN);
+      const loaded = await store.getDefinition("deny-all-tools");
+
+      expect(loaded?.objectRules?.toolRules).toEqual({ allowedTools: [], hiddenTools: [] });
+      expect(Object.keys(loaded!.objectRules!.toolRules!).sort()).toEqual([
+        "allowedTools",
+        "hiddenTools",
+      ]);
+      expect(
+        validateToolAccess("query_patients", { objectRules: loaded!.objectRules } as never),
+      ).toEqual({ allowed: false, reason: "tool not in allowed set" });
+    });
+
+    it("G1: a policy without toolRules comes back without a toolRules key", async () => {
+      // The other direction: the store must not invent `toolRules: {}`, which would turn
+      // the tool-name grammar on for a policy that never asked for it.
+      await store.putDefinitionAs(define("no-tool-rules", { hiddenFields: ["ssn"] }), ADMIN);
+      const loaded = await store.getDefinition("no-tool-rules");
+
+      expect(Object.keys(loaded!.objectRules!)).not.toContain("toolRules");
+      expect(
+        validateToolAccess("export_segment_csv ", { objectRules: loaded!.objectRules } as never),
+      ).toEqual({ allowed: true });
+    });
+
+    it("G1: allowedTools [] survives the version history path", async () => {
+      const policy = {
+        version: "1.0",
+        name: "versioned-deny-tools",
+        permissions: { canQuery: true },
+        objectRules: { toolRules: { allowedTools: [], hiddenTools: [] } },
+      } as unknown as PolicyDefinition;
+      const versionNo = await store.saveDraft(policy, ADMIN, "initial");
+      await store.publish("versioned-deny-tools", versionNo, ADMIN);
+
+      const published = await store.getDefinition("versioned-deny-tools");
+      expect(published?.objectRules?.toolRules).toEqual({ allowedTools: [], hiddenTools: [] });
+      const versions = await store.listVersions("versioned-deny-tools");
+      expect(versions[0].policy.objectRules?.toolRules).toEqual({
+        allowedTools: [],
+        hiddenTools: [],
+      });
     });
 
     it("preserves sourcePatterns: [] which means every source (section 10)", async () => {

@@ -337,6 +337,46 @@ Use `factory.categoryOf(context)` to branch before requesting a tool.
   (architecture.md §1), so the factory returns one tool. Hold several contexts and call it
   per context.
 
+### Tool rules
+
+No code change is needed to enforce `objectRules.toolRules`: the `SecureContextToolWrapper`
+you already construct (directly or through `SecureToolFactory`), and the store-resolving
+`SecureMcpToolWrapper`, enforce them on every entry point that takes a tool name
+(`preExecute`, `preExecuteAsync`, `prepareSqlQuery`, `executeSqlWithEnforcement` and
+`executeWithEnforcement` on the context wrapper; `executeTool` on the store-resolving one)
+whenever the policy carries them. `preWrite` and `executeWriteWithEnforcement` take an optional
+`toolName` in their trailing options object (`PreWriteOptions`), for example
+`wrapper.preWrite(ctx, WriteOperation.Insert, "notes", payload, { toolName: "write_note" })`.
+When it is set, the same tool gate runs before the write checks, with the same denial reasons,
+and it does not need `canQuery`, so a write-only policy works. Without it, the write path
+applies no tool rules; if you rely on `toolRules`, pass `toolName` on every write. To hide
+the tools an identity may not call from the agent as well, filter your `tools/list` response
+with `filterTools`. It returns the permitted names in input order, drops null and non-string
+entries, and returns an empty list when the context fails validation or the policy grants none
+of `canQuery`, `canInsert`, `canUpdate` and `canDelete`:
+
+```typescript
+import { SecureContextToolWrapper } from "@aws/tolap-mcp";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+
+// No new option: the wrapper enforces the caller's toolRules on every tool-name entry point.
+const wrapper = new SecureContextToolWrapper({ signingKey: SIGNING_KEY });
+
+server.setRequestHandler(ListToolsRequestSchema, async (_request, extra) => {
+  // contextFor(extra) stands for however your server carries the caller's signed context.
+  const names = ALL_TOOLS.map((t) => t.name);
+  const visible = new Set(wrapper.filterTools(contextFor(extra), names));
+  return { tools: ALL_TOOLS.filter((t) => visible.has(t.name)) };
+});
+```
+
+Listing is not permission: `preExecute` re-checks every call. Empty means the opposite in the
+two places a tool list appears: the wrapper's static `allowedTools` option treats an empty or
+omitted list as unrestricted, while the policy's `toolRules.allowedTools: []` denies every
+tool (canonical spec §16). Upgrade every wrapper before authoring `toolRules`: released SDK
+versions up to and including 1.1.0 do not enforce `toolRules`; enforcement ships in the next
+release (threat model R-9).
+
 
 ## Step 5: Wire It Together
 

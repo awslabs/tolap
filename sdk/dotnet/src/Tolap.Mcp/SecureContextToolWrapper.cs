@@ -6,6 +6,12 @@ namespace Tolap.Mcp;
 /// <summary>
 /// Configuration for the context-driven secure tool wrapper.
 /// </summary>
+/// <param name="AllowedTools">
+/// Tool names this wrapper will run; any other name is denied <c>tool not in allowed list</c>.
+/// Null or empty means unrestricted -- the opposite of a policy's
+/// <c>toolRules.allowedTools: []</c>, which denies every tool. Both apply; the effective set is
+/// their intersection.
+/// </param>
 /// <param name="AllowUnenforceableShapes">
 /// Pass through tool results the policy cannot be applied to. Off by default; see
 /// canonical-enforcement-spec.md section 5.
@@ -158,18 +164,20 @@ public sealed class SecureContextToolWrapper
         var ctxResult = ValidateSecurityContext(context);
         if (!ctxResult.Allowed) return ctxResult;
 
-        if (_options.AllowedTools is not null
-            && _options.AllowedTools.Length > 0
-            && !_options.AllowedTools.Contains(args.ToolName))
-        {
-            return new AccessResult(false, "tool not in allowed list");
-        }
+        var staticResult = StaticToolListGate(args.ToolName);
+        if (!staticResult.Allowed) return staticResult;
 
         var policy = context.Policies.FirstOrDefault();
         if (policy is null)
         {
             return new AccessResult(false, "no policy in context");
         }
+
+        // Per-identity tool gating (section 16), whenever the policy carries it. Before
+        // CanQuery: the more specific answer when both would deny, and reachable under a
+        // write-only policy. The name is passed through unchanged -- the engine owns matching.
+        var toolResult = EnforcementEngine.ValidateToolAccess(args.ToolName, policy);
+        if (!toolResult.Allowed) return toolResult;
 
         if (!policy.Permissions.CanQuery)
         {
@@ -209,6 +217,64 @@ public sealed class SecureContextToolWrapper
         }
 
         return new AccessResult(true);
+    }
+
+    /// <summary>
+    /// The wrapper's static <c>AllowedTools</c> list. Shared by <see cref="PreExecute"/> and the
+    /// tool-name <c>PreWrite</c> overload so both give the same denial reason.
+    /// </summary>
+    private AccessResult StaticToolListGate(string toolName) =>
+        _options.AllowedTools is { Length: > 0 } && !_options.AllowedTools.Contains(toolName)
+            ? new AccessResult(false, "tool not in allowed list")
+            : new AccessResult(true);
+
+    /// <summary>
+    /// Whether the policy grants at least one of <c>CanQuery</c>, <c>CanInsert</c>,
+    /// <c>CanUpdate</c> and <c>CanDelete</c>.
+    /// </summary>
+    private static bool GrantsAnyOperation(EffectivePolicy policy)
+    {
+        var p = policy.Permissions;
+        return p.CanQuery || p.CanInsert == true || p.CanUpdate == true || p.CanDelete == true;
+    }
+
+    /// <summary>
+    /// The names from <paramref name="toolNames"/>, in order, that <see cref="PreExecute"/>
+    /// would not refuse by name -- for a <c>tools/list</c> handler. Applies the static
+    /// <c>AllowedTools</c>, the policy's tool rules and the purpose action check; not
+    /// <c>CanQuery</c>, object/field/endpoint rules, history or the judge. Listing is not
+    /// permission: <see cref="PreExecute"/> re-checks every call. An invalid context lists
+    /// nothing, and so does a policy that grants none of <c>CanQuery</c>, <c>CanInsert</c>,
+    /// <c>CanUpdate</c> and <c>CanDelete</c>. Null entries are dropped.
+    /// </summary>
+    /// <remarks>
+    /// Returns a new list and never mutates <paramref name="toolNames"/>. Duplicates are kept
+    /// and nothing is reordered, so the result lines up with what the caller registered.
+    /// </remarks>
+    public IReadOnlyList<string> FilterTools(SecurityContext context, IEnumerable<string> toolNames)
+    {
+        if (!ValidateSecurityContext(context).Allowed) return Array.Empty<string>();
+        var policy = context.Policies.FirstOrDefault();
+        if (policy is null) return Array.Empty<string>();
+        // A policy that grants no operation makes every tool uncallable, so it lists nothing.
+        // Any one grant is enough: CanQuery is not required, so a write-only policy still lists
+        // its write tools (subject to the tool rules).
+        if (!GrantsAnyOperation(policy)) return Array.Empty<string>();
+
+        var allowed = new List<string>();
+        foreach (var name in toolNames)
+        {
+            // A null entry is never a tool name, whether or not the policy carries tool rules.
+            if (name is null) continue;
+            if (_options.AllowedTools is { Length: > 0 } && !_options.AllowedTools.Contains(name))
+                continue;
+            if (!EnforcementEngine.ValidateToolAccess(name, policy).Allowed)
+                continue;
+            if (!PurposeActionResolver.ValidateTool(policy, name, _options.ToolActionCategories).Allowed)
+                continue;
+            allowed.Add(name);
+        }
+        return allowed;
     }
 
     /// <summary>
@@ -314,15 +380,31 @@ public sealed class SecureContextToolWrapper
     /// through <see cref="PostExecuteResult"/> (section 4.5).
     /// </para>
     /// </remarks>
+    /// <param name="toolName">
+    /// The MCP tool the write is made for. When given, the tool gate <see cref="PreExecute"/>
+    /// uses runs first, after the context check and before any write check: the static
+    /// <c>AllowedTools</c> list, then the policy's tool rules (section 16), with the same denial
+    /// reasons. It does not require <c>CanQuery</c>, so it works under a write-only policy. When
+    /// null, no tool-name check runs and the behaviour is unchanged -- which also means a
+    /// <c>hiddenTools</c> entry is not enforced on that call, so pass it for every write tool.
+    /// </param>
     public AccessResult PreWrite(
         SecurityContext context,
         WriteOperation operation,
         string? objectName = null,
         IReadOnlyDictionary<string, object?>? payload = null,
-        WriteValidationOptions? options = null)
+        WriteValidationOptions? options = null,
+        string? toolName = null)
     {
         var ctxResult = ValidateSecurityContext(context);
         if (!ctxResult.Allowed) return ctxResult;
+
+        // The same order as PreExecute: the static list, then the policy, then the tool rules.
+        if (toolName is not null)
+        {
+            var staticResult = StaticToolListGate(toolName);
+            if (!staticResult.Allowed) return staticResult;
+        }
 
         var policy = context.Policies.FirstOrDefault();
         if (policy is null)
@@ -330,8 +412,27 @@ public sealed class SecureContextToolWrapper
             return new AccessResult(false, "no policy in context");
         }
 
+        if (toolName is not null)
+        {
+            var toolResult = EnforcementEngine.ValidateToolAccess(toolName, policy);
+            if (!toolResult.Allowed) return toolResult;
+        }
+
         return EnforcementEngine.ValidateWrite(operation, objectName, payload, policy, options);
     }
+
+    /// <summary>
+    /// Validates a write before it is issued, with no tool-name check. Retained so assemblies
+    /// compiled against the earlier signature keep binding. A call that passes no tool name
+    /// still binds here; pass the tool name to apply the tool rules.
+    /// </summary>
+    public AccessResult PreWrite(
+        SecurityContext context,
+        WriteOperation operation,
+        string? objectName,
+        IReadOnlyDictionary<string, object?>? payload,
+        WriteValidationOptions? options) =>
+        PreWrite(context, operation, objectName, payload, options, toolName: null);
 
     /// <summary>
     /// Validates a write, issues it, and enforces the policy on anything it returns.
@@ -345,15 +446,20 @@ public sealed class SecureContextToolWrapper
     /// rather than denied as an unenforceable shape: there is no data to enforce a policy over.
     /// </remarks>
     /// <exception cref="UnauthorizedAccessException">Thrown when the write is denied.</exception>
+    /// <param name="toolName">
+    /// The MCP tool the write is made for; when given, the tool gate runs first. See
+    /// <see cref="PreWrite(SecurityContext, WriteOperation, string?, IReadOnlyDictionary{string, object?}?, WriteValidationOptions?, string?)"/>.
+    /// </param>
     public async Task<object?> ExecuteWriteWithEnforcementAsync(
         SecurityContext context,
         WriteOperation operation,
         Func<Task<object?>> writeFn,
         string? objectName = null,
         IReadOnlyDictionary<string, object?>? payload = null,
-        WriteValidationOptions? options = null)
+        WriteValidationOptions? options = null,
+        string? toolName = null)
     {
-        var pre = PreWrite(context, operation, objectName, payload, options);
+        var pre = PreWrite(context, operation, objectName, payload, options, toolName);
         if (!pre.Allowed)
         {
             throw new UnauthorizedAccessException($"Access denied: {pre.Reason}");
@@ -362,6 +468,22 @@ public sealed class SecureContextToolWrapper
         var result = await writeFn().ConfigureAwait(false);
         return result is null ? null : PostExecuteResult(context, result);
     }
+
+    /// <summary>
+    /// Validates a write, issues it, and enforces the policy on anything it returns, with no
+    /// tool-name check. Retained so assemblies compiled against the earlier signature keep
+    /// binding. A call that passes no tool name still binds here; pass the tool name to apply
+    /// the tool rules.
+    /// </summary>
+    /// <exception cref="UnauthorizedAccessException">Thrown when the write is denied.</exception>
+    public Task<object?> ExecuteWriteWithEnforcementAsync(
+        SecurityContext context,
+        WriteOperation operation,
+        Func<Task<object?>> writeFn,
+        string? objectName,
+        IReadOnlyDictionary<string, object?>? payload,
+        WriteValidationOptions? options) =>
+        ExecuteWriteWithEnforcementAsync(context, operation, writeFn, objectName, payload, options, toolName: null);
 
     /// <summary>
     /// Runs the pre-execution checks and rewrites a SQL query so the policy's restrictions

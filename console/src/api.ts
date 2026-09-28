@@ -213,6 +213,10 @@ export interface PolicyDefinition {
       hiddenEndpoints?: string[];
       allowedMethods?: string[];
     };
+    // MCP tool gating (canonical spec section 16). Not category-gated: every MCP wrapper
+    // enforces it whatever the source. `allowedTools` absent = unrestricted, `[]` = deny
+    // every tool; `hiddenTools` matches case-insensitively (ASCII fold).
+    toolRules?: { allowedTools?: string[]; hiddenTools?: string[] };
   };
   limits?: {
     maxResults?: number;
@@ -241,9 +245,18 @@ export interface PolicyVersion {
   createdAt: string;
 }
 
+/**
+ * Every source category the connector spec defines, and so every category the policy
+ * editor can be asked to render for. The `SourceManifest.category` type is derived from
+ * this list, so a new category cannot be added to one without the other -- and tests that
+ * need "every category" iterate this rather than a copy that could drift.
+ */
+export const SOURCE_CATEGORIES = ["db", "api", "kb", "storage"] as const;
+export type SourceCategory = (typeof SOURCE_CATEGORIES)[number];
+
 export interface SourceManifest {
   sourceConnectionId: string;
-  category: "db" | "api" | "kb" | "storage";
+  category: SourceCategory;
   displayName?: string;
   objects: Array<{ name: string; fields: string[] }>;
   endpoints: Array<{ path: string; methods: string[]; responseFields: string[] }>;

@@ -195,6 +195,36 @@ INVALID_BY_DESIGN = {
     "invalid-bad-mask-type.json": "scramble",
 }
 
+# Individual embedded policies that are schema-invalid on purpose, keyed by fixture and
+# case name, each mapped to the JSON Schema keyword it must fail. They pin how an SDK
+# behaves when a policy the schema forbids reaches it anyway -- a glob in allowedTools
+# (A18), a non-ASCII name (A7, A24, A25), explicit nulls (A19, A20, which spec section 3 reads as
+# absent) and duplicates (A23). Validating them would invert their purpose; exempting them
+# silently would hide a real fixture drifting out of the schema. So they are named one
+# case at a time, and asserted below to fail for exactly the stated reason.
+EMBEDDED_INVALID_BY_DESIGN = {
+    ("enforcement/validate-tool-access.json", "A7"): "pattern",
+    ("enforcement/validate-tool-access.json", "A18"): "pattern",
+    ("enforcement/validate-tool-access.json", "A19"): "type",
+    ("enforcement/validate-tool-access.json", "A20"): "type",
+    ("enforcement/validate-tool-access.json", "A23"): "uniqueItems",
+    ("enforcement/validate-tool-access.json", "A24"): "pattern",
+    ("enforcement/validate-tool-access.json", "A25"): "pattern",
+}
+
+_CASE_POLICY_POINTER = re.compile(r"^\.cases\[(\d+)\]\.policy$")
+
+
+def _invalid_by_design_keyword(path: Path, data: object, pointer: str) -> str | None:
+    """The expected failing keyword if this embedded policy is exempt, else ``None``."""
+    match = _CASE_POLICY_POINTER.match(pointer)
+    if match is None or not isinstance(data, dict):
+        return None
+    case = data["cases"][int(match.group(1))]
+    key = (path.relative_to(FIXTURES_DIR).as_posix(), case.get("name"))
+    return EMBEDDED_INVALID_BY_DESIGN.get(key)
+
+
 # A validator for one delegation hop, built from the security-context schema's ``$defs``
 # so the ``$ref`` inside resolves. The ``$defs`` block is carried alongside the subschema
 # rather than the whole document being validated, because a hop is not a context.
@@ -551,12 +581,36 @@ class TestEmbeddedPolicies:
         data = json.loads(path.read_text())
 
         for pointer, policy in _embedded_policies(data):
+            if _invalid_by_design_keyword(path, data, pointer) is not None:
+                continue
             _assert_valid(
                 f"{_relative(path)}#{pointer}",
                 policy,
                 "effective-policy",
                 fragment=True,
             )
+
+    @pytest.mark.parametrize(
+        "fixture, case_name",
+        sorted(EMBEDDED_INVALID_BY_DESIGN),
+        ids=lambda value: str(value),
+    )
+    def test_each_exempt_policy_exists_and_fails_for_its_stated_reason(
+        self, fixture: str, case_name: str
+    ) -> None:
+        """An exemption naming a renamed case, or a case invalid for some other reason,
+        would stop pinning anything -- so both are asserted."""
+        data = json.loads((FIXTURES_DIR / fixture).read_text())
+        cases = [case for case in data["cases"] if case.get("name") == case_name]
+        assert len(cases) == 1, f"{fixture} has {len(cases)} cases named {case_name}"
+
+        errors = list(FRAGMENT_VALIDATORS["effective-policy"].iter_errors(cases[0]["policy"]))
+        keyword = EMBEDDED_INVALID_BY_DESIGN[(fixture, case_name)]
+
+        assert errors, f"{fixture}#{case_name} is schema-valid; drop its exemption"
+        assert {error.validator for error in errors} == {keyword}, [
+            error.message for error in errors
+        ]
 
 
 class TestOperatorEnumsAgreeAcrossTheTwoSchemas:
@@ -630,3 +684,88 @@ class TestOperatorEnumsAgreeAcrossTheTwoSchemas:
             "a hop must be able to express a glob scope, or a parent cannot delegate "
             "a family of purposes"
         )
+
+
+def _tool_rules_schema(schema_name: str) -> dict:
+    """``objectRules.toolRules`` as declared by one schema.
+
+    ``objectRules`` is declared inline under ``properties`` in both documents rather than
+    under ``$defs``, so that is the path read here.
+    """
+    return load_schema(schema_name)["properties"]["objectRules"]["properties"]["toolRules"]
+
+
+class TestToolRulesSchema:
+    """toolRules is accepted identically by both documents, and nothing else is."""
+
+    VALID = {"allowedTools": ["query_patients"], "hiddenTools": ["export_segment_csv"]}
+
+    @pytest.mark.parametrize("schema_name", ["policy-definition", "effective-policy"])
+    def test_tool_rules_definitions_agree(self, schema_name: str) -> None:
+        rules = _tool_rules_schema(schema_name)
+        assert rules["additionalProperties"] is False
+        assert set(rules["properties"]) == {"allowedTools", "hiddenTools"}
+        for key in ("allowedTools", "hiddenTools"):
+            assert rules["properties"][key] == {
+                "type": "array",
+                "items": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$"},
+                "uniqueItems": True,
+            }
+
+    def test_both_schemas_carry_the_same_tool_rules(self) -> None:
+        assert _tool_rules_schema("policy-definition") == _tool_rules_schema(
+            "effective-policy"
+        )
+
+    @pytest.mark.parametrize("schema_name", ["policy-definition", "effective-policy"])
+    def test_a_valid_tool_rules_block_is_accepted(self, schema_name: str) -> None:
+        for tool_rules in (self.VALID, {}, {"allowedTools": []}, {"hiddenTools": []}):
+            assert _errors(
+                {"objectRules": {"toolRules": tool_rules}}, schema_name, fragment=True
+            ) == [], tool_rules
+
+    # Matrix rows E1-E7: every malformed shape both schemas must refuse.
+    MALFORMED = {
+        "E1 string, not array": {"allowedTools": "query_patients"},
+        "E2 non-string entry": {"allowedTools": [1]},
+        "E3 unknown key": {"allowedTool": ["x"]},
+        "E4 array, not object": [],
+        "E5 duplicate entries": {"allowedTools": ["query_patients", "query_patients"]},
+        "E6 name with a space": {"hiddenTools": ["export segment"]},
+        "E7 empty-string name": {"hiddenTools": [""]},
+        "non-ASCII name (U+212A KELVIN SIGN)": {"hiddenTools": ["\u212aill_switch"]},
+        "129-character name": {"hiddenTools": ["a" * 129]},
+    }
+
+    @pytest.mark.parametrize("schema_name", ["policy-definition", "effective-policy"])
+    @pytest.mark.parametrize("label", sorted(MALFORMED))
+    def test_a_malformed_tool_rules_block_is_rejected(
+        self, schema_name: str, label: str
+    ) -> None:
+        document = {"objectRules": {"toolRules": self.MALFORMED[label]}}
+        assert _errors(document, schema_name, fragment=True), (
+            f"{schema_name} accepted {label}: {self.MALFORMED[label]!r}"
+        )
+
+    def test_python_jsonschema_admits_a_trailing_newline_that_ecma_refuses(self) -> None:
+        """A validator divergence, pinned so nobody mistakes this suite for the grammar check.
+
+        JSON Schema defines ``pattern`` with ECMA-262 semantics, where ``$`` matches only at
+        the end of input -- so the server's ajv rejects ``"x\\n"`` (asserted in
+        ``server/tests/console-policy-shapes.test.ts``). Python's ``jsonschema`` evaluates the
+        same pattern with ``re.search``, where ``$`` also matches just before a trailing
+        newline, so it admits the value. The SDK grammar check must therefore not be built
+        from ``re.match(pattern)``: matrix row A4 (``"export_segment_csv\\n"`` denies
+        "invalid tool name") is what holds each SDK to the ECMA reading.
+        """
+        pattern = _tool_rules_schema("effective-policy")["properties"]["hiddenTools"][
+            "items"
+        ]["pattern"]
+
+        assert re.search(pattern, "x\n"), "Python re semantics changed; revisit this note"
+        assert _errors(
+            {"objectRules": {"toolRules": {"hiddenTools": ["x\n"]}}},
+            "effective-policy",
+            fragment=True,
+        ) == []
+        assert re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", "x\n") is None

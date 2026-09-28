@@ -81,6 +81,13 @@ const CASES: Array<[string, unknown]> = [
   ["endpointRules: empty allowlist (deny-all)", base({ endpointRules: { allowedEndpoints: [] } })],
   ["endpointRules: empty methods (deny-all)", base({ endpointRules: { allowedMethods: [] } })],
   ["endpointRules: methods absent (schema default)", base({ endpointRules: { allowedEndpoints: ["/x"] } })],
+  // -- Tool rules ----------------------------------------------------------
+  //
+  // `allowedTools: []` denies every tool and an absent `allowedTools` permits every tool,
+  // so both spellings must be accepted or the editor cannot express one of them.
+  ["toolRules allow + hide", base({ toolRules: { allowedTools: ["query_patients"], hiddenTools: ["export_segment_csv"] } })],
+  ["toolRules empty allow (deny all)", base({ toolRules: { allowedTools: [] } })],
+  ["toolRules 128-char name", base({ toolRules: { hiddenTools: ["a".repeat(128)] } })],
   ["tagRules: allow and deny", base({ tagRules: { allowedTags: ["deidentified"], deniedTags: ["phi"] } })],
   ["tagRules: empty allow (deny-all)", base({ tagRules: { allowedTags: [] } })],
   ["limits: kb minSimilarityScore", base({ tagRules: { allowedTags: ["x"] } }, { minSimilarityScore: 0.7 })],
@@ -245,6 +252,19 @@ const REJECTED: Array<[string, unknown]> = [
   ["a latency budget below the 100ms floor", purposeBound({
     purposeId: "fraud-detection", judge: { maxLatencyMs: 50 },
   })],
+  // Why the Tool rules editor validates names as they are typed (matrix rows E1-E7). The
+  // server enforces these through ajv, whose ECMA-262 `$` does not match before a
+  // trailing newline -- unlike Python's `re`, see test_schema_fixture_validation.py.
+  ["toolRules unknown key", base({ toolRules: { allowedTool: ["x"] } })],
+  ["toolRules non-string entry", base({ toolRules: { hiddenTools: [42] } })],
+  ["toolRules string not array", base({ toolRules: { allowedTools: "query_patients" } })],
+  ["toolRules as array", base({ toolRules: [] })],
+  ["toolRules duplicate entries", base({ toolRules: { allowedTools: ["a", "a"] } })],
+  ["toolRules name with space", base({ toolRules: { hiddenTools: ["export segment"] } })],
+  ["toolRules empty-string name", base({ toolRules: { hiddenTools: [""] } })],
+  ["toolRules non-ASCII name", base({ toolRules: { hiddenTools: ["\u212Aill_switch"] } })],
+  ["toolRules 129-char name", base({ toolRules: { hiddenTools: ["a".repeat(129)] } })],
+  ["toolRules trailing newline", base({ toolRules: { hiddenTools: ["x\n"] } })],
 ];
 
 describe("shapes the expanded policy builder emits", () => {

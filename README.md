@@ -93,7 +93,9 @@ what the model says. They have nothing to say about what the model saw, so a pro
 tool-call trace or an innocent follow-up question can still pull it back out.
 
 Notice what both paths have in common: the IAM/OAuth check passes either way. It's answering a
-different question, namely *may this agent call this tool at all?* Neither RBAC at the identity
+different question, namely *may this agent call this tool at all?*, and it gives the same answer
+for every user behind the agent. (TOLAP can narrow that per identity too; see
+[Tool Access](#tool-access).) Neither RBAC at the identity
 layer nor ABAC at a gateway can tell you which columns and rows this particular user should see
 through this particular call. That has to be decided where the query meets the data. Bedrock Agents,
 Azure AI Agent Service, Vertex AI Agents, LangChain: they all say the same thing, which is that
@@ -110,9 +112,71 @@ before anything crosses the boundary. If the wrapper is the only way in, there's
 thresholds, file prefixes, result caps. One policy can say: this user may query `patients`, but not
 the SSN column, only rows in their own region, and the email comes back as a SHA-256 hash.
 
+**Gate the tool, too, if you want.** The same signed policy can say which tools this identity may
+call at all. Leave it out and tool gating stays with your MCP host or gateway, exactly as before.
+
 **Keep the agent out of it.** You write no security-aware code in the agent. From where it sits, the
 restricted data was never there. That takes a whole category of prompt-injection and exfiltration
 problems off the table.
+
+## Tool Access
+
+Your MCP host or gateway already decides whether an agent may reach a server. It decides once, for
+everyone behind that agent. A policy can add a second answer, per identity:
+
+```json
+"objectRules": {
+  "toolRules": {
+    "allowedTools": ["query_patients", "count_patients"],
+    "hiddenTools": ["export_segment_csv"]
+  }
+}
+```
+
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/tool-access-dark.svg">
+  <img src="assets/diagrams/tool-access-light.svg" alt="Tool access and data access. Every call first clears the host or gateway check, which gives the same answer for every user. Inside the TOLAP wrapper, layer 1, tool access, applies when the signed policy carries objectRules.toolRules and decides whether this identity may call this tool at all. Layer 2, data access, decides what the call may return. The policy alone picks the combination, with no code change: data only, tools and data, or tools only." width="760">
+</picture>
+
+</div>
+
+There's no switch in your code. Every MCP wrapper entry point that takes a tool name enforces
+`toolRules` whenever the policy carries them, so the policy alone picks the combination:
+
+| Policy carries | You get |
+|---|---|
+| no `toolRules` | Data access only. Tool gating stays with the host, exactly as today. |
+| `toolRules` and data rules | Both layers narrow. |
+| `toolRules`, no data rules | Tool access only. |
+
+A few rules worth knowing:
+
+- `allowedTools` absent means unrestricted; `allowedTools: []` denies every tool. That's the
+  opposite of the wrapper's static `allowed_tools` option, where empty means unrestricted. When
+  both are set, a tool must pass both.
+- `allowedTools` matches exactly. `hiddenTools` matches case-insensitively, so a mis-cased name
+  can't slip past a hide.
+- Once a policy has `toolRules`, tool names must be plain ASCII (`A–Z a–z 0–9 _ . -`, at most 128
+  characters). Anything else is refused as `invalid tool name`, so look-alike Unicode or stray
+  whitespace can't dodge a hide.
+- On a call made through an entry point that takes a tool name, tool rules run before `canQuery`
+  and every data check, so a denied tool is refused before any query is built.
+- Write tools are gated too, if you pass the name: `pre_write(..., tool_name=...)` in Python,
+  `preWrite(..., { toolName })` in TypeScript and `PreWrite(..., toolName: ...)` in .NET (and the
+  `execute_write` helpers that call them). This works under a write-only policy. A write made
+  without the name applies no tool rules.
+- A few query, field and endpoint helpers still take no tool name and apply no tool rules
+  (listed in §16 of the canonical spec). If you rely on `toolRules`, pass the tool name on every
+  call.
+- For your `tools/list` handler, `filter_tools` / `filterTools` / `FilterTools` returns the tools
+  this identity may see. A policy that grants no read or write permission lists nothing. Listing
+  isn't permission: every call is re-checked.
+- Upgrade your wrappers before you write `toolRules`. Released SDK versions up to and including
+  1.1.0 do not enforce `toolRules`; enforcement ships in the next release.
+
+The full rules are in [§16 of the canonical spec](docs/canonical-enforcement-spec.md#16-tool-rules).
 
 ## Purpose Binding
 
@@ -613,6 +677,8 @@ When several policies apply to one user, they get merged. Most restrictive wins,
 | Row filters | Concatenate | All filters from all policies apply (AND) |
 | `purposeProfile.allowedActions` | Intersection | Disjoint lists yield `[]`, which denies every action |
 | `purposeProfile.prohibitedActions` | Union | Any policy can forbid a category |
+| `toolRules.allowedTools` | Intersection | Disjoint lists yield `[]`, which denies every tool |
+| `toolRules.hiddenTools` | Union | Any policy can hide a tool |
 | `purposeProfile.purposeId` | Must agree | Two different purposes cannot merge -> deny-all |
 | `purposeProfile.judge.model` | Must agree | Two different models cannot merge -> deny-all. Same hazard class as `purposeId`: a verdict is only meaningful against the model that produced it, so picking one would apply a judgement nobody asked for |
 
@@ -720,10 +786,11 @@ one for purpose binding. That's 20 files in total. Those six sit outside the fou
 tests are included in the numbers above.
 
 **One thing to be clear about: TOLAP is not an MCP server and doesn't speak the MCP protocol.** No
-JSON-RPC, no stdio transport, no `tools/list`, and not one package declares an MCP dependency. The
-`*-mcp` packages wrap *the function your tool layer already calls*. That's why the integration is
-the same substitution in thirteen of the fourteen, and why none of them wants a credential. Your
-code fetches the data. TOLAP decides what's allowed to leave.
+JSON-RPC, no stdio transport, no `tools/list`, and not one package declares an MCP dependency.
+(`filter_tools` is a plain function you call from your own `tools/list` handler; it takes names
+and returns names.) The `*-mcp` packages wrap *the function your tool layer already calls*.
+That's why the integration is the same substitution in thirteen of the fourteen, and why none of
+them wants a credential. Your code fetches the data. TOLAP decides what's allowed to leave.
 
 The fourteenth is Bedrock Agents, which invokes a Lambda. You can't build the signed context
 locally there, so it arrives as a session attribute and the handler checks the signature before
