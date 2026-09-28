@@ -1,0 +1,882 @@
+{
+  "description": "How a row filter's field is found on a row whose keys may be bare or qualified with an object name. Exists because the lookup fell back to the field-name matcher, which drops qualifiers, so a filter on 'patients.region' could read 'encounters.region'. A bare filter matching several qualified keys used whichever came first (issue #32).",
+  "action": "applyRowFilters",
+  "notes": "Lookup order, identical in every SDK: (1) an exact key is used as-is. (2) Otherwise every key the field-name matcher accepts is a candidate, EXCEPT a key whose object qualifier conflicts with the filter's. Both must be qualified and the qualifiers (everything before the last '.') must differ, compared ASCII case-insensitively (only A-Z folds to a-z). A qualified filter may still read a bare key, and a bare filter may read a qualified key. (3) Exactly one candidate supplies the value. None, or more than one, is MISSING, and a MISSING field drops the row for every operator (spec section 7). Each case carries its own records because key ORDER is part of what is being tested; the runners must preserve the order the fixture writes. Each case carries a full policy so the shared corpus walk validates it against policy-definition.schema.json.",
+  "cases": [
+    {
+      "name": "qualified-filter-ignores-other-object-key-equals",
+      "notes": "The reported defect. 'patients.region' must not be read from 'encounters.region' just because the leaf names coincide; with no candidate the field is MISSING and the row is dropped.",
+      "records": [
+        {
+          "id": "enc-only",
+          "encounters.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "qualified-filter-ignores-other-object-key-notEquals",
+      "notes": "MISSING drops the row for the negative operators too. Reading the other object's value would keep the row ('eu' != 'us').",
+      "records": [
+        {
+          "id": "enc-only",
+          "encounters.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "notEquals",
+              "value": "us"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "qualified-filter-ignores-other-object-key-notIn",
+      "notes": "As notEquals: an absent field is not 'not in the list'.",
+      "records": [
+        {
+          "id": "enc-only",
+          "encounters.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "notIn",
+              "values": [
+                "us"
+              ]
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "qualified-filter-ignores-other-object-key-isNull",
+      "notes": "Another object's present-and-null column must not satisfy isNull for this object: the field is absent, not null.",
+      "records": [
+        {
+          "id": "enc-null",
+          "encounters.region": null
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "isNull"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "qualified-filter-ignores-other-object-key-isNotNull",
+      "notes": "Another object's present value must not satisfy isNotNull for this object.",
+      "records": [
+        {
+          "id": "enc-value",
+          "encounters.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "isNotNull"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "qualified-filter-ignores-other-object-key-with-extra-qualifier",
+      "notes": "The key's qualifier ('db.encounters') differs from the filter's ('patients'), so it is not a candidate even though the matcher alone would accept it on the leaf.",
+      "records": [
+        {
+          "id": "enc-deep",
+          "db.encounters.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "qualified-filter-picks-own-object-conflicting-key-first",
+      "notes": "No exact key (the filter's case differs), so lookup falls to the matcher. The conflicting 'ENCOUNTERS.REGION' key comes first and must be skipped; 'PATIENTS.REGION' is the only candidate.",
+      "records": [
+        {
+          "id": "own-us",
+          "ENCOUNTERS.REGION": "eu",
+          "PATIENTS.REGION": "us"
+        },
+        {
+          "id": "own-eu",
+          "ENCOUNTERS.REGION": "us",
+          "PATIENTS.REGION": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "us"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "own-us"
+      ]
+    },
+    {
+      "name": "qualified-filter-picks-own-object-conflicting-key-last",
+      "notes": "The same as the previous case with the key order reversed. The answer must not depend on key order.",
+      "records": [
+        {
+          "id": "own-us",
+          "PATIENTS.REGION": "us",
+          "ENCOUNTERS.REGION": "eu"
+        },
+        {
+          "id": "own-eu",
+          "PATIENTS.REGION": "eu",
+          "ENCOUNTERS.REGION": "us"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "us"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "own-us"
+      ]
+    },
+    {
+      "name": "qualified-filter-picks-bare-key-over-conflicting-key-conflicting-first",
+      "notes": "A bare 'region' key is a candidate for 'patients.region'; 'encounters.region' is not. So 'region' is the only candidate whatever the order.",
+      "records": [
+        {
+          "id": "bare-us",
+          "encounters.region": "eu",
+          "region": "us"
+        },
+        {
+          "id": "bare-eu",
+          "encounters.region": "us",
+          "region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "us"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "bare-us"
+      ]
+    },
+    {
+      "name": "qualified-filter-picks-bare-key-over-conflicting-key-conflicting-last",
+      "notes": "The same as the previous case with the key order reversed.",
+      "records": [
+        {
+          "id": "bare-us",
+          "region": "us",
+          "encounters.region": "eu"
+        },
+        {
+          "id": "bare-eu",
+          "region": "eu",
+          "encounters.region": "us"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "us"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "bare-us"
+      ]
+    },
+    {
+      "name": "qualified-filter-matches-bare-key",
+      "notes": "Rows the tool has already projected carry bare keys. A qualified filter still reads them.",
+      "records": [
+        {
+          "id": "bare-eu",
+          "region": "eu"
+        },
+        {
+          "id": "bare-us",
+          "region": "us"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "bare-eu"
+      ]
+    },
+    {
+      "name": "bare-filter-matches-single-qualified-key",
+      "notes": "A bare filter reads a qualified key when that key is the only candidate.",
+      "records": [
+        {
+          "id": "q-eu",
+          "patients.region": "eu"
+        },
+        {
+          "id": "q-us",
+          "patients.region": "us"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "q-eu"
+      ]
+    },
+    {
+      "name": "bare-filter-ambiguous-across-objects-equals",
+      "notes": "'region' matches both 'patients.region' and 'encounters.region'. That is ambiguous, so the field is MISSING and every row is dropped, in either key order and even when the two values agree.",
+      "records": [
+        {
+          "id": "p-first",
+          "patients.region": "eu",
+          "encounters.region": "us"
+        },
+        {
+          "id": "e-first",
+          "encounters.region": "us",
+          "patients.region": "eu"
+        },
+        {
+          "id": "agree",
+          "patients.region": "eu",
+          "encounters.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "bare-filter-ambiguous-across-objects-notEquals",
+      "notes": "Ambiguity fails closed for the negative operators too. Picking either key would keep at least one of these rows.",
+      "records": [
+        {
+          "id": "p-first",
+          "patients.region": "eu",
+          "encounters.region": "us"
+        },
+        {
+          "id": "e-first",
+          "encounters.region": "us",
+          "patients.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "notEquals",
+              "value": "us"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "bare-filter-ambiguous-across-objects-isNull",
+      "notes": "An ambiguous field does not satisfy isNull, even when one of the candidates is null.",
+      "records": [
+        {
+          "id": "p-null",
+          "patients.region": null,
+          "encounters.region": "eu"
+        },
+        {
+          "id": "e-null",
+          "encounters.region": "eu",
+          "patients.region": null
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "isNull"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "bare-filter-ambiguous-across-objects-isNotNull",
+      "notes": "An ambiguous field does not satisfy isNotNull, even when both candidates are present.",
+      "records": [
+        {
+          "id": "both",
+          "patients.region": "eu",
+          "encounters.region": "us"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "isNotNull"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "exact-qualified-key-wins-over-conflicting-key",
+      "notes": "An exact key is used as-is. The conflicting key comes first and is never consulted.",
+      "records": [
+        {
+          "id": "exact-eu",
+          "encounters.region": "us",
+          "patients.region": "eu"
+        },
+        {
+          "id": "exact-us",
+          "encounters.region": "eu",
+          "patients.region": "us"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "exact-eu"
+      ]
+    },
+    {
+      "name": "exact-bare-key-wins-over-ambiguous-qualified-keys",
+      "notes": "A bare filter with an exact bare key present uses that key. The two qualified keys, which would be ambiguous on their own, are never consulted.",
+      "records": [
+        {
+          "id": "exact-eu",
+          "patients.region": "us",
+          "encounters.region": "us",
+          "region": "eu"
+        },
+        {
+          "id": "exact-us",
+          "patients.region": "eu",
+          "encounters.region": "eu",
+          "region": "us"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "exact-eu"
+      ]
+    },
+    {
+      "name": "exact-key-wins-over-case-variant-of-itself",
+      "notes": "The exact key 'patients.region' wins over its case variant 'PATIENTS.REGION'. Without the exact key the two would be ambiguous.",
+      "records": [
+        {
+          "id": "exact-eu",
+          "PATIENTS.REGION": "us",
+          "patients.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "exact-eu"
+      ]
+    },
+    {
+      "name": "qualifier-comparison-is-case-insensitive-for-a-match",
+      "notes": "'Patients' and 'PATIENTS' are the same object: field-name matching is case-insensitive (spec section 4).",
+      "records": [
+        {
+          "id": "case-eu",
+          "PATIENTS.Region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "Patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "case-eu"
+      ]
+    },
+    {
+      "name": "qualifier-comparison-is-case-insensitive-for-a-conflict",
+      "notes": "A case difference does not turn a different object into the same one. 'Encounters' still conflicts with 'patients'.",
+      "records": [
+        {
+          "id": "case-enc",
+          "Encounters.Region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "PATIENTS.REGION",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "case-variant-keys-of-same-object-are-ambiguous",
+      "notes": "With no exact key, 'patients.region' and 'PATIENTS.REGION' are two candidates. More than one candidate is MISSING, even for the same object.",
+      "records": [
+        {
+          "id": "two-variants",
+          "patients.region": "eu",
+          "PATIENTS.REGION": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "Patients.Region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "qualified-filter-with-bare-and-own-qualified-key-is-ambiguous",
+      "notes": "With no exact key, the bare 'region' and the case-variant 'PATIENTS.REGION' are both candidates for 'patients.region', so the lookup is ambiguous and the row is dropped.",
+      "records": [
+        {
+          "id": "bare-and-own",
+          "region": "eu",
+          "PATIENTS.REGION": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "qualified-filter-ignores-key-with-longer-qualifier-of-same-table",
+      "notes": "Qualifiers are compared whole. 'db.patients' is not 'patients', so a key 'db.patients.region' is not a candidate for the filter 'patients.region'. It is dropped, which fails closed; no suffix matching is attempted.",
+      "records": [
+        {
+          "id": "deep-key",
+          "db.patients.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "longer-qualifier-filter-ignores-shorter-qualified-key",
+      "notes": "The reverse: the filter 'db.patients.region' does not read the key 'patients.region'.",
+      "records": [
+        {
+          "id": "short-key",
+          "patients.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "db.patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "glob-filter-qualifier-is-literal-against-a-qualified-key",
+      "notes": "Glob characters in a row filter's qualifier are not expanded for the qualifier comparison. '*' is not 'patients', so the qualified key is not a candidate.",
+      "records": [
+        {
+          "id": "qualified",
+          "patients.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "*.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "glob-filter-still-reads-a-bare-key",
+      "notes": "A bare key has no qualifier to conflict with, so the filter '*.region' still reads 'region' through the field-name matcher.",
+      "records": [
+        {
+          "id": "bare",
+          "region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "*.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "bare"
+      ]
+    },
+    {
+      "name": "non-ascii-qualifier-folds-ascii-only-conflict",
+      "notes": "The qualifier comparison folds only A-Z to a-z. 'PAT\u0130ENTS' (U+0130, capital I with dot above) folds to 'pat\u0130ents', which is not 'pati\u0307ents' (i followed by U+0307, combining dot above). Full Unicode lower-casing would make them equal in some SDKs and not others, so the qualifiers conflict and the row is dropped.",
+      "records": [
+        {
+          "id": "combining-dot",
+          "pati\u0307ents.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "PAT\u0130ENTS.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "non-ascii-qualifier-folds-ascii-only-match",
+      "notes": "'PAT\u0130ENTS' and 'pat\u0130ents' differ only in ASCII letters, so they fold to the same qualifier and the key is the one candidate.",
+      "records": [
+        {
+          "id": "same-non-ascii",
+          "pat\u0130ents.REGION": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "PAT\u0130ENTS.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "same-non-ascii"
+      ]
+    },
+    {
+      "name": "non-ascii-qualifier-case-variant-is-not-folded",
+      "notes": "'\u00c9TAT' and '\u00e9tat' differ only in the case of a non-ASCII letter. Full Unicode lower-casing (str.lower, toLowerCase, ToLowerInvariant) makes them equal and would keep the row. The ASCII-only fold leaves '\u00c9' alone, so the qualifiers differ and the row is dropped.",
+      "records": [
+        {
+          "id": "accented",
+          "\u00e9tat.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "\u00c9TAT.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    }
+  ]
+}

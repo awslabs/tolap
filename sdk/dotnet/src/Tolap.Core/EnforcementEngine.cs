@@ -703,14 +703,79 @@ public static class EnforcementEngine
     /// </summary>
     private static readonly object Missing = new();
 
+    /// <summary>Folds A-Z to a-z and leaves every other character alone.</summary>
+    private static string AsciiLower(string value)
+        => string.Create(value.Length, value, static (span, source) =>
+        {
+            for (var i = 0; i < source.Length; i++)
+            {
+                var c = source[i];
+                span[i] = c is >= 'A' and <= 'Z' ? (char)(c + 32) : c;
+            }
+        });
+
+    /// <summary>
+    /// The ASCII-folded object qualifier of a field reference, or <c>null</c> if bare: everything
+    /// before the last <c>.</c>, so <c>patients</c> for <c>patients.region</c> and
+    /// <c>db.patients</c> for <c>db.patients.region</c>.
+    /// </summary>
+    /// <remarks>
+    /// Only A-Z folds to a-z. <see cref="string.ToLowerInvariant()"/> folds Unicode too, and not
+    /// the way Python and TypeScript do: they lower-case U+0130 to <c>i</c> plus U+0307, so the
+    /// same policy kept a row there and dropped it here. An ASCII-only fold gives the same answer
+    /// everywhere.
+    /// </remarks>
+    private static string? ObjectQualifier(string name)
+    {
+        var dot = name.LastIndexOf('.');
+        return dot >= 0 ? AsciiLower(name[..dot]) : null;
+    }
+
+    /// <summary>Whether a filter and a row key are both qualified, by different objects.</summary>
+    private static bool QualifiersConflict(string fieldName, string key)
+    {
+        var fieldQualifier = ObjectQualifier(fieldName);
+        var keyQualifier = ObjectQualifier(key);
+        return fieldQualifier is not null
+            && keyQualifier is not null
+            && !string.Equals(fieldQualifier, keyQualifier, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Looks up a filter's field on a row, or <see cref="Missing"/> when it is absent.
+    /// </summary>
+    /// <remarks>
+    /// Filters use either bare names ("region") or dotted paths ("patients.region"). The
+    /// lookup is, in order (spec section 7):
+    /// <list type="number">
+    /// <item>An exact key is used as-is.</item>
+    /// <item>Otherwise every key <see cref="FieldNameMatches"/> accepts is a candidate, except a
+    /// key qualified with a <em>different</em> object than the filter. The matcher alone drops
+    /// qualifiers, so without that exclusion a filter on <c>patients.region</c> read
+    /// <c>encounters.region</c> (issue #32). A qualified filter may still read a bare key, and a
+    /// bare filter a qualified one.</item>
+    /// <item>Exactly one candidate supplies the value. None is <see cref="Missing"/>, and so is
+    /// more than one: picking whichever key came first would make the decision depend on key
+    /// order, so an ambiguous field fails closed.</item>
+    /// </list>
+    /// </remarks>
     private static object? RowFieldValue(Dictionary<string, object?> row, string fieldName)
     {
+        // The exact-key lookup uses the dictionary's own comparer. A row built with
+        // StringComparer.OrdinalIgnoreCase therefore treats a case variant of the filter's
+        // field as an exact key, and that key wins before the qualifier and ambiguity rules
+        // below run. The shared fixture uses ordinal rows. ValidateWriteTargetRow keeps the
+        // caller's comparer when it is handed a Dictionary, and copies anything else into
+        // an ordinal one.
         if (row.TryGetValue(fieldName, out var v)) return v;
+        string? candidate = null;
         foreach (var key in row.Keys)
         {
-            if (FieldNameMatches(fieldName, key)) return row[key];
+            if (!FieldNameMatches(fieldName, key) || QualifiersConflict(fieldName, key)) continue;
+            if (candidate is not null) return Missing; // ambiguous: fail closed
+            candidate = key;
         }
-        return Missing;
+        return candidate is null ? Missing : row[candidate];
     }
 
     private static bool RowPassesFilter(Dictionary<string, object?> row, RowFilter rf)

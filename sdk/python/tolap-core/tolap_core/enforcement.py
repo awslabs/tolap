@@ -634,21 +634,67 @@ _MAX_REGEX_PATTERN_LENGTH = 1024
 _MAX_REGEX_VALUE_LENGTH = 4096
 
 
+_ASCII_LOWER = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+)
+
+
+def _object_qualifier(name: str) -> str | None:
+    """The ASCII-folded object qualifier of a field reference, or ``None`` if bare.
+
+    The qualifier is everything before the last ``.``: ``patients`` for
+    ``patients.region``, ``db.patients`` for ``db.patients.region``.
+
+    Only A-Z folds to a-z. ``str.lower`` folds Unicode too, and not the way
+    .NET does: U+0130 (capital I with dot above) lower-cases to ``i`` plus U+0307
+    here but not in .NET, so the same policy kept a row in one SDK and dropped it
+    in another. An ASCII-only fold gives the same answer everywhere.
+    """
+    dot = name.rfind(".")
+    return name[:dot].translate(_ASCII_LOWER) if dot >= 0 else None
+
+
+def _qualifiers_conflict(field_name: str, key: str) -> bool:
+    """Whether a filter and a row key are both qualified, by different objects."""
+    field_qualifier = _object_qualifier(field_name)
+    key_qualifier = _object_qualifier(key)
+    return (
+        field_qualifier is not None
+        and key_qualifier is not None
+        and field_qualifier != key_qualifier
+    )
+
+
 def _row_field_value(row: dict, field_name: str) -> object:
     """Look up a filter's field on a row, or ``_MISSING`` when it is absent.
 
     Filters use either bare names ("region") or dotted paths
-    ("patients.region"); we accept both and prefer the unqualified key when
-    rows have already been projected by the tool function. ``_MISSING`` is
-    distinct from a stored ``None`` so that "field absent" can fail closed
-    while an explicit null is still comparable.
+    ("patients.region"). The lookup is, in order (spec section 7):
+
+    1. An exact key is used as-is.
+    2. Otherwise every key :func:`_field_name_matches` accepts is a candidate,
+       except a key qualified with a *different* object than the filter. The
+       matcher alone drops qualifiers, so without that exclusion a filter on
+       ``patients.region`` read ``encounters.region`` (issue #32). A qualified
+       filter may still read a bare key, and a bare filter a qualified one.
+    3. Exactly one candidate supplies the value. None is ``_MISSING``, and so
+       is more than one: picking whichever key came first would make the
+       decision depend on key order, so an ambiguous field fails closed.
+
+    ``_MISSING`` is distinct from a stored ``None`` so that "field absent" can
+    fail closed while an explicit null is still comparable.
     """
     if field_name in row:
         return row[field_name]
-    for key in row:
-        if _field_name_matches(field_name, str(key)):
-            return row[key]
-    return _MISSING
+    candidates = [
+        key
+        for key in row
+        if _field_name_matches(field_name, str(key))
+        and not _qualifiers_conflict(field_name, str(key))
+    ]
+    if len(candidates) != 1:
+        return _MISSING
+    return row[candidates[0]]
 
 
 def _values_equal(left: object, right: object) -> bool:
