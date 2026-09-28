@@ -750,6 +750,19 @@ Thirteen run in-process. Bedrock Agents is the exception, for the reason above. 
 handler does with a *missing* session attribute: it returns `403`. Falling back to "no policy"
 there would be an unauthenticated read of the data source. That case has a test.
 
+### Community integrations
+
+These are maintained outside this repository and aren't reviewed or tested by this project.
+
+| Package | What it does |
+|---|---|
+| [`django-tolap`](https://github.com/smhasan94/django-tolap) | Enforces on Django QuerySets, pushing row filters, the projection and `maxResults` into the query, then runs the result pipeline. Also provides a Django-backed `PolicyStore` and Django REST Framework integration. |
+| [`sqlalchemy-tolap`](https://github.com/smhasan94/django-tolap/tree/main/packages/sqlalchemy-tolap) | The same checks and pushdown for SQLAlchemy 2.x `Select` statements. |
+
+An ORM owns its SQL, so the string rewriter can't safely rewrite it. That's what
+[`postOnly`](#with-sql-you-pick-where-the-filtering-happens) is for. These adapters push the
+policy down through the ORM instead. Built one? Open an issue to have it listed.
+
 ## Project Structure
 
 ```
