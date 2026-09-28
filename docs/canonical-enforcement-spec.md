@@ -521,17 +521,19 @@ is set and no pattern matches it) or masks it. An honoured marker's data gets:
 
 - each row filter whose field is not transformed;
 - `deniedTags`, always, reading tags only from tag keys (`tags`, `labels`,
-  `classification`) that are not masked: a denylist never drops an untagged record,
+  `classification`) that are not masked (a hidden and masked key counts as hidden, so
+  one the tool left in is read): a denylist never drops an untagged record,
   so a removed tag key cannot make it over-drop;
 - `allowedTags`, if no tag key is transformed;
 - the relevance floor, per record, walking the score keys in precedence order. The
-  full pipeline applies the floor before it strips hidden and projected-out fields, so
-  for each key: present and not masked (even if hidden or projected out) -- apply the
-  floor to its value and stop; masked (a masking rule matches it and it is neither
-  hidden nor projected out; a hidden and masked key counts as hidden) -- keep and stop;
-  absent and hidden or projected out -- keep and stop, since the producer's pipeline
-  already applied the floor to it; absent and untouched -- continue. A record the walk
-  does not stop on is unscored and dropped;
+  first key that is present and not masked (even if hidden or projected out) decides:
+  the floor is applied to its value. A key that is masked (a masking rule matches it
+  and it is neither hidden nor projected out; a hidden and masked key counts as
+  hidden), or hidden or projected out and absent, is noted and the walk continues. A
+  record with no present, unmasked score key is kept only if such a key was seen, and
+  is otherwise dropped. This is an intentional fail-closed over-drop: with `score`
+  hidden, a record the data layer kept on a high `score` is dropped when its next
+  visible score key is low, since the marker path cannot know the raw `score`;
 - hidden-field removal, allowed-field projection and the result limit.
 
 Over correctly enforced data these are no-ops, and they drop what the data layer let

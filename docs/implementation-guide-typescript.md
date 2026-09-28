@@ -308,17 +308,22 @@ it.
   key the data layer removed cannot make it over-drop. `allowedTags` runs unless a tag key is
   transformed, because it does drop an untagged record.
 - The relevance floor runs per record, walking the score keys in precedence order (`score`,
-  `similarity`, `similarityScore`, `_score`). The full pipeline applies the floor before it
-  strips hidden and projected-out fields, so for each key in turn:
-  - present and not masked (even if hidden or projected out, but left in): the floor is applied
-    to its value, and the walk stops;
-  - masked, meaning a masking rule matches it and it is neither hidden nor projected out (a
-    hidden and masked key counts as hidden): the record is kept, since the mask hides the value;
-  - absent and hidden or projected out: the record is kept, since the producer's pipeline
-    applied the floor to it before removing it;
-  - absent and untouched: the walk moves to the next key.
+  `similarity`, `similarityScore`, `_score`):
+  - a key that is present and not masked (even a hidden or projected-out key the tool left in)
+    decides: the floor is applied to its value, and the walk stops;
+  - a key that is masked, or hidden or projected out and absent, is noted as a transformed
+    score key, and the walk continues. "Masked" means a masking rule matches the key and it is
+    neither hidden nor projected out; a hidden and masked key counts as hidden;
+  - an absent, untouched key moves the walk on.
 
-  A record the walk does not stop on is unscored and dropped.
+  A record with no present, unmasked score key is kept only if a transformed score key was
+  seen, and is otherwise dropped. A visible low score is never kept because a higher-precedence
+  key was removed. This over-drops on purpose: with `score` hidden, a record the data layer
+  kept on a high `score` is dropped when its next visible score key is below the floor, since
+  the marker path cannot know the raw `score`.
+- `deniedTags` uses the same masked test, so it reads a hidden and masked tag key the tool left
+  in. `allowedTags` still skips every key a masking rule matches, because reading more keys
+  could only let it keep more.
 - Hidden fields are stripped again, the result is projected to `allowedFields` again, and
   `maxResults` still truncates it.
 
