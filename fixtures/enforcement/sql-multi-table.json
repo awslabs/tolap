@@ -1,0 +1,2766 @@
+{
+  "description": "Pre-execution SQL checks validate every table a query references. Each case runs the full prepare path (empty and canQuery checks, object access, references, field validation) and pins whether the query is allowed and, when refused, why.",
+  "notes": "Consumed by sdk/python/tests/test_sql_multi_table.py, sdk/typescript/packages/core/tests/sql-multi-table.test.ts, sdk/typescript/packages/mcp/tests/sql-multi-table.test.ts and sdk/dotnet/tests/Tolap.Mcp.Tests/SqlMultiTableTests.cs (both .NET wrappers). Each runner asserts the case count. Where a query is refused by more than one check, the reason is the first check to refuse it: the object check on the first FROM table, then the reference check (read under ANSI, then MySQL, then PostgreSQL lexing), then the field check.",
+  "cases": [
+    {
+      "name": "join-hidden-table-qualified-column",
+      "query": "SELECT e.name FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "single-table-hidden-table",
+      "query": "SELECT name FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "single-table-allowed",
+      "query": "SELECT name FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-disallowed-field",
+      "query": "SELECT ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "single-table-no-from",
+      "query": "SELECT 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "join-inner",
+      "query": "SELECT e.name FROM patients p INNER JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-left",
+      "query": "SELECT e.name FROM patients p LEFT JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-left-outer",
+      "query": "SELECT e.name FROM patients p LEFT OUTER JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-right",
+      "query": "SELECT e.name FROM patients p RIGHT JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-full",
+      "query": "SELECT e.name FROM patients p FULL OUTER JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-cross",
+      "query": "SELECT e.name FROM patients p CROSS JOIN encounters e",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-comma",
+      "query": "SELECT e.name FROM patients p, encounters e WHERE e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-natural",
+      "query": "SELECT name FROM patients NATURAL JOIN encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-using",
+      "query": "SELECT name FROM patients JOIN encounters USING (name)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-hidden-table-first",
+      "query": "SELECT e.name FROM encounters e JOIN patients p ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-hidden-table-third",
+      "query": "SELECT p.name FROM patients p JOIN patients q ON q.id = p.id JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-billing-hidden-no-field-rules",
+      "query": "SELECT p.name FROM patients p JOIN billing b ON b.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "hiddenObjects": [
+            "billing"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-comma-billing-hidden",
+      "query": "SELECT p.name FROM patients p, billing b",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "hiddenObjects": [
+            "billing"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "join-unlisted-table",
+      "query": "SELECT p.name FROM patients p JOIN visits v ON v.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "join-right-allowed-columns",
+      "query": "SELECT p.name, e.visit_date FROM patients p RIGHT JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "join-cross-allowed-columns",
+      "query": "SELECT p.name, e.visit_date FROM patients p CROSS JOIN encounters e",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "join-comma-allowed-columns",
+      "query": "SELECT p.name, e.visit_date FROM patients p, encounters e WHERE e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "join-natural-with-field-rules",
+      "query": "SELECT p.name FROM patients p NATURAL JOIN encounters e",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: NATURAL JOIN"
+      }
+    },
+    {
+      "name": "join-natural-without-field-rules",
+      "query": "SELECT p.name FROM patients p NATURAL JOIN encounters e",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "hiddenObjects": [
+            "billing"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "join-using-disallowed-column",
+      "query": "SELECT p.name FROM patients p JOIN encounters e USING (diagnosis)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "join-using-allowed-column",
+      "query": "SELECT p.name FROM patients p JOIN encounters e USING (id)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "name",
+              "id",
+              "pid"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "alias-with-as",
+      "query": "SELECT e.name FROM patients AS p JOIN encounters AS e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "alias-quoted",
+      "query": "SELECT \"e\".name FROM patients \"p\" JOIN encounters \"e\" ON \"e\".pid = \"p\".id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "alias-backtick",
+      "query": "SELECT e.name FROM `patients` p JOIN `encounters` e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "alias-shadows-table-name",
+      "query": "SELECT patients.diagnosis FROM encounters patients JOIN patients p ON p.id = patients.pid",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "alias-shadows-table-name-hidden-table",
+      "query": "SELECT patients.name FROM encounters patients JOIN patients p ON p.id = patients.pid",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "alias-case-differs",
+      "query": "SELECT E.diagnosis FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "alias-unresolved-qualifier",
+      "query": "SELECT x.name FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: unresolved qualifier"
+      }
+    },
+    {
+      "name": "self-join-allowed",
+      "query": "SELECT a.name, b.name FROM patients a JOIN patients b ON a.id = b.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "self-join-disallowed-column",
+      "query": "SELECT a.name, b.ssn FROM patients a JOIN patients b ON a.id = b.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "same-table-twice-hidden",
+      "query": "SELECT p.name FROM patients p JOIN encounters e1 ON e1.pid = p.id JOIN encounters e2 ON e2.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "same-table-twice-unaliased",
+      "query": "SELECT patients.name FROM patients JOIN patients ON patients.id = patients.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: duplicate table name"
+      }
+    },
+    {
+      "name": "table-name-as-qualifier",
+      "query": "SELECT encounters.diagnosis FROM patients JOIN encounters ON encounters.pid = patients.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "schema-qualified-tables",
+      "query": "SELECT e.name FROM public.patients p JOIN public.encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "schema-qualified-column",
+      "query": "SELECT public.encounters.diagnosis FROM public.patients JOIN public.encounters ON public.encounters.pid = public.patients.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "schema-qualified-leaf-qualifier",
+      "query": "SELECT encounters.diagnosis FROM public.patients JOIN public.encounters ON encounters.pid = patients.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "case-variant-tables",
+      "query": "select E.NAME from PATIENTS p join ENCOUNTERS E on E.PID = p.ID",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "case-variant-keywords-allowed",
+      "query": "select P.NAME, e.VISIT_DATE from Patients P Join Encounters e On e.PID = P.ID",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "derived-table-hidden",
+      "query": "SELECT d.name FROM (SELECT name FROM encounters) d",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "derived-table-join-hidden",
+      "query": "SELECT p.name FROM patients p JOIN (SELECT pid FROM encounters) e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "derived-table-renames-disallowed-column",
+      "query": "SELECT d.v FROM (SELECT diagnosis AS v FROM encounters) d",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "derived-table-allowed",
+      "query": "SELECT d.name, e.visit_date FROM (SELECT name, id FROM patients) d JOIN encounters e ON e.pid = d.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "subquery-in-where",
+      "query": "SELECT name FROM patients WHERE id IN (SELECT pid FROM encounters)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: subquery"
+      }
+    },
+    {
+      "name": "subquery-exists",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id WHERE EXISTS (SELECT 1 FROM billing)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: subquery"
+      }
+    },
+    {
+      "name": "subquery-in-select-list",
+      "query": "SELECT (SELECT name FROM encounters) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "subquery-in-select-list-allowed-tables",
+      "query": "SELECT (SELECT max(e.visit_date) FROM encounters e) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: subquery"
+      }
+    },
+    {
+      "name": "subquery-in-join-condition",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid IN (SELECT id FROM encounters)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: subquery"
+      }
+    },
+    {
+      "name": "cte",
+      "query": "WITH x AS (SELECT name FROM encounters) SELECT name FROM x",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "cte-allowed-tables",
+      "query": "WITH x AS (SELECT name FROM patients) SELECT x.name FROM x JOIN encounters e ON true",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: WITH"
+      }
+    },
+    {
+      "name": "union",
+      "query": "SELECT name FROM patients UNION SELECT name FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: set operation"
+      }
+    },
+    {
+      "name": "union-all-in-derived-table",
+      "query": "SELECT d.name FROM (SELECT name FROM patients UNION ALL SELECT name FROM encounters) d",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: set operation"
+      }
+    },
+    {
+      "name": "lateral",
+      "query": "SELECT p.name FROM patients p, LATERAL (SELECT name FROM encounters) e",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: LATERAL"
+      }
+    },
+    {
+      "name": "table-valued-function",
+      "query": "SELECT p.name FROM patients p JOIN generate_series(1, 3) g ON true",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: table-valued function"
+      }
+    },
+    {
+      "name": "parenthesized-join",
+      "query": "SELECT p.name FROM (patients p JOIN encounters e ON e.pid = p.id)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: parenthesized join"
+      }
+    },
+    {
+      "name": "multiple-statements",
+      "query": "SELECT name FROM patients; SELECT name FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: multiple statements"
+      }
+    },
+    {
+      "name": "not-a-select",
+      "query": "DELETE FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: statement other than SELECT"
+      }
+    },
+    {
+      "name": "function-wrapped-column",
+      "query": "SELECT upper(e.diagnosis) FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "nested-function-column",
+      "query": "SELECT coalesce(lower(e.diagnosis), 'none') FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "function-wrapped-allowed",
+      "query": "SELECT upper(p.name), max(e.visit_date) FROM patients p JOIN encounters e ON e.pid = p.id GROUP BY p.name",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "cast-wrapped-column",
+      "query": "SELECT CAST(e.diagnosis AS text) FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "case-expression-column",
+      "query": "SELECT CASE WHEN e.diagnosis IS NULL THEN 'x' ELSE 'y' END AS d FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "qualified-star-other-table",
+      "query": "SELECT e.* FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "qualified-star-allowed-by-wildcard",
+      "query": "SELECT e.* FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "*"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "qualified-star-no-allow-list",
+      "query": "SELECT e.* FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "star-over-join",
+      "query": "SELECT * FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "star-over-join-wildcard",
+      "query": "SELECT * FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "*"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "star-over-join-hidden-table",
+      "query": "SELECT * FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "bare-column-qualified-allow-list",
+      "query": "SELECT name FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "bare-column-unqualified-allow-list",
+      "query": "SELECT name FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "name",
+              "id",
+              "pid"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "bare-column-hidden",
+      "query": "SELECT ssn FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "bare-column-in-where",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id WHERE visit_date > '2024-01-01'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "bare-column-wildcard-allow-list",
+      "query": "SELECT name FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "*"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "where-disallowed-column",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id WHERE e.diagnosis = 'flu'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "on-disallowed-column",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.diagnosis = p.name",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "group-by-disallowed-column",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id GROUP BY e.diagnosis, p.name",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "having-disallowed-column",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id GROUP BY p.name HAVING count(e.diagnosis) > 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "order-by-disallowed-column",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id ORDER BY e.diagnosis",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "order-by-select-alias",
+      "query": "SELECT p.name AS n FROM patients p JOIN encounters e ON e.pid = p.id ORDER BY n DESC",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "allowed-columns-and-predicates",
+      "query": "SELECT p.name, e.visit_date FROM patients p JOIN encounters e ON e.pid = p.id WHERE e.visit_date > '2024-01-01' ORDER BY p.name LIMIT 10",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "comment-between-tables",
+      "query": "SELECT e.name FROM patients/**/JOIN encounters e ON e.pid = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "line-comment-between-tables",
+      "query": "SELECT e.name FROM patients p -- note\nJOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "tabs-and-newlines",
+      "query": "SELECT\te.name\nFROM\tpatients p\n\tJOIN\n encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "comment-hides-nothing",
+      "query": "SELECT p.name /* , e.ssn */ FROM patients p JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "string-hides-nothing",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id WHERE p.name = 'x JOIN encounters'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "backslash-in-string",
+      "query": "SELECT p.name, 'x\\' FROM patients p JOIN encounters e ON true -- ' FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "hash-comment",
+      "query": "SELECT p.name FROM patients p # note\nJOIN encounters e ON true",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: FROM clause"
+      }
+    },
+    {
+      "name": "executable-comment",
+      "query": "SELECT p.name FROM patients p /*! JOIN encounters e ON true */",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "nested-block-comment",
+      "query": "SELECT p.name FROM patients p /* /* */ JOIN encounters e ON true */",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "comment-hides-table-from-object-check",
+      "query": "SELECT name /* FROM patients */ FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "string-hides-table-from-object-check",
+      "query": "SELECT 'x FROM patients' AS a, name FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "quoted-identifier-hides-table-from-object-check",
+      "query": "SELECT \"FROM patients\" FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "object-name-authoritative-single-table",
+      "query": "SELECT name FROM encounters",
+      "objectName": "patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "object-name-does-not-cover-join",
+      "query": "SELECT e.name FROM patients p JOIN encounters e ON e.pid = p.id",
+      "objectName": "patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    }
+  ]
+}

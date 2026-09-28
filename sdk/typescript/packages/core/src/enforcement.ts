@@ -647,7 +647,7 @@ function allowedFieldPatterns(policy: EffectivePolicy): string[] | undefined {
  * `encounters.id`. Glob characters in the entry's qualifier are literal for the
  * comparison, so `*.name` allows `name` and no qualified key.
  */
-function allowedFieldMatches(pattern: string, key: string): boolean {
+export function allowedFieldMatches(pattern: string, key: string): boolean {
   return fieldNameMatches(pattern, key) && !qualifiersConflict(pattern, key);
 }
 

@@ -27,6 +27,7 @@ import {
   validateFieldAccess,
   validateToolAction,
   validateWrite,
+  validateQueryReferences,
   SqlQueryRewriter,
   SqlDialect,
   type AccessResult,
@@ -476,6 +477,10 @@ export class SecureContextToolWrapper {
     }
 
     const policy = context.effectivePolicy;
+
+    // Every table the query reads, and every column through the table it belongs to.
+    const references = validateQueryReferences(sql, policy, { objectName: args.objectName });
+    if (!references.allowed) return denied(references.reason ?? "access denied");
 
     // Refuse rather than silently narrow: an agent that asked for a field it cannot
     // read should be told, not handed a result that quietly omits the column.

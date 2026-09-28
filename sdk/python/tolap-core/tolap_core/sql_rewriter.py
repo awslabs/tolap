@@ -1706,6 +1706,7 @@ def prepare_sql_query(
     # this module, and keeping the dependency one-directional at import time avoids
     # a cycle if that ever changes.
     from tolap_core.enforcement import validate_access
+    from tolap_core.sql_references import validate_query_references
 
     # Resolved before anything else so an unrecognized mode raises rather than
     # silently rewriting a query the caller asked not to be touched.
@@ -1722,6 +1723,11 @@ def prepare_sql_query(
         access = validate_access(target, policy)
         if not access.allowed:
             return SqlQueryPreparation.denied(access.reason or "access denied", query)
+
+    # Every table the query reads, and every column through the table it belongs to.
+    references = validate_query_references(query, policy, object_name=object_name)
+    if not references.allowed:
+        return SqlQueryPreparation.denied(references.reason or "access denied", query)
 
     if not validate_query(query, policy):
         return SqlQueryPreparation.denied(

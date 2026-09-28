@@ -60,6 +60,7 @@ import type {
 } from "./types.js";
 import { FilterOperator } from "./types.js";
 import { fieldNameMatches, validateAccess } from "./enforcement.js";
+import { validateQueryReferences } from "./sql-references.js";
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -1634,6 +1635,12 @@ export function prepareSqlQuery(
     const access = validateAccess(target, policy);
     if (!access.allowed) return denied(access.reason ?? "access denied");
   }
+
+  // Every table the query reads, and every column through the table it belongs to.
+  const references = validateQueryReferences(query, policy, {
+    objectName: options.objectName,
+  });
+  if (!references.allowed) return denied(references.reason ?? "access denied");
 
   if (!rewriter.validateQuery(query, policy)) {
     return denied("query references fields you do not have permission to access");

@@ -441,6 +441,13 @@ public sealed class SecureContextToolWrapper
         // once one is present.
         var policy = context.Policies[0];
 
+        // Every table the query reads, and every column through the table it belongs to.
+        var references = SqlQueryReferences.Validate(sql, policy, args.ObjectName);
+        if (!references.Allowed)
+        {
+            return SqlQueryPreparation.Denied(references.Reason ?? "access denied", sql);
+        }
+
         // Refuse rather than silently narrow: an agent that asked for a field it cannot read
         // should be told, not handed a result that quietly omits the column.
         if (!rewriter.ValidateQuery(sql, policy))
