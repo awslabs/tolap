@@ -1,7 +1,7 @@
 {
   "description": "How a row filter's field is found on a row whose keys may be bare or qualified with an object name. Exists because the lookup fell back to the field-name matcher, which drops qualifiers, so a filter on 'patients.region' could read 'encounters.region'. A bare filter matching several qualified keys used whichever came first (issue #32).",
   "action": "applyRowFilters",
-  "notes": "Lookup order, identical in every SDK: (1) an exact key is used as-is. (2) Otherwise every key the field-name matcher accepts is a candidate, EXCEPT a key whose object qualifier conflicts with the filter's. Both must be qualified and the qualifiers (everything before the last '.') must differ, compared case-insensitively. A qualified filter may still read a bare key, and a bare filter may read a qualified key. (3) Exactly one candidate supplies the value. None, or more than one, is MISSING, and a MISSING field drops the row for every operator (spec section 7). Each case carries its own records because key ORDER is part of what is being tested; the runners must preserve the order the fixture writes. Each case carries a full policy so the shared corpus walk validates it against policy-definition.schema.json.",
+  "notes": "Lookup order, identical in every SDK: (1) an exact key is used as-is. (2) Otherwise every key the field-name matcher accepts is a candidate, EXCEPT a key whose object qualifier conflicts with the filter's. Both must be qualified and the qualifiers (everything before the last '.') must differ, compared ASCII case-insensitively (only A-Z folds to a-z). A qualified filter may still read a bare key, and a bare filter may read a qualified key. (3) Exactly one candidate supplies the value. None, or more than one, is MISSING, and a MISSING field drops the row for every operator (spec section 7). Each case carries its own records because key ORDER is part of what is being tested; the runners must preserve the order the fixture writes. Each case carries a full policy so the shared corpus walk validates it against policy-definition.schema.json.",
   "cases": [
     {
       "name": "qualified-filter-ignores-other-object-key-equals",
@@ -691,6 +691,166 @@
         }
       },
       "expected": []
+    },
+    {
+      "name": "qualified-filter-ignores-key-with-longer-qualifier-of-same-table",
+      "notes": "Qualifiers are compared whole. 'db.patients' is not 'patients', so a key 'db.patients.region' is not a candidate for the filter 'patients.region'. It is dropped, which fails closed; no suffix matching is attempted.",
+      "records": [
+        {
+          "id": "deep-key",
+          "db.patients.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "longer-qualifier-filter-ignores-shorter-qualified-key",
+      "notes": "The reverse: the filter 'db.patients.region' does not read the key 'patients.region'.",
+      "records": [
+        {
+          "id": "short-key",
+          "patients.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "db.patients.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "glob-filter-qualifier-is-literal-against-a-qualified-key",
+      "notes": "Glob characters in a row filter's qualifier are not expanded for the qualifier comparison. '*' is not 'patients', so the qualified key is not a candidate.",
+      "records": [
+        {
+          "id": "qualified",
+          "patients.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "*.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "glob-filter-still-reads-a-bare-key",
+      "notes": "A bare key has no qualifier to conflict with, so the filter '*.region' still reads 'region' through the field-name matcher.",
+      "records": [
+        {
+          "id": "bare",
+          "region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "*.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "bare"
+      ]
+    },
+    {
+      "name": "non-ascii-qualifier-folds-ascii-only-conflict",
+      "notes": "The qualifier comparison folds only A-Z to a-z. 'PAT\u0130ENTS' (U+0130, capital I with dot above) folds to 'pat\u0130ents', which is not 'pati\u0307ents' (i followed by U+0307, combining dot above). Full Unicode lower-casing would make them equal in some SDKs and not others, so the qualifiers conflict and the row is dropped.",
+      "records": [
+        {
+          "id": "combining-dot",
+          "pati\u0307ents.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "PAT\u0130ENTS.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "non-ascii-qualifier-folds-ascii-only-match",
+      "notes": "'PAT\u0130ENTS' and 'pat\u0130ents' differ only in ASCII letters, so they fold to the same qualifier and the key is the one candidate.",
+      "records": [
+        {
+          "id": "same-non-ascii",
+          "pat\u0130ents.REGION": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "PAT\u0130ENTS.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": [
+        "same-non-ascii"
+      ]
     }
   ]
 }

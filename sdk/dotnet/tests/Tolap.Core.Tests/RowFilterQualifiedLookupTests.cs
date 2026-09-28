@@ -26,7 +26,7 @@ public class RowFilterQualifiedLookupTests
     private const string FixturePath = "enforcement/row-filter-qualified-lookup.json";
 
     /// <summary>Asserted so that a dropped case fails the suite rather than shrinking it quietly.</summary>
-    private const int ExpectedCaseCount = 23;
+    private const int ExpectedCaseCount = 29;
 
     private static readonly IReadOnlyList<JsonElement> Cases =
         FixtureHelper.ReadFixtureAsJson(FixturePath).Clone()
@@ -118,5 +118,75 @@ public class RowFilterQualifiedLookupTests
 
         SurvivingIds(testCase).Should().Equal(ExpectedIds(testCase),
             $"case '{caseName}' from {FixturePath} disagrees with the shared corpus");
+    }
+
+    // =======================================================================
+    // An update or delete target is checked through the same row-filter lookup, so a target
+    // row the read path would drop is also refused as a write target.
+    // =======================================================================
+
+    private static EffectivePolicy WritePolicy(string field)
+        => TolapJsonOptions.Deserialize<EffectivePolicy>(JsonSerializer.Serialize(new
+        {
+            version = "1.0",
+            permissions = new { canQuery = true, canUpdate = true, canDelete = true, readOnly = false },
+            objectRules = new
+            {
+                rowFilters = new[] { new { field, @operator = "equals", value = "us-east" } }
+            }
+        }));
+
+    [Theory]
+    [InlineData(WriteOperation.Update)]
+    [InlineData(WriteOperation.Delete)]
+    public void ValidateWrite_RefusesATargetCarryingOnlyAnotherObjectsColumn(WriteOperation operation)
+    {
+        var result = EnforcementEngine.ValidateWrite(
+            operation,
+            "patients",
+            operation == WriteOperation.Update ? new Dictionary<string, object?> { ["status"] = "x" } : null,
+            WritePolicy("patients.region"),
+            new WriteValidationOptions(TargetRow: new Dictionary<string, object?>
+            {
+                ["encounters.region"] = "us-east"
+            }));
+
+        result.Allowed.Should().BeFalse();
+        result.Reason.Should().Be("target row not permitted");
+    }
+
+    [Fact]
+    public void ValidateWrite_RefusesAnAmbiguousTarget()
+    {
+        var result = EnforcementEngine.ValidateWrite(
+            WriteOperation.Update,
+            "patients",
+            new Dictionary<string, object?> { ["status"] = "x" },
+            WritePolicy("region"),
+            new WriteValidationOptions(TargetRow: new Dictionary<string, object?>
+            {
+                ["patients.region"] = "us-east",
+                ["encounters.region"] = "us-east"
+            }));
+
+        result.Allowed.Should().BeFalse();
+        result.Reason.Should().Be("target row not permitted");
+    }
+
+    [Fact]
+    public void ValidateWrite_StillPermitsATargetWhoseBareKeySatisfiesTheFilter()
+    {
+        var result = EnforcementEngine.ValidateWrite(
+            WriteOperation.Update,
+            "patients",
+            new Dictionary<string, object?> { ["status"] = "x" },
+            WritePolicy("patients.region"),
+            new WriteValidationOptions(TargetRow: new Dictionary<string, object?>
+            {
+                ["encounters.region"] = "eu-west",
+                ["region"] = "us-east"
+            }));
+
+        result.Allowed.Should().BeTrue();
     }
 }

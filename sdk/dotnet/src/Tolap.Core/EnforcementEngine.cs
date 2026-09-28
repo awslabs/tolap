@@ -703,16 +703,32 @@ public static class EnforcementEngine
     /// </summary>
     private static readonly object Missing = new();
 
+    /// <summary>Folds A-Z to a-z and leaves every other character alone.</summary>
+    private static string AsciiLower(string value)
+        => string.Create(value.Length, value, static (span, source) =>
+        {
+            for (var i = 0; i < source.Length; i++)
+            {
+                var c = source[i];
+                span[i] = c is >= 'A' and <= 'Z' ? (char)(c + 32) : c;
+            }
+        });
+
     /// <summary>
-    /// The lower-cased object qualifier of a field reference, or <c>null</c> if bare: everything
+    /// The ASCII-folded object qualifier of a field reference, or <c>null</c> if bare: everything
     /// before the last <c>.</c>, so <c>patients</c> for <c>patients.region</c> and
     /// <c>db.patients</c> for <c>db.patients.region</c>.
     /// </summary>
+    /// <remarks>
+    /// Only A-Z folds to a-z. <see cref="string.ToLowerInvariant()"/> folds Unicode too, and not
+    /// the way Python and TypeScript do: they lower-case U+0130 to <c>i</c> plus U+0307, so the
+    /// same policy kept a row there and dropped it here. An ASCII-only fold gives the same answer
+    /// everywhere.
+    /// </remarks>
     private static string? ObjectQualifier(string name)
     {
-        var lowered = name.ToLowerInvariant();
-        var dot = lowered.LastIndexOf('.');
-        return dot >= 0 ? lowered[..dot] : null;
+        var dot = name.LastIndexOf('.');
+        return dot >= 0 ? AsciiLower(name[..dot]) : null;
     }
 
     /// <summary>Whether a filter and a row key are both qualified, by different objects.</summary>
@@ -745,6 +761,12 @@ public static class EnforcementEngine
     /// </remarks>
     private static object? RowFieldValue(Dictionary<string, object?> row, string fieldName)
     {
+        // The exact-key lookup uses the dictionary's own comparer. A row built with
+        // StringComparer.OrdinalIgnoreCase therefore treats a case variant of the filter's
+        // field as an exact key, and that key wins before the qualifier and ambiguity rules
+        // below run. The shared fixture uses ordinal rows. ValidateWriteTargetRow keeps the
+        // caller's comparer when it is handed a Dictionary, and copies anything else into
+        // an ordinal one.
         if (row.TryGetValue(fieldName, out var v)) return v;
         string? candidate = null;
         foreach (var key in row.Keys)

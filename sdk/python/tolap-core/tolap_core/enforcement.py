@@ -634,15 +634,24 @@ _MAX_REGEX_PATTERN_LENGTH = 1024
 _MAX_REGEX_VALUE_LENGTH = 4096
 
 
+_ASCII_LOWER = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+)
+
+
 def _object_qualifier(name: str) -> str | None:
-    """The lower-cased object qualifier of a field reference, or ``None`` if bare.
+    """The ASCII-folded object qualifier of a field reference, or ``None`` if bare.
 
     The qualifier is everything before the last ``.``: ``patients`` for
     ``patients.region``, ``db.patients`` for ``db.patients.region``.
+
+    Only A-Z folds to a-z. ``str.lower`` folds Unicode too, and not the way
+    .NET does: U+0130 (capital I with dot above) lower-cases to ``i`` plus U+0307
+    here but not in .NET, so the same policy kept a row in one SDK and dropped it
+    in another. An ASCII-only fold gives the same answer everywhere.
     """
-    lowered = name.lower()
-    dot = lowered.rfind(".")
-    return lowered[:dot] if dot >= 0 else None
+    dot = name.rfind(".")
+    return name[:dot].translate(_ASCII_LOWER) if dot >= 0 else None
 
 
 def _qualifiers_conflict(field_name: str, key: str) -> bool:

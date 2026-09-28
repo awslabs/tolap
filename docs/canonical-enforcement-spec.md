@@ -431,6 +431,10 @@ a rule `patients.ssn` matches a key `ssn`, and a rule `ssn` matches a key
 `patients.ssn`. Matching is case-insensitive. Masking and hidden-field removal
 recurse into nested objects and arrays.
 
+Row filters add a rule of their own on top of this matcher. A key qualified with a different
+object is never read, and an ambiguous match is treated as absent. See §7, "Finding the
+filtered field on a row".
+
 ## 5. Result shapes — fail closed
 
 | Shape                              | Behavior            |
@@ -517,12 +521,21 @@ A row filter's field is looked up on the row in this order:
 1. An exact key is used as-is.
 2. Otherwise every key the field-name matcher (§4) accepts is a candidate, **except** a key
    whose object qualifier conflicts with the filter's: both are qualified and the qualifiers
-   (everything before the last `.`) differ, compared case-insensitively. A qualified filter
+   (everything before the last `.`) differ. Qualifiers are compared **ASCII**
+   case-insensitively: only `A`–`Z` folds to `a`–`z`, and every other character must match
+   exactly. Full Unicode lower-casing is not portable. Python and JavaScript lower-case U+0130
+   to `i` plus U+0307 and .NET does not, so the same policy would keep a row in one SDK and
+   drop it in another. Glob characters in the filter's qualifier are literal for this
+   comparison, so `*.region` reads a bare `region` but no qualified key. A qualified filter
    `patients.region` still reads a bare key `region`, and a bare filter `region` still reads
    `patients.region`. But `patients.region` never reads `encounters.region`.
 3. Exactly one candidate supplies the value. No candidate means the field is absent. More than
    one candidate also means absent, because picking one would make the decision depend on key
    order. Either way the row is dropped by the rule above.
+
+The same lookup decides the update and delete target-row check (connector spec §4.2).
+A target row whose only match is a conflicting key, or whose match is ambiguous, is refused
+with `target row not permitted`, exactly as a read would drop it.
 
 Before this rule, the lookup used the matcher alone. A filter on `patients.region` could be
 evaluated against `encounters.region`, and a bare filter used whichever matching key came first

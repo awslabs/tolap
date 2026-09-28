@@ -1035,16 +1035,25 @@ function compileRowFilterPattern(pattern: string): RegExp | null {
   return compiled;
 }
 
+/** Fold A-Z to a-z and leave every other character alone. */
+function asciiLower(value: string): string {
+  return value.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
+}
+
 /**
- * The lower-cased object qualifier of a field reference, or `null` if bare.
+ * The ASCII-folded object qualifier of a field reference, or `null` if bare.
  *
  * The qualifier is everything before the last `.`: `patients` for
  * `patients.region`, `db.patients` for `db.patients.region`.
+ *
+ * Only A-Z folds to a-z. `toLowerCase` folds Unicode too, and not the way .NET
+ * does: U+0130 (capital I with dot above) lower-cases to `i` plus U+0307 here
+ * but not in .NET, so the same policy kept a row in one SDK and dropped it in
+ * another. An ASCII-only fold gives the same answer everywhere.
  */
 function objectQualifier(name: string): string | null {
-  const lowered = name.toLowerCase();
-  const dot = lowered.lastIndexOf(".");
-  return dot >= 0 ? lowered.slice(0, dot) : null;
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? asciiLower(name.slice(0, dot)) : null;
 }
 
 /** Whether a filter and a row key are both qualified, by different objects. */

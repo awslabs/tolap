@@ -21,7 +21,8 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { applyRowFilters } from "../src/enforcement.js";
+import { applyRowFilters, validateWrite } from "../src/enforcement.js";
+import { WriteOperation } from "../src/types.js";
 import type { EffectivePolicy, RowFilter } from "../src/types.js";
 
 const FIXTURE_PATH = path.resolve(
@@ -30,7 +31,7 @@ const FIXTURE_PATH = path.resolve(
 );
 
 /** Asserted so that a dropped case fails the suite rather than shrinking it quietly. */
-const EXPECTED_CASE_COUNT = 23;
+const EXPECTED_CASE_COUNT = 29;
 
 interface LookupCase {
   name: string;
@@ -91,5 +92,59 @@ describe("the qualified-lookup corpus is intact", () => {
 describe("applyRowFilters matches the qualified-lookup corpus", () => {
   it.each(CASES.map((c) => [c.name, c] as const))("%s", (_name, testCase) => {
     expect(survivingIds(testCase)).toEqual(testCase.expected);
+  });
+});
+
+/**
+ * An update or delete target is checked through the same row-filter lookup, so a
+ * target row the read path would drop is also refused as a write target.
+ */
+describe("the write-target check uses the same lookup", () => {
+  function writePolicy(field: string): EffectivePolicy {
+    return toEffectivePolicy({
+      permissions: { canQuery: true, canUpdate: true, canDelete: true, readOnly: false },
+      objectRules: { rowFilters: [{ field, operator: "equals", value: "us-east" }] },
+    } as Partial<EffectivePolicy>);
+  }
+
+  it.each([WriteOperation.Update, WriteOperation.Delete])(
+    "refuses a %s target carrying only another object's column",
+    (operation) => {
+      const result = validateWrite(
+        operation,
+        "patients",
+        operation === WriteOperation.Update ? { status: "x" } : undefined,
+        writePolicy("patients.region"),
+        { targetRow: { "encounters.region": "us-east" } },
+      );
+
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toBe("target row not permitted");
+    },
+  );
+
+  it("refuses an ambiguous target", () => {
+    const result = validateWrite(
+      WriteOperation.Update,
+      "patients",
+      { status: "x" },
+      writePolicy("region"),
+      { targetRow: { "patients.region": "us-east", "encounters.region": "us-east" } },
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("target row not permitted");
+  });
+
+  it("still permits a target whose bare key satisfies the filter", () => {
+    const result = validateWrite(
+      WriteOperation.Update,
+      "patients",
+      { status: "x" },
+      writePolicy("patients.region"),
+      { targetRow: { "encounters.region": "eu-west", region: "us-east" } },
+    );
+
+    expect(result.allowed).toBe(true);
   });
 });

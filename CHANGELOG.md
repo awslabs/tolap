@@ -20,8 +20,12 @@ candidate supplies the value, and none or several make the field absent, so the 
 A qualified filter still reads a bare key, and a bare filter still reads a single qualified key.
 The shared fixture
 [`fixtures/enforcement/row-filter-qualified-lookup.json`](fixtures/enforcement/row-filter-qualified-lookup.json)
-pins the behaviour. Rows that relied on the old lookup, through a conflicting qualifier or an
-ambiguous bare name, are now dropped rather than kept (#32).
+pins the behaviour. Qualifiers are compared ASCII case-insensitively (only `A`–`Z` folds), so
+all three SDKs agree on non-ASCII names. Glob characters in a filter's qualifier are literal, and
+`db.patients` and `patients` count as different qualifiers. Rows that relied on the old lookup,
+through a conflicting qualifier or an ambiguous bare name, are now dropped rather than kept.
+The update and delete target-row check uses the same lookup, so a write whose target row has
+only a conflicting key, or an ambiguous one, is now refused with `target row not permitted` (#32).
 
 ## 1.1.0 — 2026-09-01
 
