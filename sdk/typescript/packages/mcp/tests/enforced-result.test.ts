@@ -4,9 +4,11 @@
  * `hash` masking is not idempotent: when a data layer has already run the result
  * pipeline, running it again in `executeWithEnforcement` hashes every hashed field a
  * second time. A tool opts out by returning `EnforcedResult`, bound to the signed
- * context's signature. The wrapper honours the marker only on an exact, constant-time
- * match, and still re-applies the idempotent steps (hidden-field strip, allowed-field
- * projection, maxResults). Every other marker falls back to the full pipeline.
+ * context's signature. Only `executeWithEnforcement` honours the marker, and only on
+ * an exact, constant-time match. It still re-applies the steps that are no-ops over
+ * enforced output: filters on visible fields, the hidden-field strip, the
+ * allowed-field projection and maxResults. Every other marker, and every marker on
+ * another path, falls back to the full pipeline.
  *
  * The shared cases in `fixtures/enforcement/already-enforced-results.json` hold the
  * Python and .NET SDKs to the same results.
@@ -184,13 +186,24 @@ describe("the marker is bound to the exact context", () => {
   });
 
   it("a context whose signature does not verify never honours a marker", async () => {
-    // postExecute is public and can be reached without preExecute. A forged context
-    // plus a marker copying its forged signature must not skip anything.
+    // A tool can change the context it was handed. A forged context plus a marker
+    // copying its forged signature must not skip anything.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const context = makeContext(POLICY_A);
     const forged = { ...context, signature: tampered(context.signature ?? "") };
     const once = enforcedOnce(context, RAW);
 
     const out = wrapper().postExecute(forged, EnforcedResult.forContext(once, forged));
+    const viaRun = await wrapper({ enforceSignatures: true }).executeWithEnforcement(
+      context,
+      { toolName: "orm-query" },
+      () => {
+        context.signature = forged.signature;
+        return EnforcedResult.forContext(once, context);
+      },
+    );
+
+    expect(viaRun).toEqual(applyResultPipeline(once, context.effectivePolicy));
 
     expect(out).toEqual(applyResultPipeline(once, context.effectivePolicy));
   });
@@ -252,7 +265,7 @@ describe("only the marker class counts", () => {
     expect(await run(wrapper(), context, lookalike)).toBeNull();
   });
 
-  it("only tool code can build an honoured marker; its JSON form is data", async () => {
+  it("an object built from the prototype without the constructor is not honoured", async () => {
     const context = makeContext(POLICY_A);
     const once = enforcedOnce(context, RAW);
     const forged = Object.create(EnforcedResult.prototype, {
@@ -260,12 +273,32 @@ describe("only the marker class counts", () => {
       contextSignature: { value: context.signature, enumerable: true },
     }) as EnforcedResult;
 
-    // It is an exact-prototype instance, so it is honoured as a marker: tool code
-    // built it. What matters is that nothing *model-controlled* can build it --
-    // JSON never produces a prototype other than Object's.
-    expect(await run(wrapper(), context, forged)).toEqual(once);
+    // It passes instanceof and has the exact prototype, but the constructor never
+    // ran on it, so it lacks the private brand: unwrapped and fully enforced.
+    expect(forged instanceof EnforcedResult).toBe(true);
+    expect(await run(wrapper(), context, forged)).toEqual(
+      applyResultPipeline(once, context.effectivePolicy),
+    );
     const parsed = JSON.parse(JSON.stringify(forged)) as unknown;
     expect(await run(wrapper(), context, parsed)).toBeNull();
+  });
+
+  it("a Proxy is not honoured, even over a real marker", async () => {
+    const context = makeContext(POLICY_A);
+    const once = enforcedOnce(context, RAW);
+    const overReal = new Proxy(EnforcedResult.forContext(once, context), {});
+    const lying = new Proxy(
+      {},
+      {
+        getPrototypeOf: () => EnforcedResult.prototype,
+        get: (_target, key) =>
+          key === "data" ? once : key === "contextSignature" ? context.signature : undefined,
+      },
+    );
+    const fully = applyResultPipeline(once, context.effectivePolicy);
+
+    expect(await run(wrapper(), context, overReal)).toEqual(fully);
+    expect(await run(wrapper(), context, lying)).toEqual(fully);
   });
 
   it("a subclass is not honoured", async () => {
@@ -350,7 +383,8 @@ describe("nested markers are never honoured", () => {
 });
 
 describe("every other post-execution step still runs", () => {
-  it("history is recorded for an honoured marker on the async path", async () => {
+  it("history is recorded on the async path, which does not honour a marker", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const history = new ToolCallHistory(4);
     const w = wrapper({ toolCallHistory: history });
     const context = makeContext(POLICY_A);
@@ -360,7 +394,7 @@ describe("every other post-execution step still runs", () => {
     const out = w.postExecute(context, EnforcedResult.forContext(once, context));
 
     expect(pre.allowed).toBe(true);
-    expect(out).toEqual(once);
+    expect(out).toEqual(applyResultPipeline(once, context.effectivePolicy));
     expect(history.count).toBe(1);
   });
 
@@ -456,6 +490,113 @@ describe("every other post-execution step still runs", () => {
 
     expect(await run(wrapper(), context, structuredClone(raw))).toEqual(
       applyResultPipeline(raw, context.effectivePolicy),
+    );
+  });
+});
+
+describe("only executeWithEnforcement honours a marker", () => {
+  const WRITE_POLICY = {
+    ...structuredClone(POLICY_A),
+    permissions: { canQuery: true, canInsert: true, readOnly: false },
+  } as Row;
+
+  it("executeWithEnforcement honours it", async () => {
+    const context = makeContext(POLICY_A);
+    const once = enforcedOnce(context, RAW);
+
+    expect(await run(wrapper(), context, EnforcedResult.forContext(once, context))).toEqual(
+      once,
+    );
+  });
+
+  it("postExecute called directly unwraps it and runs the full pipeline", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const context = makeContext(POLICY_A);
+    const once = enforcedOnce(context, RAW);
+
+    const out = wrapper().postExecute(context, EnforcedResult.forContext(once, context));
+
+    expect(out).toEqual(applyResultPipeline(once, context.effectivePolicy));
+    const messages = warn.mock.calls.map((call) => String(call[0]));
+    expect(messages.some((m) => m.includes("executeWithEnforcement"))).toBe(true);
+    expect(messages.some((m) => m.includes(context.signature ?? "--"))).toBe(false);
+  });
+
+  it("the SQL path unwraps it and runs the full pipeline", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const context = makeContext(POLICY_A);
+    const once = enforcedOnce(context, RAW);
+
+    const out = await wrapper().executeSqlWithEnforcement(
+      context,
+      { toolName: "sql-query" },
+      "SELECT id, region, email FROM patients",
+      () => EnforcedResult.forContext(once, context) as unknown as Row[],
+    );
+
+    expect(out).toEqual(applyResultPipeline(once, context.effectivePolicy));
+  });
+
+  it("the SQL path still enforces a filter on a visible field", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const context = makeContext(POLICY_A);
+    const leaky = [{ id: 2, region: "eu-west", email: "b@example.com" }];
+
+    const out = await wrapper().executeSqlWithEnforcement(
+      context,
+      { toolName: "sql-query" },
+      "SELECT id, region, email FROM patients",
+      () => EnforcedResult.forContext(leaky, context) as unknown as Row[],
+    );
+
+    expect(out).toEqual([]);
+  });
+
+  it("the write path unwraps it and runs the full pipeline", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const context = makeContext(WRITE_POLICY);
+    const once = enforcedOnce(context, RAW);
+
+    const out = await wrapper().executeWriteWithEnforcement(
+      context,
+      "insert",
+      () => EnforcedResult.forContext(once, context),
+      "patients",
+      { region: "us-east" },
+    );
+
+    expect(out).toEqual(applyResultPipeline(once, context.effectivePolicy));
+    expect(out).not.toEqual(once);
+  });
+});
+
+describe("an honoured marker still runs the filters on visible fields", () => {
+  it("a row filter on a visible field drops the row the data layer let through", async () => {
+    const context = makeContext(POLICY_A);
+    const rows = [
+      { id: 1, region: "us-east", email: "h1" },
+      { id: 2, region: "eu-west", email: "h2" },
+    ];
+
+    expect(await run(wrapper(), context, EnforcedResult.forContext(rows, context))).toEqual([
+      rows[0],
+    ]);
+  });
+
+  it("a row filter on a masked field is skipped", async () => {
+    const policy = {
+      version: "1.0",
+      permissions: { canQuery: true },
+      objectRules: {
+        fieldRules: { maskedFields: [{ field: "email", maskType: "hash" }] },
+        rowFilters: [{ field: "email", operator: "equals", value: "a@example.com" }],
+      },
+    };
+    const context = makeContext(policy);
+    const rows = [{ id: 1, email: "already-hashed" }];
+
+    expect(await run(wrapper(), context, EnforcedResult.forContext(rows, context))).toEqual(
+      rows,
     );
   });
 });

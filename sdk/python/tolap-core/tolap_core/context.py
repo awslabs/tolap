@@ -389,7 +389,12 @@ def validate_context(context: SecurityContext, secret_key: str) -> bool:
         expected = _compute_signature(payload, secret_key, context.algorithm)
     except NotImplementedError:
         return False
-    return hmac.compare_digest(context.signature, expected)
+    if not isinstance(context.signature, str):
+        return False
+    # Compared as UTF-8 bytes: hmac.compare_digest raises TypeError on a non-ASCII
+    # str, and a signature the sender filled with non-ASCII characters must be a
+    # mismatch, not an exception escaping enforcement.
+    return hmac.compare_digest(context.signature.encode("utf-8"), expected.encode("utf-8"))
 
 
 def validate_expiry(context: SecurityContext) -> str | None:

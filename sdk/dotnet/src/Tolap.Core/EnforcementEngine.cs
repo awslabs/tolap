@@ -602,9 +602,10 @@ public static class EnforcementEngine
     /// Thrown for a shape the policy cannot be applied to.
     /// </exception>
     /// <remarks>
-    /// Every <see cref="EnforcedResult"/> in <paramref name="result"/>, at any depth, is
-    /// replaced with the data it carries before the pipeline runs. This function never
-    /// honours a marker: deciding that one is bound to a verified context is the context
+    /// Every <see cref="EnforcedResult"/> in the dictionaries and lists of
+    /// <paramref name="result"/> (see <see cref="EnforcedResult.Contains"/>) is replaced
+    /// with the data it carries before the pipeline runs. This function never honours a
+    /// marker: deciding that one is bound to a verified context is the context
     /// wrapper's job, and a marker left in place would carry its data past the
     /// hidden-field strip and masking.
     /// </remarks>
@@ -668,19 +669,26 @@ public static class EnforcementEngine
     }
 
     /// <summary>
-    /// Re-applies only the idempotent pipeline steps to a result the tool's data layer
-    /// already enforced: hidden-field removal, allowed-field projection and the result
-    /// limit.
+    /// Re-applies the pipeline steps that are no-ops over a result the tool's data layer
+    /// already enforced: row filters, tag filters and the similarity floor on visible
+    /// fields, hidden-field removal, allowed-field projection and the result limit.
     /// </summary>
     /// <remarks>
     /// <para>
     /// For a tool returning an <see cref="EnforcedResult{T}"/> the context wrapper has
-    /// verified. The skipped steps are the ones a second pass gets wrong: <c>hash</c>
-    /// masking is not idempotent, and the record-dropping steps (row filters, tag filters,
-    /// similarity floor, size ceiling) re-evaluated over projected or masked output fail
-    /// closed on the fields the data layer already removed, dropping every row. The steps
-    /// kept are idempotent, so they cost nothing on data that is enforced and still stop
-    /// a hidden field, an unlisted field or an over-long list the data layer let through.
+    /// verified. A field is transformed when the policy hides it, projects it out
+    /// (AllowedFields is set and no pattern matches it) or masks it. A record-dropping
+    /// step over a transformed field is skipped: the data layer's output no longer
+    /// carries the value, so the filter would fail closed on every record, or compare
+    /// against the mask. A row filter runs when its field is not transformed; the tag
+    /// filter runs when no tag key is transformed, and the similarity floor when no score
+    /// key is. Over correctly enforced data those are no-ops, and they drop any record
+    /// the data layer let through.
+    /// </para>
+    /// <para>
+    /// Always skipped: masking (<c>hash</c> is not idempotent, so a second pass hashes
+    /// the hash) and the size ceiling (a record's size changes once it is projected and
+    /// masked).
     /// </para>
     /// <para>
     /// Not a substitute for <see cref="ApplyResultPipeline"/> on unenforced data.
@@ -706,7 +714,26 @@ public static class EnforcementEngine
             ? new List<Dictionary<string, object?>> { ToRecord(result!) }
             : ToRecordList(result!);
 
-        var working = StripHiddenFields(records, policy);
+        var working = records;
+        var visibleFilters = (policy.ObjectRules?.RowFilters ?? [])
+            .Where(rf => !FieldIsTransformed(policy, rf.Field))
+            .ToList();
+        if (visibleFilters.Count > 0)
+        {
+            working = working.Where(row => visibleFilters.All(rf => RowPassesFilter(row, rf))).ToList();
+        }
+
+        if (!TagKeys.Any(key => FieldIsTransformed(policy, key)))
+        {
+            working = FilterByTags(working, policy);
+        }
+
+        if (!ScoreKeys.Any(key => FieldIsTransformed(policy, key)))
+        {
+            working = ApplySimilarityFloor(working, policy);
+        }
+
+        working = StripHiddenFields(working, policy);
         working = ProjectAllowedFields(working, policy);
         var processed = ApplyResultLimit(working, policy);
 
@@ -716,6 +743,20 @@ public static class EnforcementEngine
         }
 
         return processed;
+    }
+
+    /// <summary>
+    /// Whether the policy hides, projects out or masks <paramref name="name"/>, so
+    /// already-enforced output no longer carries its raw value.
+    /// </summary>
+    private static bool FieldIsTransformed(EffectivePolicy policy, string name)
+    {
+        var fieldRules = policy.ObjectRules?.FieldRules;
+        if (fieldRules?.HiddenFields is { } hidden && hidden.Any(p => FieldNameMatches(p, name)))
+            return true;
+        if (fieldRules?.AllowedFields is { } allowed && !allowed.Any(p => FieldNameMatches(p, name)))
+            return true;
+        return fieldRules?.MaskedFields is { } masked && masked.Any(rule => FieldNameMatches(rule.Field, name));
     }
 
     /// <summary>

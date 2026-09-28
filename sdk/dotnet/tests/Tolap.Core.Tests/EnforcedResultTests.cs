@@ -133,12 +133,24 @@ public class EnforcedResultTests
         output["p"].Should().BeEquivalentTo(new Dictionary<string, object?> { ["id"] = 2 });
     }
 
+    private static EffectivePolicy PolicyFrom(string objectRulesAndLimits) =>
+        TolapJsonOptions.Deserialize<EffectivePolicy>($$"""
+            {
+              "version": "1.0", "userId": "u", "tenantId": "t", "sourceConnectionId": "s",
+              "resolvedAt": "2026-01-01T00:00:00Z", "expiresAt": "2099-01-01T00:00:00Z",
+              "sourceProfiles": [],
+              "permissions": { "canQuery": true },
+              {{objectRulesAndLimits}}
+            }
+            """);
+
     [Fact]
-    public void IdempotentStepsStripAndTruncateButNeitherFilterNorMask()
+    public void IdempotentStepsStripAndTruncateAndReRunAVisibleFilterButNeverMask()
     {
         var rows = new List<Dictionary<string, object?>>
         {
             new() { ["region"] = "eu-west", ["email"] = "already-hashed", ["ssn"] = "1" },
+            new() { ["region"] = "us-east", ["email"] = "already-hashed", ["ssn"] = "2" },
             new() { ["region"] = "us-east", ["email"] = "already-hashed" },
             new() { ["region"] = "us-east", ["email"] = "already-hashed" },
         };
@@ -146,9 +158,83 @@ public class EnforcedResultTests
         EnforcementEngine.ApplyIdempotentResultSteps(rows, Policy).Should().BeEquivalentTo(
             new List<Dictionary<string, object?>>
             {
-                new() { ["region"] = "eu-west", ["email"] = "already-hashed" },
+                new() { ["region"] = "us-east", ["email"] = "already-hashed" },
                 new() { ["region"] = "us-east", ["email"] = "already-hashed" },
             });
+    }
+
+    [Fact]
+    public void IdempotentStepsSkipARowFilterOnAMaskedField()
+    {
+        var policy = PolicyFrom("""
+            "objectRules": {
+              "fieldRules": { "maskedFields": [{ "field": "email", "maskType": "hash" }] },
+              "rowFilters": [{ "field": "email", "operator": "equals", "value": "a@example.com" }]
+            }
+            """);
+        var rows = new List<Dictionary<string, object?>> { new() { ["email"] = "hash" } };
+
+        EnforcementEngine.ApplyIdempotentResultSteps(rows, policy).Should().BeEquivalentTo(rows);
+    }
+
+    [Fact]
+    public void IdempotentStepsSkipARowFilterOnAHiddenOrProjectedOutField()
+    {
+        var hidden = PolicyFrom("""
+            "objectRules": {
+              "fieldRules": { "hiddenFields": ["status"] },
+              "rowFilters": [{ "field": "status", "operator": "equals", "value": "active" }]
+            }
+            """);
+        var projected = PolicyFrom("""
+            "objectRules": {
+              "fieldRules": { "allowedFields": ["id"] },
+              "rowFilters": [{ "field": "region", "operator": "equals", "value": "us-east" }]
+            }
+            """);
+        var rows = new List<Dictionary<string, object?>> { new() { ["id"] = 1 } };
+
+        EnforcementEngine.ApplyIdempotentResultSteps(rows, hidden).Should().BeEquivalentTo(rows);
+        EnforcementEngine.ApplyIdempotentResultSteps(rows, projected).Should().BeEquivalentTo(rows);
+    }
+
+    [Fact]
+    public void IdempotentStepsReRunTagAndSimilarityFiltersOnVisibleKeysOnly()
+    {
+        var tags = PolicyFrom("""
+            "objectRules": { "tagRules": { "deniedTags": ["secret"] } }
+            """);
+        var hiddenTags = PolicyFrom("""
+            "objectRules": {
+              "fieldRules": { "hiddenFields": ["tags"] },
+              "tagRules": { "allowedTags": ["public"] }
+            }
+            """);
+        var floor = PolicyFrom("""
+            "limits": { "minSimilarityScore": 0.5 }
+            """);
+
+        EnforcementEngine.ApplyIdempotentResultSteps(
+                new List<Dictionary<string, object?>> { new() { ["id"] = 1, ["tags"] = new List<object?> { "secret" } } },
+                tags)
+            .Should().BeEquivalentTo(new List<Dictionary<string, object?>>());
+        EnforcementEngine.ApplyIdempotentResultSteps(
+                new List<Dictionary<string, object?>> { new() { ["id"] = 1 } }, hiddenTags)
+            .Should().BeEquivalentTo(new List<Dictionary<string, object?>> { new() { ["id"] = 1 } });
+        EnforcementEngine.ApplyIdempotentResultSteps(
+                new List<Dictionary<string, object?>> { new() { ["id"] = 1, ["score"] = 0.1 } }, floor)
+            .Should().BeEquivalentTo(new List<Dictionary<string, object?>>());
+    }
+
+    [Fact]
+    public void IdempotentStepsSkipTheSizeCeiling()
+    {
+        var policy = PolicyFrom("""
+            "limits": { "maxObjectSizeBytes": 10 }
+            """);
+        var rows = new List<Dictionary<string, object?>> { new() { ["id"] = 1, ["size"] = 100 } };
+
+        EnforcementEngine.ApplyIdempotentResultSteps(rows, policy).Should().BeEquivalentTo(rows);
     }
 
     [Fact]
@@ -174,10 +260,13 @@ public class EnforcedResultTests
         var zero = Policy with { Limits = new PolicyLimits(MaxResults: 0) };
 
         EnforcementEngine.ApplyIdempotentResultSteps(
-                new Dictionary<string, object?> { ["id"] = 1, ["ssn"] = "x" }, Policy)
-            .Should().BeEquivalentTo(new Dictionary<string, object?> { ["id"] = 1 });
+                new Dictionary<string, object?> { ["id"] = 1, ["region"] = "us-east", ["ssn"] = "x" }, Policy)
+            .Should().BeEquivalentTo(new Dictionary<string, object?> { ["id"] = 1, ["region"] = "us-east" });
         EnforcementEngine.ApplyIdempotentResultSteps(
-                new Dictionary<string, object?> { ["id"] = 1 }, zero)
+                new Dictionary<string, object?> { ["id"] = 1, ["region"] = "eu-west" }, Policy)
+            .Should().BeNull();
+        EnforcementEngine.ApplyIdempotentResultSteps(
+                new Dictionary<string, object?> { ["id"] = 1, ["region"] = "us-east" }, zero)
             .Should().BeNull();
     }
 

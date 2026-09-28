@@ -245,6 +245,16 @@ class TestOnlyTheTypedMarkerCounts:
 
         assert "123-45-6789" not in repr(marker)
 
+    def test_the_marker_repr_and_str_do_not_leak_the_signature(self) -> None:
+        # The signature is a credential: a logged marker must not disclose it.
+        context = _context(POLICY_A)
+        marker = EnforcedResult.for_context([], context)
+        assert context.signature
+
+        assert context.signature not in repr(marker)
+        assert context.signature not in str(marker)
+        assert context.signature not in f"{marker!r} {marker!s}"
+
     def test_binding_to_an_unsigned_context_is_refused(self) -> None:
         context = build_security_context(
             user_id="u",
@@ -397,17 +407,6 @@ class TestEveryOtherPostExecutionStepStillRuns:
 
         assert out == "a scalar"
 
-    def test_post_execute_called_directly_honours_the_marker(self) -> None:
-        context = _context(POLICY_A)
-        once = apply_result_pipeline(
-            [{"id": 1, "region": "us-east", "email": "a@example.com"}],
-            context.effective_policy,
-        )
-
-        out = _wrapper().post_execute(context, EnforcedResult.for_context(once, context))
-
-        assert out == once
-
     def test_an_unmarked_result_behaves_as_before(self) -> None:
         context = _context(POLICY_A)
         raw = [
@@ -418,3 +417,187 @@ class TestEveryOtherPostExecutionStepStillRuns:
         out = _run(_wrapper(), context, copy.deepcopy(raw))
 
         assert out == apply_result_pipeline(raw, context.effective_policy)
+
+
+class TestANonAsciiContextSignatureFailsClosed:
+    """validate_context once raised TypeError from hmac.compare_digest on a non-ASCII
+    str; the honour check reaches it, so it must deny rather than raise."""
+
+    def _non_ascii(self) -> SecurityContext:
+        context = _context(POLICY_A)
+        context.signature = "\u00e9" * len(context.signature or "")
+        return context
+
+    def test_validate_context_returns_false(self) -> None:
+        from tolap_core.context import validate_context
+
+        assert validate_context(self._non_ascii(), KEY) is False
+
+    def test_the_honour_check_returns_false_without_raising(self) -> None:
+        context = self._non_ascii()
+        marker = EnforcedResult(data=[], context_signature=context.signature or "")
+
+        assert _wrapper()._honours_enforced_result(context, marker) is False
+
+    def test_execute_with_enforcement_denies_rather_than_crashing(self) -> None:
+        context = self._non_ascii()
+        marker = EnforcedResult(data=[], context_signature=context.signature or "")
+
+        with pytest.raises(PermissionError):
+            _run(_wrapper(), context, marker)
+
+
+class TestOnlyExecuteWithEnforcementHonoursAMarker:
+    """Scope: the SQL and write paths, and post_execute called directly, unwrap a
+    marker and run the full pipeline, identically in all three SDKs."""
+
+    RAW = [{"id": 1, "region": "us-east", "email": "a@example.com"}]
+
+    def test_execute_with_enforcement_honours_it(self) -> None:
+        context = _context(POLICY_A)
+        once = apply_result_pipeline(self.RAW, context.effective_policy)
+
+        assert _run(_wrapper(), context, EnforcedResult.for_context(once, context)) == once
+
+    def test_post_execute_called_directly_does_not_honour_it(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        context = _context(POLICY_A)
+        once = apply_result_pipeline(self.RAW, context.effective_policy)
+
+        with caplog.at_level(logging.WARNING):
+            out = _wrapper().post_execute(context, EnforcedResult.for_context(once, context))
+
+        assert out == apply_result_pipeline(once, context.effective_policy)
+        assert out != once
+        assert any("execute_with_enforcement" in r.getMessage() for r in caplog.records)
+        assert not any((context.signature or "--") in r.getMessage() for r in caplog.records)
+
+    def test_the_sql_path_does_not_honour_it(self) -> None:
+        context = _context(POLICY_A)
+        once = apply_result_pipeline(self.RAW, context.effective_policy)
+
+        out = _wrapper().execute_sql_with_enforcement(
+            context,
+            "SELECT id, region, email FROM patients",
+            lambda _query: EnforcedResult.for_context(once, context),
+        )
+
+        assert out == apply_result_pipeline(once, context.effective_policy)
+        assert out != once
+
+    def test_the_sql_path_still_enforces_a_filter_on_a_visible_field(self) -> None:
+        # The docstring's promise: a filter the rewrite could not push down is still
+        # enforced over whatever the callback returns, marker or not.
+        context = _context(POLICY_A)
+        leaked = [{"id": 9, "region": "eu-west", "email": "b36a83701f1c3191"}]
+
+        out = _wrapper().execute_sql_with_enforcement(
+            context,
+            "SELECT id, region, email FROM patients",
+            lambda _query: EnforcedResult.for_context(leaked, context),
+        )
+
+        assert out == []
+
+    def test_the_write_path_does_not_honour_it(self) -> None:
+        policy = copy.deepcopy(POLICY_A)
+        policy["permissions"] = {"canQuery": True, "canInsert": True, "readOnly": False}
+        context = _context(policy)
+        once = apply_result_pipeline(self.RAW, context.effective_policy)
+
+        out = _wrapper().execute_write_with_enforcement(
+            context,
+            "insert",
+            lambda: EnforcedResult.for_context(once, context),
+            object_name="patients",
+            payload={"region": "us-east"},
+        )
+
+        assert out == apply_result_pipeline(once, context.effective_policy)
+        assert out != once
+
+
+class TestAnHonouredMarkerStillFiltersVisibleFields:
+    """Only filters on hidden, projected-out or masked fields are skipped."""
+
+    def test_a_row_filter_on_a_visible_field_still_drops_rows(self) -> None:
+        context = _context(POLICY_A)
+        rows = [
+            {"id": 1, "region": "us-east", "email": "b36a83701f1c3191"},
+            {"id": 2, "region": "eu-west", "email": "2b3b2b9ce842ab8b"},
+        ]
+
+        out = _run(_wrapper(), context, EnforcedResult.for_context(rows, context))
+
+        assert out == rows[:1]
+
+    def test_a_row_filter_on_a_masked_field_is_skipped(self) -> None:
+        policy = copy.deepcopy(POLICY_A)
+        policy["objectRules"]["rowFilters"] = [
+            {"field": "email", "operator": "equals", "value": "a@example.com"}
+        ]
+        context = _context(policy)
+        rows = [{"id": 1, "email": "b36a83701f1c3191"}]
+
+        assert _run(_wrapper(), context, EnforcedResult.for_context(rows, context)) == rows
+
+    def test_a_row_filter_on_a_projected_out_field_is_skipped(self) -> None:
+        policy = copy.deepcopy(POLICY_A)
+        policy["objectRules"]["fieldRules"]["allowedFields"] = ["id", "email"]
+        context = _context(policy)
+        rows = [{"id": 1, "email": "b36a83701f1c3191"}]
+
+        assert _run(_wrapper(), context, EnforcedResult.for_context(rows, context)) == rows
+
+    def test_a_tag_filter_on_visible_tags_still_drops_records(self) -> None:
+        policy = {
+            "version": "1.0",
+            "permissions": {"canQuery": True},
+            "objectRules": {"tagRules": {"deniedTags": ["secret"]}},
+        }
+        context = _context(policy)
+        rows = [{"id": 1, "tags": ["public"]}, {"id": 2, "tags": ["secret"]}]
+
+        out = _run(_wrapper(), context, EnforcedResult.for_context(rows, context))
+
+        assert out == rows[:1]
+
+    def test_a_tag_filter_is_skipped_when_the_tags_are_hidden(self) -> None:
+        policy = {
+            "version": "1.0",
+            "permissions": {"canQuery": True},
+            "objectRules": {
+                "fieldRules": {"hiddenFields": ["tags"]},
+                "tagRules": {"allowedTags": ["public"]},
+            },
+        }
+        context = _context(policy)
+        rows = [{"id": 1}]
+
+        assert _run(_wrapper(), context, EnforcedResult.for_context(rows, context)) == rows
+
+    def test_the_similarity_floor_still_applies_to_a_visible_score(self) -> None:
+        policy = {
+            "version": "1.0",
+            "permissions": {"canQuery": True},
+            "limits": {"minSimilarityScore": 0.5},
+        }
+        context = _context(policy)
+        rows = [{"id": 1, "score": 0.9}, {"id": 2, "score": 0.1}]
+
+        out = _run(_wrapper(), context, EnforcedResult.for_context(rows, context))
+
+        assert out == rows[:1]
+
+    def test_the_size_ceiling_is_skipped(self) -> None:
+        # Size changes once a record is projected and masked, so it is not re-checked.
+        policy = {
+            "version": "1.0",
+            "permissions": {"canQuery": True},
+            "limits": {"maxObjectSizeBytes": 10},
+        }
+        context = _context(policy)
+        rows = [{"id": 1, "size": 100}]
+
+        assert _run(_wrapper(), context, EnforcedResult.for_context(rows, context)) == rows

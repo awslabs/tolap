@@ -672,32 +672,49 @@ public sealed class SecureContextToolWrapper
     /// <see cref="SecureContextWrapperOptions.AllowUnenforceableShapes"/>.
     /// </para>
     /// <para>
-    /// A tool whose data layer already ran the pipeline returns
-    /// <see cref="EnforcedResult.For{T}"/> bound to this context. When the binding
-    /// verifies (see <see cref="HonoursEnforcedResult"/>) only the idempotent steps --
-    /// hidden fields, allowed fields, result limit -- are re-applied, so hashed fields are
-    /// not hashed twice. Any other marker is unwrapped and its data runs the full pipeline.
+    /// Never honours an <see cref="EnforcedResult"/>: a marker is unwrapped and its data
+    /// runs the full pipeline. Only <see cref="ExecuteWithEnforcementAsync(SecurityContext, PreExecuteArgs, Func{Task{object}})"/>
+    /// honours one, since only there does the wrapper itself run the tool it came from.
+    /// The write path comes through here too.
     /// </para>
     /// </remarks>
     /// <exception cref="UnenforceableResultException">
     /// Thrown for a shape the policy cannot be applied to.
     /// </exception>
-    public object? PostExecuteResult(SecurityContext context, object? result)
+    public object? PostExecuteResult(SecurityContext context, object? result) =>
+        EnforceResult(context, result, honourMarker: false);
+
+    /// <summary>
+    /// The result pipeline, honouring a top-level marker only when
+    /// <paramref name="honourMarker"/> is set and the binding verifies (see
+    /// <see cref="HonoursEnforcedResult"/>). An honoured marker's data gets the steps that
+    /// are no-ops over already-enforced output; see
+    /// <see cref="EnforcementEngine.ApplyIdempotentResultSteps"/>.
+    /// </summary>
+    private object? EnforceResult(SecurityContext context, object? result, bool honourMarker)
     {
         var policy = context.Policies.FirstOrDefault()
                      ?? throw new InvalidOperationException("no policy in context");
 
         if (result is EnforcedResult marker)
         {
-            if (HonoursEnforcedResult(context, marker))
+            if (!honourMarker)
+            {
+                Trace.TraceWarning(
+                    "TOLAP: an EnforcedResult is honoured only by ExecuteWithEnforcementAsync; "
+                    + "applying the full result pipeline.");
+            }
+            else if (HonoursEnforcedResult(context, marker))
             {
                 return PostExecuteAlreadyEnforced(marker.UntypedData, policy);
             }
-
-            // Never names the signatures: they are credentials.
-            Trace.TraceWarning(
-                "TOLAP: the tool returned an EnforcedResult that is not bound to this call's "
-                + "verified context signature; applying the full result pipeline.");
+            else
+            {
+                // Never names the signatures: they are credentials.
+                Trace.TraceWarning(
+                    "TOLAP: the tool returned an EnforcedResult that is not bound to this call's "
+                    + "verified context signature; applying the full result pipeline.");
+            }
         }
 
         result = EnforcedResult.Unwrap(result);
@@ -727,13 +744,13 @@ public sealed class SecureContextToolWrapper
     /// <list type="bullet">
     ///   <item><description>Signatures are enforced and the context signature verifies
     ///   under the signing key. Without that the signature field is whatever the sender
-    ///   wrote, and matching it proves nothing. Re-verified here because
-    ///   <see cref="PostExecuteResult"/> is public and may be called without
-    ///   <see cref="PreExecute"/>.</description></item>
+    ///   wrote, and matching it proves nothing. Re-verified after the tool ran, since the
+    ///   tool could have changed the context.</description></item>
     ///   <item><description>The marker names that exact signature, compared in constant
     ///   time. The signature covers the whole envelope (policy, expiry, jti, purpose,
-    ///   delegation chain), so a marker from any other context does not
-    ///   match.</description></item>
+    ///   delegation chain), so a marker bound to another context does not match. A marker
+    ///   bound to this context matches every call made with it until it expires: the
+    ///   binding is to the context, not to one call.</description></item>
     ///   <item><description>No marker is nested inside. An inner marker's binding is not
     ///   what was checked, so the whole result is enforced instead.</description></item>
     /// </list>
@@ -802,7 +819,10 @@ public sealed class SecureContextToolWrapper
     /// </exception>
     /// <remarks>
     /// A tool that enforces at its data layer returns
-    /// <c>EnforcedResult.For(data, context)</c>; see <see cref="PostExecuteResult"/>. The
+    /// <c>EnforcedResult.For(data, context)</c>. This is the only path that honours such a
+    /// marker, and only when it is bound to this call's verified context. The marker is
+    /// the tool code's claim, not proof: an honoured marker skips masking, so a tool that
+    /// returns one without having run the pipeline returns masked fields raw. The
     /// pre-execution checks run either way.
     /// </remarks>
     public async Task<object?> ExecuteWithEnforcementAsync(
@@ -816,6 +836,6 @@ public sealed class SecureContextToolWrapper
             throw new UnauthorizedAccessException($"Access denied: {pre.Reason}");
         }
         var raw = await toolFn().ConfigureAwait(false);
-        return PostExecuteResult(context, raw);
+        return EnforceResult(context, raw, honourMarker: true);
     }
 }

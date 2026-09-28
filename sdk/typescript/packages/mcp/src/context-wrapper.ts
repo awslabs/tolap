@@ -475,11 +475,10 @@ export class SecureContextToolWrapper {
    * identical pipeline. Any other shape is denied unless the wrapper was
    * configured with `allowUnenforceableShapes`.
    *
-   * A tool whose data layer already ran the pipeline returns
-   * `EnforcedResult.forContext(data, context)`. When the binding verifies (see
-   * {@link honoursEnforcedResult}) only the idempotent steps (hidden fields,
-   * allowed fields, result limit) are re-applied, so hashed fields are not hashed
-   * twice. Any other marker is unwrapped and its data runs the full pipeline.
+   * Never honours an {@link EnforcedResult}: a marker is unwrapped and its data
+   * runs the full pipeline. Only {@link executeWithEnforcement} honours one, since
+   * only there does the wrapper itself run the tool it came from. The SQL and write
+   * paths come through here too.
    */
   postExecute(
     context: SecurityContext,
@@ -487,15 +486,35 @@ export class SecureContextToolWrapper {
   ): Array<Record<string, unknown>>;
   postExecute(context: SecurityContext, results: unknown): unknown;
   postExecute(context: SecurityContext, results: unknown): unknown {
+    return this.enforceResult(context, results, false);
+  }
+
+  /**
+   * The result pipeline, honouring a top-level marker only when `honourMarker` is
+   * set (by {@link executeWithEnforcement}) and the binding verifies (see
+   * {@link honoursEnforcedResult}). An honoured marker's data gets the steps that
+   * are no-ops over already-enforced output; see `applyIdempotentResultSteps`.
+   */
+  private enforceResult(
+    context: SecurityContext,
+    results: unknown,
+    honourMarker: boolean,
+  ): unknown {
     if (results instanceof EnforcedResult) {
-      if (this.honoursEnforcedResult(context, results)) {
+      if (!honourMarker) {
+        console.warn(
+          "TOLAP: an EnforcedResult is honoured only by executeWithEnforcement; " +
+            "applying the full result pipeline.",
+        );
+      } else if (this.honoursEnforcedResult(context, results)) {
         return this.postExecuteAlreadyEnforced(context, results.data);
+      } else {
+        // Never names the signatures: they are credentials.
+        console.warn(
+          "TOLAP: the tool returned an EnforcedResult that is not bound to this " +
+            "call's verified context signature; applying the full result pipeline.",
+        );
       }
-      // Never names the signatures: they are credentials.
-      console.warn(
-        "TOLAP: the tool returned an EnforcedResult that is not bound to this " +
-          "call's verified context signature; applying the full result pipeline.",
-      );
     }
     results = unwrapEnforcedResults(results);
 
@@ -525,14 +544,17 @@ export class SecureContextToolWrapper {
    * hashed again), whereas honouring a bad marker would return data nothing
    * enforced.
    *
-   * - exact class: a subclass could override `data` with a getter, so it is data;
+   * - exact class, constructed by this copy of the package (the private brand): a
+   *   subclass could override `data` with a getter, and a Proxy or an
+   *   `Object.create(prototype)` object never ran the constructor;
    * - signatures enforced, and the context signature verifies under the signing
    *   key. Without that the signature field is whatever the sender wrote. Checked
-   *   again here because `postExecute` is public and reachable without
-   *   `preExecute`;
+   *   again after the tool ran, since the tool could have changed the context;
    * - the marker names that exact signature, compared in constant time. The
    *   signature covers the whole envelope (policy, expiry, jti, purpose,
-   *   delegation chain), so a marker from any other context does not match;
+   *   delegation chain), so a marker bound to another context does not match. A
+   *   marker bound to this context matches every call made with it until it
+   *   expires: the binding is to the context, not to one call;
    * - no marker nested inside: an inner marker's binding is not what was checked.
    */
   private honoursEnforcedResult(
@@ -686,8 +708,11 @@ export class SecureContextToolWrapper {
    * Pre-execute, run the tool, post-execute.
    *
    * A tool that enforces at its data layer returns
-   * `EnforcedResult.forContext(data, context)`; see {@link postExecute}.
-   * Pre-execution checks run either way.
+   * `EnforcedResult.forContext(data, context)`. This is the only path that honours
+   * such a marker, and only when it is bound to this call's verified context. The
+   * marker is the tool code's claim, not proof: an honoured marker skips masking,
+   * so a tool that returns one without having run the pipeline returns masked
+   * fields raw. Pre-execution checks run either way.
    */
   async executeWithEnforcement(
     context: SecurityContext,
@@ -715,6 +740,6 @@ export class SecureContextToolWrapper {
       throw new Error(`Access denied: ${pre.reason ?? "unknown reason"}`);
     }
     const raw = await toolFn();
-    return this.postExecute(context, raw);
+    return this.enforceResult(context, raw, true);
   }
 }

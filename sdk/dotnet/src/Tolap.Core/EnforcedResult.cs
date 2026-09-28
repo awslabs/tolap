@@ -28,6 +28,16 @@ namespace Tolap.Core;
 /// <c>private protected</c> and <see cref="EnforcedResult{T}"/> is sealed, so no type
 /// outside this assembly can pose as a marker.
 /// </para>
+/// <para>
+/// Scope and trust. Only the context wrapper's untyped <c>ExecuteWithEnforcementAsync</c>
+/// honours a marker; the SQL and write paths, and <c>PostExecuteResult</c> called
+/// directly, unwrap it and run the full pipeline. A marker is a claim by the tool code,
+/// not proof that the pipeline ran: the wrapper checks only that it is bound to the
+/// current verified context. It is reusable for every call made with that context for the
+/// context's whole TTL. An honoured marker skips masking, so if the data layer did not
+/// really run the pipeline, masked fields come back raw. SQL pushdown alone does not
+/// qualify: pushdown applies row filters, not masking or field rules.
+/// </para>
 /// </remarks>
 public abstract class EnforcedResult
 {
@@ -83,7 +93,13 @@ public abstract class EnforcedResult
             Encoding.UTF8.GetBytes(presented), Encoding.UTF8.GetBytes(expected));
     }
 
-    /// <summary>Whether a marker appears anywhere in a record, list or tree.</summary>
+    /// <summary>Whether a marker appears in a tree of dictionaries and lists.</summary>
+    /// <remarks>
+    /// Walks <c>IReadOnlyDictionary&lt;string, object?&gt;</c> (which covers
+    /// <c>Dictionary&lt;string, object?&gt;</c>) and <c>IReadOnlyList</c> only. A marker
+    /// inside an <c>ExpandoObject</c> or other non-generic <c>IDictionary</c>, a
+    /// <c>Hashtable</c>, a POCO or a <c>JsonElement</c> is not found.
+    /// </remarks>
     public static bool Contains(object? node) => Found(node);
 
     private static bool Found(object? node)
@@ -110,7 +126,8 @@ public abstract class EnforcedResult
     /// strip and masking, and a serializer would then write it out whole. So an unhonoured
     /// marker is unwrapped before enforcement and its contents are enforced like any other
     /// data. Containers are rebuilt only when a marker was found beneath them. Lazy
-    /// sequences are never enumerated; they are unenforceable shapes already.
+    /// sequences are never enumerated; they are unenforceable shapes already. The same
+    /// containers as <see cref="Contains"/> are walked, and no others.
     /// </remarks>
     public static object? Unwrap(object? node) => Unwrap(node, out _);
 

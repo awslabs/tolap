@@ -1,5 +1,5 @@
 {
-  "description": "Already-enforced results: a tool opts out of re-enforcement by returning an EnforcedResult marker bound to the signed context's signature. Honoured only on an exact, constant-time signature match; the hidden-field strip, allowed-field projection and maxResults are still re-applied because they are idempotent.",
+  "description": "Already-enforced results: a tool opts out of re-enforcement by returning an EnforcedResult marker bound to the signed context's signature. Honoured only on an exact, constant-time signature match, and only by executeWithEnforcement. An honoured marker skips masking, the size ceiling, and each row filter, tag filter or similarity floor whose field the policy hides, projects out or masks. The filters on visible, unmasked, allowed fields, the hidden-field strip, the allowed-field projection and maxResults are re-applied, because over already-enforced output they are no-ops.",
   "action": "executeWithEnforcement",
   "signingKey": "already-enforced-fixture-key-0123456789abcdef",
   "context": {
@@ -827,6 +827,347 @@
       ],
       "expected": [],
       "notes": "Demonstrates why record-dropping steps are skipped for an honoured marker: a filter on a field the data layer already removed fails closed."
+    },
+    {
+      "name": "matching marker still applies a row filter on a visible, unmasked, allowed field",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "eu-west",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        }
+      ],
+      "notes": "region is neither hidden, projected out nor masked, so the data layer's output carries the value the filter needs. Re-running the filter is a no-op on correctly enforced data and drops the row the data layer let through (a filter it could not push down, say)."
+    },
+    {
+      "name": "matching marker over a single record that fails a filter on a visible field returns null",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": {
+        "id": 2,
+        "region": "eu-west",
+        "email": "2b3b2b9ce842ab8b"
+      },
+      "expected": null
+    },
+    {
+      "name": "matching marker skips a row filter on a masked field",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "email",
+              "operator": "equals",
+              "value": "a@example.com"
+            }
+          ]
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "email": "b36a83701f1c3191"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "email": "b36a83701f1c3191"
+        }
+      ],
+      "notes": "email is masked, so the output holds the hash and a filter on it would compare against the mask."
+    },
+    {
+      "name": "mismatched marker re-runs a row filter on a masked field and drops every row",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "email",
+              "operator": "equals",
+              "value": "a@example.com"
+            }
+          ]
+        }
+      },
+      "marker": "tampered",
+      "data": [
+        {
+          "id": 1,
+          "email": "b36a83701f1c3191"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "matching marker skips a row filter on a field allowedFields projects out",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "id",
+              "email"
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "email": "a@example.com"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "email": "a@example.com"
+        }
+      ]
+    },
+    {
+      "name": "matching marker still applies a tag filter when the tag keys are visible",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "tags": [
+            "public"
+          ]
+        },
+        {
+          "id": 2,
+          "tags": [
+            "secret"
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "tags": [
+            "public"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "matching marker skips a tag filter when a tag key is hidden",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "tags"
+            ]
+          },
+          "tagRules": {
+            "allowedTags": [
+              "public"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1
+        }
+      ],
+      "expected": [
+        {
+          "id": 1
+        }
+      ]
+    },
+    {
+      "name": "matching marker still applies the similarity floor when the score keys are visible",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "score": 0.9
+        },
+        {
+          "id": 2,
+          "score": 0.1
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "score": 0.9
+        }
+      ]
+    },
+    {
+      "name": "matching marker skips the size ceiling",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "limits": {
+          "maxObjectSizeBytes": 10
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "size": 100
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "size": 100
+        }
+      ],
+      "notes": "A record's size changes once it is projected and masked, so the ceiling is not re-checked over already-enforced output."
     }
   ],
   "notes": "Hashes are unsalted sha256, first 16 hex characters. Expected values for mismatched markers are the pipeline applied a second time to already-enforced data."

@@ -16,14 +16,44 @@
  *
  * A marker is a class, never an object key or a caller-supplied flag. A plain object
  * with `data` and `contextSignature` keys is ordinary data, and model-controlled
- * arguments cannot reach a class instance the tool code has to construct.
+ * arguments cannot reach a class instance the tool code has to construct. Only an
+ * object the constructor ran on carries the private `#brand`, so neither
+ * `Object.create(EnforcedResult.prototype)` nor a Proxy is honoured.
+ *
+ * Scope and trust. Only `executeWithEnforcement` honours a marker; the SQL and write
+ * paths, and `postExecute` called directly, unwrap it and run the full pipeline. A
+ * marker is a claim by the tool code, not proof that the pipeline ran: the wrapper
+ * checks only that it is bound to the current verified context. It is reusable for
+ * every call made with that context for the context's whole TTL. An honoured marker
+ * skips masking, so if the data layer did not really run the pipeline, masked
+ * fields come back raw. SQL pushdown alone does not qualify: pushdown applies row
+ * filters, not masking or field rules.
  */
 
 import { timingSafeEqual } from "node:crypto";
 import type { SecurityContext } from "./types.js";
 
+/**
+ * Cross-copy brand. Two copies of this package (a duplicated dependency) have two
+ * `EnforcedResult` classes, and neither recognizes the other's instances by class
+ * or private field. The registered symbol is shared by both, so a marker from the
+ * other copy is still found and unwrapped. It is never used to honour a marker: any
+ * object can carry it.
+ */
+const FOREIGN_BRAND = Symbol.for("tolap.EnforcedResult");
+
+let hasBrand: (value: object) => boolean = () => false;
+
 /** Tool output the data layer already ran the result pipeline over. */
 export class EnforcedResult<T = unknown> {
+  // Set only by the constructor. `#brand in value` is false for an object built by
+  // Object.create(EnforcedResult.prototype) and for a Proxy, whatever its traps say.
+  #brand = true;
+
+  static {
+    hasBrand = (value: object): boolean => #brand in value;
+  }
+
   readonly data: T;
   readonly contextSignature: string;
 
@@ -31,6 +61,11 @@ export class EnforcedResult<T = unknown> {
     this.data = data;
     this.contextSignature = contextSignature;
     Object.freeze(this);
+  }
+
+  /** See {@link FOREIGN_BRAND}: for unwrapping only, never for honouring. */
+  get [FOREIGN_BRAND](): true {
+    return true;
   }
 
   /**
@@ -57,18 +92,38 @@ export class EnforcedResult<T = unknown> {
 }
 
 /**
- * Whether `value` is exactly an {@link EnforcedResult}, not a subclass.
+ * Whether `value` is exactly an {@link EnforcedResult} this copy of the package
+ * constructed: not a subclass, not a Proxy, not `Object.create(prototype)`.
  *
  * A subclass could override `data` with a getter that returns something else on the
- * second read, so only the exact class is ever honoured. Subclasses are still
+ * second read, so only the exact class is ever honoured. The private-field check
+ * comes first: it is the one a Proxy cannot fake, and it means the prototype read
+ * never reaches a Proxy's `getPrototypeOf` trap. Everything that fails is still
  * unwrapped (see {@link unwrapEnforcedResults}), which is the safe direction.
  */
 export function isExactEnforcedResult(value: unknown): value is EnforcedResult {
   return (
     typeof value === "object" &&
     value !== null &&
+    hasBrand(value) &&
     Object.getPrototypeOf(value) === EnforcedResult.prototype
   );
+}
+
+/**
+ * Whether `value` is a marker to unwrap: an instance of this copy's class, or an
+ * object carrying the registered cross-copy brand (a marker from a second copy of
+ * the package). Never used to decide whether to honour one.
+ */
+function isMarkerToUnwrap(value: unknown): value is { data: unknown } {
+  if (value instanceof EnforcedResult) return true;
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    return (value as Record<symbol, unknown>)[FOREIGN_BRAND] === true;
+  } catch {
+    // A hostile getter or Proxy trap: treat it as ordinary data.
+    return false;
+  }
 }
 
 /**
@@ -98,9 +153,15 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
-/** Whether an {@link EnforcedResult} appears anywhere in a record, array or tree. */
+/**
+ * Whether an {@link EnforcedResult} appears in a tree of arrays and plain objects.
+ *
+ * Only arrays and plain objects are walked. A marker inside a Map, a Set or a class
+ * instance is not found, and every pipeline step passes such a container through by
+ * reference as well.
+ */
 export function containsEnforcedResult(node: unknown): boolean {
-  if (node instanceof EnforcedResult) return true;
+  if (isMarkerToUnwrap(node)) return true;
   if (Array.isArray(node)) return node.some((item) => containsEnforcedResult(item));
   if (isPlainObject(node)) {
     return Object.values(node).some((value) => containsEnforcedResult(value));
@@ -117,13 +178,17 @@ export function containsEnforcedResult(node: unknown): boolean {
  * whole. So an unhonoured marker is unwrapped before enforcement and its contents
  * are enforced like any other data. Containers are rebuilt only when a marker was
  * found beneath them.
+ *
+ * Walks arrays and plain objects only; a marker inside a Map, a Set or another class
+ * instance is left in place. Markers from a second copy of the package are found by
+ * their registered brand.
  */
 export function unwrapEnforcedResults(node: unknown): unknown {
   return unwrap(node)[0];
 }
 
 function unwrap(node: unknown): [unknown, boolean] {
-  if (node instanceof EnforcedResult) return [unwrap(node.data)[0], true];
+  if (isMarkerToUnwrap(node)) return [unwrap(node.data)[0], true];
   if (Array.isArray(node)) {
     const items = node.map((item) => unwrap(item));
     if (!items.some(([, changed]) => changed)) return [node, false];

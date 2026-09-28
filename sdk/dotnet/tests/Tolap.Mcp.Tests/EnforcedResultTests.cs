@@ -14,10 +14,11 @@ namespace Tolap.Mcp.Tests;
 /// <c>hash</c> masking is not idempotent: when a data layer has already run the result
 /// pipeline, running it again in <c>ExecuteWithEnforcementAsync</c> hashes every hashed
 /// field a second time. A tool opts out by returning <see cref="EnforcedResult{T}"/>,
-/// bound to the signed context's signature. The wrapper honours the marker only on an
-/// exact, constant-time match, and still re-applies the idempotent steps (hidden-field
-/// strip, allowed-field projection, maxResults). Every other marker falls back to the
-/// full pipeline. The shared cases in
+/// bound to the signed context's signature. Only <c>ExecuteWithEnforcementAsync</c>
+/// honours the marker, and only on an exact, constant-time match. It still re-applies the
+/// steps that are no-ops over enforced output: filters on visible fields, the
+/// hidden-field strip, the allowed-field projection and maxResults. Every other marker,
+/// and every marker on another path, falls back to the full pipeline. The shared cases in
 /// <c>fixtures/enforcement/already-enforced-results.json</c> hold the Python and
 /// TypeScript SDKs to the same results.
 /// </remarks>
@@ -235,8 +236,8 @@ public class EnforcedResultTests
     [Fact]
     public void AContextWhoseSignatureDoesNotVerifyNeverHonoursAMarker()
     {
-        // PostExecuteResult is public and can be reached without PreExecute. A forged
-        // context plus a marker copying its forged signature must not skip anything.
+        // A forged context plus a marker copying its forged signature must not skip
+        // anything, whichever path it reaches.
         var context = MakeContext(PolicyA);
         var forged = context with
         {
@@ -247,6 +248,140 @@ public class EnforcedResultTests
         var output = Wrapper().PostExecuteResult(forged, EnforcedResult.For(once, forged));
 
         ShouldMatch(output, FullPipeline(context, once));
+    }
+
+    // -- only ExecuteWithEnforcementAsync honours a marker ----------------------
+
+    private static JsonNode WritePolicy()
+    {
+        var node = JsonNode.Parse(PolicyA.GetRawText())!;
+        node["permissions"] = new JsonObject
+        {
+            ["canQuery"] = true,
+            ["canInsert"] = true,
+            ["readOnly"] = false,
+        };
+        return node;
+    }
+
+    [Fact]
+    public async Task ExecuteWithEnforcementHonoursAMarker()
+    {
+        var context = MakeContext(PolicyA);
+        var once = EnforcedOnce(context, Raw());
+
+        ShouldMatch(await Run(Wrapper(), context, EnforcedResult.For(once, context)), once);
+    }
+
+    [Fact]
+    public void PostExecuteResultCalledDirectlyDoesNotHonourAMarker()
+    {
+        var context = MakeContext(PolicyA);
+        var once = EnforcedOnce(context, Raw());
+
+        var output = Wrapper().PostExecuteResult(context, EnforcedResult.For(once, context));
+
+        ShouldMatch(output, FullPipeline(context, once));
+        JsonNode.DeepEquals(AsJson(output), AsJson(once)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TheWritePathDoesNotHonourAMarker()
+    {
+        var context = MakeContext(WritePolicy());
+        var once = EnforcedOnce(context, Raw());
+
+        var output = await Wrapper().ExecuteWriteWithEnforcementAsync(
+            context,
+            WriteOperation.Insert,
+            () => Task.FromResult<object?>(EnforcedResult.For(once, context)),
+            "patients",
+            new Dictionary<string, object?> { ["region"] = "us-east" });
+
+        ShouldMatch(output, FullPipeline(context, once));
+        JsonNode.DeepEquals(AsJson(output), AsJson(once)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TheSqlPathDoesNotHonourAMarker()
+    {
+        // The SQL path is typed to a list of records, so a marker can reach it only
+        // inside a record. It is unwrapped there and its contents fully enforced.
+        var context = MakeContext(PolicyA);
+        var once = EnforcedOnce(context, Raw());
+        IReadOnlyList<Dictionary<string, object?>> rows =
+        [
+            new() { ["id"] = 1L, ["region"] = "us-east", ["p"] = EnforcedResult.For(once, context) },
+        ];
+
+        var output = await Wrapper().ExecuteSqlWithEnforcementAsync(
+            context,
+            new PreExecuteArgs("sql-query"),
+            "SELECT id, region, p FROM patients",
+            _ => Task.FromResult(rows));
+
+        ShouldMatch(
+            output,
+            FullPipeline(
+                context,
+                new List<Dictionary<string, object?>>
+                {
+                    new() { ["id"] = 1L, ["region"] = "us-east", ["p"] = once },
+                }));
+    }
+
+    [Fact]
+    public async Task TheSqlPathStillEnforcesAFilterOnAVisibleField()
+    {
+        var context = MakeContext(PolicyA);
+        IReadOnlyList<Dictionary<string, object?>> rows =
+        [
+            new() { ["id"] = 2L, ["region"] = "eu-west", ["email"] = "b@example.com" },
+        ];
+
+        var output = await Wrapper().ExecuteSqlWithEnforcementAsync(
+            context,
+            new PreExecuteArgs("sql-query"),
+            "SELECT id, region, email FROM patients",
+            _ => Task.FromResult(rows));
+
+        output.Should().BeEmpty();
+    }
+
+    // -- an honoured marker still runs the filters on visible fields ------------
+
+    [Fact]
+    public async Task AnHonouredMarkerStillAppliesARowFilterOnAVisibleField()
+    {
+        var context = MakeContext(PolicyA);
+        var rows = new List<Dictionary<string, object?>>
+        {
+            new() { ["id"] = 1L, ["region"] = "us-east", ["email"] = "h1" },
+            new() { ["id"] = 2L, ["region"] = "eu-west", ["email"] = "h2" },
+        };
+
+        ShouldMatch(
+            await Run(Wrapper(), context, EnforcedResult.For(rows, context)),
+            new List<Dictionary<string, object?>> { rows[0] });
+    }
+
+    [Fact]
+    public async Task AnHonouredMarkerSkipsARowFilterOnAMaskedField()
+    {
+        var policy = JsonNode.Parse("""
+            {
+              "version": "1.0",
+              "permissions": { "canQuery": true },
+              "objectRules": {
+                "fieldRules": { "maskedFields": [{ "field": "email", "maskType": "hash" }] },
+                "rowFilters": [{ "field": "email", "operator": "equals", "value": "a@example.com" }]
+              }
+            }
+            """)!;
+        var context = MakeContext(policy);
+        var rows = new List<Dictionary<string, object?>> { new() { ["id"] = 1L, ["email"] = "already-hashed" } };
+
+        ShouldMatch(await Run(Wrapper(), context, EnforcedResult.For(rows, context)), rows);
     }
 
     [Fact]
@@ -419,7 +554,7 @@ public class EnforcedResultTests
     // -- every other post-execution step still runs -----------------------------
 
     [Fact]
-    public async Task HistoryIsRecordedForAnHonouredMarkerOnTheAsyncPath()
+    public async Task HistoryIsRecordedOnTheAsyncPathWhichDoesNotHonourAMarker()
     {
         var history = new ToolCallHistory(4);
         var wrapper = Wrapper(history: history);
@@ -430,7 +565,7 @@ public class EnforcedResultTests
         var output = wrapper.PostExecuteResult(context, EnforcedResult.For(once, context));
 
         pre.Allowed.Should().BeTrue();
-        ShouldMatch(output, once);
+        ShouldMatch(output, FullPipeline(context, once));
         history.Count.Should().Be(1);
     }
 

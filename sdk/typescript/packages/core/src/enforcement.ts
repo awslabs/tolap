@@ -943,25 +943,42 @@ export function applyResultPipeline(
 }
 
 /**
+ * Whether the policy hides, projects out or masks `name`, so already-enforced
+ * output no longer carries its raw value.
+ */
+function fieldIsTransformed(policy: EffectivePolicy, name: string): boolean {
+  if (hiddenFieldPatterns(policy).some((p) => fieldNameMatches(p, name))) return true;
+  const allowed = allowedFieldPatterns(policy);
+  if (allowed !== undefined && !allowed.some((p) => fieldNameMatches(p, name))) {
+    return true;
+  }
+  return maskingRules(policy).some((rule) => fieldNameMatches(rule.field, name));
+}
+
+/**
  * Re-apply only the pipeline steps that are safe to run twice.
  *
  * For a result a data layer already enforced under this exact policy (an
  * `EnforcedResult` the context wrapper has verified). Runs, in pipeline order:
  *
- *   5. hidden fields    removing an absent field is a no-op
- *   6. allowed fields   projecting a projection is a no-op
- *   8. result limit     truncating a truncated list is a no-op
+ *   1. row filters        only those on a visible field (see below)
+ *   2. tag filters        only if no tag key is transformed
+ *   3. similarity floor   only if no score key is transformed
+ *   5. hidden fields      removing an absent field is a no-op
+ *   6. allowed fields     projecting a projection is a no-op
+ *   8. result limit       truncating a truncated list is a no-op
  *
- * and deliberately skips the rest:
+ * A field is "transformed" when the policy hides it, projects it out (allowedFields
+ * is set and no pattern matches it) or masks it. A record-dropping step over such a
+ * field is skipped: the data layer's output no longer carries the value, so the
+ * filter would fail closed on every record, or compare against the mask. A filter
+ * on a visible, unmasked, allowed field re-runs: over correctly enforced data it is
+ * a no-op, and it drops any record the data layer let through.
  *
- *   1-4. row, tag, similarity and size filters: they would be re-evaluated over
- *        output that was already projected and masked. A filter on a field the data
- *        layer hid is missing on every record and fails closed, dropping all of
- *        them; a filter on a masked field compares against the mask.
- *   7.   masking: `hash` is not idempotent, so a second pass hashes the hash.
+ * Always skipped:
  *
- * The three steps kept are a backstop: if the data layer returned more than the
- * policy permits, it is removed here regardless of the marker.
+ *   4. size ceiling   a record's size changes once it is projected and masked.
+ *   7. masking        `hash` is not idempotent, so a second pass hashes the hash.
  *
  * @throws UnenforceableResultError for a shape the policy cannot be applied to.
  */
@@ -979,7 +996,20 @@ export function applyIdempotentResultSteps(
       ? [result as Record<string, unknown>]
       : (result as Array<Record<string, unknown>>);
 
-  let out = stripHiddenFields(records, policy);
+  let out = records;
+  const visibleFilters = (policy.objectRules?.rowFilters ?? []).filter(
+    (rf) => !fieldIsTransformed(policy, rf.field),
+  );
+  if (visibleFilters.length > 0) {
+    out = out.filter((row) => visibleFilters.every((rf) => rowPassesFilter(row, rf)));
+  }
+  if (!TAG_KEYS.some((key) => fieldIsTransformed(policy, key))) {
+    out = filterByTags(out, policy);
+  }
+  if (!SCORE_KEYS.some((key) => fieldIsTransformed(policy, key))) {
+    out = applySimilarityFloor(out, policy);
+  }
+  out = stripHiddenFields(out, policy);
   out = projectAllowedFields(out, policy);
   out = applyResultLimit(out, policy);
 
