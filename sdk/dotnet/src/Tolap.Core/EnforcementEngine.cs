@@ -496,24 +496,47 @@ public static class EnforcementEngine
     public static IReadOnlyList<Dictionary<string, object?>> FilterByTags(
         IReadOnlyList<Dictionary<string, object?>> results,
         EffectivePolicy policy)
+        => FilterByTagRules(results, policy, checkAllowed: true, isMasked: null);
+
+    /// <summary>
+    /// <see cref="FilterByTags"/>, with the AllowedTags half optional and masked keys
+    /// skipped. <paramref name="checkAllowed"/> false applies DeniedTags alone;
+    /// <paramref name="isMasked"/> reads tags only from keys it does not hold masked
+    /// (see <see cref="CollectTags"/>). <paramref name="allowedIsMasked"/>, when given,
+    /// replaces it for the AllowedTags half, so each half can skip keys by its own test.
+    /// </summary>
+    private static IReadOnlyList<Dictionary<string, object?>> FilterByTagRules(
+        IReadOnlyList<Dictionary<string, object?>> results,
+        EffectivePolicy policy,
+        bool checkAllowed,
+        Func<string, bool>? isMasked,
+        Func<string, bool>? allowedIsMasked = null)
     {
         var tagRules = policy.ObjectRules?.TagRules;
         if (tagRules is null)
+            return results;
+
+        var allowedTags = checkAllowed ? tagRules.AllowedTags : null;
+        if (allowedTags is null && (tagRules.DeniedTags is null || tagRules.DeniedTags.Length == 0))
             return results;
 
         var filtered = new List<Dictionary<string, object?>>();
 
         foreach (var result in results)
         {
-            var tags = ExtractTags(result);
+            var tags = ExtractTags(result, isMasked);
 
             // Check denied tags first (takes precedence)
             if (tagRules.DeniedTags is not null && tagRules.DeniedTags.Any(tags.Contains))
                 continue;
 
             // Check allowed tags (document must have at least one)
-            if (tagRules.AllowedTags is not null && !tagRules.AllowedTags.Any(tags.Contains))
-                continue;
+            if (allowedTags is not null)
+            {
+                var allowedOver = allowedIsMasked is null ? tags : ExtractTags(result, allowedIsMasked);
+                if (!allowedTags.Any(allowedOver.Contains))
+                    continue;
+            }
 
             filtered.Add(result);
         }
@@ -601,9 +624,18 @@ public static class EnforcementEngine
     /// <exception cref="UnenforceableResultException">
     /// Thrown for a shape the policy cannot be applied to.
     /// </exception>
+    /// <remarks>
+    /// Every <see cref="EnforcedResult"/> in the dictionaries and lists of
+    /// <paramref name="result"/> (see <see cref="EnforcedResult.Contains"/>) is replaced
+    /// with the data it carries before the pipeline runs. This function never honours a
+    /// marker: deciding that one is bound to a verified context is the context
+    /// wrapper's job, and a marker left in place would carry its data past the
+    /// hidden-field strip and masking.
+    /// </remarks>
     public static object? ApplyResultPipeline(
         object? result, EffectivePolicy policy, string? hashSalt = null)
     {
+        result = EnforcedResult.Unwrap(result);
         var shape = ClassifyResultShape(result);
 
         if (shape == ResultShape.Unenforceable)
@@ -643,6 +675,12 @@ public static class EnforcementEngine
         EffectivePolicy policy,
         string? hashSalt = null)
     {
+        // A marker nested in a field is data to enforce, never a pass (see EnforcedResult).
+        if (EnforcedResult.Contains(records))
+        {
+            records = (IReadOnlyList<Dictionary<string, object?>>)EnforcedResult.Unwrap(records)!;
+        }
+
         var working = ApplyRowFilters(records, policy);
         working = FilterByTags(working, policy);
         working = ApplySimilarityFloor(working, policy);
@@ -651,6 +689,126 @@ public static class EnforcementEngine
         working = ProjectAllowedFields(working, policy);
         working = working.Select(r => ApplyFieldMasking(r, policy, hashSalt)).ToList();
         return ApplyResultLimit(working, policy);
+    }
+
+    /// <summary>
+    /// Re-applies the pipeline steps that are no-ops over a result the tool's data layer
+    /// already enforced: row filters and tag filters on visible fields, the similarity
+    /// floor per record, hidden-field removal, allowed-field projection and the result limit.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a tool returning an <see cref="EnforcedResult{T}"/> the context wrapper has
+    /// verified. A field is transformed when the policy hides it, projects it out
+    /// (AllowedFields is set and no pattern matches it) or masks it. A record-dropping
+    /// step over a transformed field is skipped: the data layer's output no longer
+    /// carries the value, so the filter would fail closed on every record, or compare
+    /// against the mask. A row filter runs when its field is not transformed. DeniedTags
+    /// always runs, reading tags only from tag keys that are not masked (a hidden or projected-out key
+    /// counts as unmasked; it cannot drop a
+    /// record for a missing tag); AllowedTags runs only when no tag key is transformed.
+    /// The similarity floor runs per record on the first present, unmasked score key (even
+    /// a hidden or projected-out one the tool left in); a record with none is kept only
+    /// when a score key is masked, or hidden or projected out and absent.
+    /// Over correctly
+    /// enforced data those are no-ops, and they drop any record the data layer let
+    /// through.
+    /// </para>
+    /// <para>
+    /// Always skipped: masking (<c>hash</c> is not idempotent, so a second pass hashes
+    /// the hash) and the size ceiling (a record's size changes once it is projected and
+    /// masked).
+    /// </para>
+    /// <para>
+    /// Not a substitute for <see cref="ApplyResultPipeline"/> on unenforced data.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="UnenforceableResultException">
+    /// Thrown for a shape the policy cannot be applied to.
+    /// </exception>
+    public static object? ApplyIdempotentResultSteps(object? result, EffectivePolicy policy)
+    {
+        var shape = ClassifyResultShape(result);
+
+        if (shape == ResultShape.Unenforceable)
+        {
+            throw new UnenforceableResultException(
+                "Access denied: tool result shape cannot be policy-enforced: "
+                + $"{DescribeResultShape(result)}. Return a Dictionary<string, object?> or an "
+                + "IReadOnlyList<Dictionary<string, object?>>, or opt out explicitly with "
+                + "AllowUnenforceableShapes = true.");
+        }
+
+        var records = shape == ResultShape.Record
+            ? new List<Dictionary<string, object?>> { ToRecord(result!) }
+            : ToRecordList(result!);
+
+        var working = records;
+        var visibleFilters = (policy.ObjectRules?.RowFilters ?? [])
+            .Where(rf => !FieldIsTransformed(policy, rf.Field))
+            .ToList();
+        if (visibleFilters.Count > 0)
+        {
+            working = working.Where(row => visibleFilters.All(rf => RowPassesFilter(row, rf))).ToList();
+        }
+
+        // DeniedTags always re-runs: a denylist never drops an untagged record, so a tag
+        // key the field-level steps removed cannot make it over-drop. A masked tag key
+        // holds the mask, not the tags, so it is not read; a hidden or projected-out key
+        // the tool left in holds the raw tags, so DeniedTags reads it even when also
+        // masked. AllowedTags keeps skipping every key a masking rule matches: reading more
+        // keys could only let it keep more. AllowedTags does drop an untagged record, so it
+        // runs only when every tag key is left untouched.
+        working = FilterByTagRules(
+            working,
+            policy,
+            checkAllowed: !TagKeys.Any(key => FieldIsTransformed(policy, key)),
+            isMasked: key => FieldIsMasked(policy, key),
+            allowedIsMasked: key => RuleForKey(policy.ObjectRules?.FieldRules?.MaskedFields ?? [], key) is not null);
+        working = ApplyVisibleSimilarityFloor(working, policy);
+
+        working = StripHiddenFields(working, policy);
+        working = ProjectAllowedFields(working, policy);
+        var processed = ApplyResultLimit(working, policy);
+
+        if (shape == ResultShape.Record)
+        {
+            return processed.Count > 0 ? processed[0] : null;
+        }
+
+        return processed;
+    }
+
+    /// <summary>
+    /// Whether the policy hides, projects out or masks <paramref name="name"/>, so
+    /// already-enforced output no longer carries its raw value.
+    /// </summary>
+    private static bool FieldIsTransformed(EffectivePolicy policy, string name)
+    {
+        if (FieldIsRemoved(policy, name)) return true;
+        return policy.ObjectRules?.FieldRules?.MaskedFields is { } masked
+            && masked.Any(rule => FieldNameMatches(rule.Field, name));
+    }
+
+    /// <summary>
+    /// Whether already-enforced output holds a mask for <paramref name="name"/>: a masking
+    /// rule matches it and it is neither hidden nor projected out. The pipeline removes a
+    /// field before it masks, so a hidden and masked field counts as removed.
+    /// </summary>
+    private static bool FieldIsMasked(EffectivePolicy policy, string name)
+        => RuleForKey(policy.ObjectRules?.FieldRules?.MaskedFields ?? [], name) is not null
+            && !FieldIsRemoved(policy, name);
+
+    /// <summary>
+    /// Whether the field-level steps remove <paramref name="name"/>: it is hidden or
+    /// projected out.
+    /// </summary>
+    private static bool FieldIsRemoved(EffectivePolicy policy, string name)
+    {
+        var fieldRules = policy.ObjectRules?.FieldRules;
+        if (fieldRules?.HiddenFields is { } hidden && hidden.Any(p => FieldNameMatches(p, name)))
+            return true;
+        return fieldRules?.AllowedFields is { } allowed && !allowed.Any(p => FieldNameMatches(p, name));
     }
 
     /// <summary>
@@ -717,6 +875,51 @@ public static class EnforcementEngine
         return records
             .Where(r => NumericField(r, ScoreKeys) is double score && score >= floor.Value)
             .ToList();
+    }
+
+    /// <summary>
+    /// The similarity floor over already-enforced output, per record.
+    /// </summary>
+    /// <remarks>
+    /// Walks the score keys in the pipeline's precedence order. The first key that is
+    /// present and not masked (including a hidden or projected-out key the tool left in)
+    /// decides: the floor is applied to its value, failing closed on a non-numeric value
+    /// exactly as <see cref="ApplySimilarityFloor"/> does. A key that is masked (see
+    /// <see cref="FieldIsMasked"/>), or hidden or projected out and absent, is noted as a
+    /// transformed score key and the walk continues, so a visible low score is never kept
+    /// because a higher-precedence key was removed. A record with no present, unmasked
+    /// score key is kept only when a transformed score key was seen, since its score may
+    /// have been masked or removed after the producer's pipeline checked it; otherwise it
+    /// is unscored and dropped. This prefers over-dropping to under-dropping: with
+    /// <c>score</c> hidden, a record the producer kept on a high <c>score</c> is dropped
+    /// when its next score key is low. When no score key is transformed this is
+    /// <see cref="ApplySimilarityFloor"/> exactly.
+    /// </remarks>
+    private static IReadOnlyList<Dictionary<string, object?>> ApplyVisibleSimilarityFloor(
+        IReadOnlyList<Dictionary<string, object?>> records,
+        EffectivePolicy policy)
+    {
+        var floor = policy.Limits?.MinSimilarityScore;
+        if (floor is null) return records;
+        var removed = ScoreKeys.Where(key => FieldIsRemoved(policy, key)).ToHashSet();
+        var masked = ScoreKeys.Where(key => FieldIsMasked(policy, key)).ToHashSet();
+        if (removed.Count == 0 && masked.Count == 0) return ApplySimilarityFloor(records, policy);
+
+        return records.Where(record =>
+        {
+            var transformedSeen = false;
+            foreach (var key in ScoreKeys)
+            {
+                var present = record.Keys.Any(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase));
+                if (present && !masked.Contains(key))
+                {
+                    return NumericField(record, [key]) is double score && score >= floor.Value;
+                }
+                if (masked.Contains(key) || removed.Contains(key)) transformedSeen = true;
+            }
+
+            return transformedSeen;
+        }).ToList();
     }
 
     /// <summary>
@@ -2038,10 +2241,11 @@ public static class EnforcementEngine
     /// compare case-insensitively: <c>deniedTags: ["Secret"]</c> must drop a record tagged
     /// <c>secret</c> (connector spec section 7).
     /// </remarks>
-    private static HashSet<string> ExtractTags(Dictionary<string, object?> record)
+    private static HashSet<string> ExtractTags(
+        Dictionary<string, object?> record, Func<string, bool>? isMasked = null)
     {
         var tags = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        CollectTags(record, tags);
+        CollectTags(record, tags, isMasked);
         return tags;
     }
 
@@ -2053,18 +2257,24 @@ public static class EnforcementEngine
     /// case-insensitive, glob-aware matcher masking and hidden-field removal use (spec
     /// section 4), so <c>Tags</c> and <c>metadata.tags</c> are found alongside
     /// <c>tags</c>.
+    /// <para>
+    /// <paramref name="isMasked"/> skips every key it holds masked, value and all, as
+    /// masking replaces that value wholesale. Used over already-enforced output,
+    /// where such a key holds the mask rather than the tags.
+    /// </para>
     /// </remarks>
-    private static void CollectTags(object? node, HashSet<string> into)
+    private static void CollectTags(object? node, HashSet<string> into, Func<string, bool>? isMasked)
     {
         if (node is Dictionary<string, object?> dict)
         {
             foreach (var (key, value) in dict)
             {
+                if (isMasked?.Invoke(key) == true) continue;
                 if (TagKeys.Any(tagKey => FieldNameMatches(tagKey, key)))
                     HarvestTagValues(value, into);
                 // Walked whether or not the key matched: a matched key holding a map may
                 // still nest a tag key of its own.
-                CollectTags(value, into);
+                CollectTags(value, into, isMasked);
             }
             return;
         }
@@ -2075,15 +2285,17 @@ public static class EnforcementEngine
             {
                 foreach (var property in element.EnumerateObject())
                 {
+                    if (isMasked?.Invoke(property.Name) == true)
+                        continue;
                     if (TagKeys.Any(tagKey => FieldNameMatches(tagKey, property.Name)))
                         HarvestTagValues(property.Value, into);
-                    CollectTags(property.Value, into);
+                    CollectTags(property.Value, into, isMasked);
                 }
             }
             else if (element.ValueKind == JsonValueKind.Array)
             {
                 foreach (var item in element.EnumerateArray())
-                    CollectTags(item, into);
+                    CollectTags(item, into, isMasked);
             }
             return;
         }
@@ -2095,7 +2307,7 @@ public static class EnforcementEngine
         if (node is System.Collections.IEnumerable enumerable)
         {
             foreach (var item in enumerable)
-                CollectTags(item, into);
+                CollectTags(item, into, isMasked);
         }
     }
 

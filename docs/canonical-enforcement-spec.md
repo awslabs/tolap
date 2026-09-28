@@ -498,6 +498,91 @@ accepted it in a write payload (issue #36). Pinned by
 `fixtures/enforcement/allowed-fields-qualified.json` and
 `fixtures/enforcement/validate-field-access-allowed-set.json`.
 
+### Already-enforced results
+
+A tool whose data layer already applied this pipeline MAY say so by returning the
+SDK's `EnforcedResult` marker (issue #33), bound to the signature of the signed
+context the call runs under. Only the context wrapper's execute-with-enforcement
+entry point (`execute_with_enforcement` / `executeWithEnforcement` /
+`ExecuteWithEnforcementAsync`), which runs the tool itself, MAY honour a marker. On
+every other path (the SQL path, the write path, and the public post-execution method
+called directly) the marker MUST be unwrapped and the full pipeline applied. The
+entry point MUST honour the marker only when all of the following hold, and MUST
+otherwise unwrap it and apply the full pipeline to its data:
+
+1. signature enforcement is on, and the context's signature verifies under the
+wrapper's signing key, re-checked after the tool ran; 2. the marker's signature
+equals the context's signature byte-for-byte, compared in constant time; 3. the
+marker is the SDK's own marker type, built by its constructor, never a record key or
+a caller-supplied flag; 4. the marker's data contains no further marker.
+
+A field is *transformed* when the policy hides it, projects it out (`allowedFields`
+is set and no pattern matches it) or masks it. An honoured marker's data gets:
+
+- each row filter whose field is not transformed;
+- `deniedTags`, always, reading tags only from tag keys (`tags`, `labels`,
+  `classification`) that are not masked (a hidden and masked key counts as hidden, so
+  one the tool left in is read): a denylist never drops an untagged record,
+  so a removed tag key cannot make it over-drop;
+- `allowedTags`, if no tag key is transformed;
+- the relevance floor, per record, walking the score keys in precedence order. The
+  first key that is present and not masked (even if hidden or projected out) decides:
+  the floor is applied to its value. A key that is masked (a masking rule matches it
+  and it is neither hidden nor projected out; a hidden and masked key counts as
+  hidden), or hidden or projected out and absent, is noted and the walk continues. A
+  record with no present, unmasked score key is kept only if such a key was seen, and
+  is otherwise dropped. This is an intentional fail-closed over-drop for any
+  higher-precedence score key that was removed or masked: with `score` hidden, a
+  record the data layer kept on a high `score` is dropped when its next visible score
+  key is low, since the marker path cannot know the raw `score`; with `score` masked
+  and `similarity` 0.1 visible, the record is likewise dropped;
+- hidden-field removal, allowed-field projection and the result limit.
+
+Over correctly enforced data these are no-ops, and they drop what the data layer let
+through. Skipped: masking, because `hash` is not idempotent; a row filter,
+or `allowedTags` over a transformed field, and a masked score key, because the output no longer
+carries its value, so the step would fail closed on every record or compare against
+the mask; and the size ceiling, because a record's size changes once it is projected
+and masked.
+
+Tag collection over an honoured marker's data skips every key it treats as masked,
+value and all, since masking replaces that value wholesale. A masked parent key is
+skipped with everything under it, so tags nested beneath it (a masked `metadata`
+holding `metadata.tags`) are not read. The two tag filters use different masked
+tests, and each fails closed:
+
+- `deniedTags` uses the strict test: a key is masked when a masking rule matches it
+  and it is neither hidden nor projected out. A hidden and masked key the tool left
+  in is therefore read. Reading more keys can only find more denied tags, so a
+  denylist over the strict test can only drop more records, never keep more.
+- `allowedTags` uses the loose test: any key a masking rule matches is skipped, hidden
+  or not. Reading fewer keys can only find fewer allowed tags, so an allowlist over
+  the loose test can only drop more. It can drop a record the full pipeline kept:
+  when the only allowed tag sits under a masked parent key, the record looks untagged
+  and fails the allowlist.
+
+The binding is to the context, not to one call. A marker bound to a context matches
+every call made with that context until the context expires. The marker is a claim
+by the tool code, not proof that the pipeline ran: an honoured marker skips masking,
+so if the data layer did not really run the pipeline, masked fields are returned
+raw. A tool MUST NOT return a marker for data the pipeline did not run over. SQL
+pushdown alone does not qualify: it applies row filters, not masking or field rules.
+
+The pipeline function itself never honours a marker. Before step 1 it replaces every
+marker it finds with its data, so a marker cannot carry records past field removal.
+The search walks the same containers the pipeline steps do: lists and string-keyed
+maps (Python `list`, `tuple` and any `Mapping`, TypeScript arrays and plain objects,
+.NET `IReadOnlyList` and `IReadOnlyDictionary<string, object?>`). It does not look
+inside other containers (a Python `set`, a dataclass or other custom object; a
+TypeScript `Map`, `Set` or class instance; a .NET `ExpandoObject`, `Hashtable`, POCO
+or `JsonElement`), and the pipeline passes those through unenforced anyway. In
+TypeScript a marker built by a second copy of the package is found by its registered
+`Symbol.for("tolap.EnforcedResult")` brand and unwrapped, but a brand is never
+grounds to honour one. A wrapper that never hands the tool a signed context (the
+registry wrappers) has nothing to bind to, so it honours no marker.
+`fixtures/enforcement/already-enforced-results.json` is the shared conformance
+fixture.
+
 ## 5. Result shapes — fail closed
 
 | Shape                              | Behavior            |

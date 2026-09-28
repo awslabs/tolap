@@ -273,6 +273,104 @@ returning a shape the policy could not be applied to, is the fail-open
 mid-migration only — do not enable it in production. Project to a `Dictionary<string, object?>`
 or a list of them before returning, and the shape is enforceable.
 
+### A result your data layer already enforced
+
+Some tools enforce at the data layer, for example an ORM adapter that runs
+`EnforcementEngine.ApplyResultPipeline` as it materializes rows. Running the pipeline a second
+time in `ExecuteWithEnforcementAsync` is not harmless: `hash` masking is not idempotent, so
+every hashed field comes back hashed twice. Such a tool declares the result enforced by
+returning `EnforcedResult<T>`, bound to the signed context the call runs under:
+
+```csharp
+using Tolap.Core;
+
+var rows = await wrapper.ExecuteWithEnforcementAsync(
+    context, new PreExecuteArgs("orm-query"),
+    async () =>
+    {
+        var enforced = await orm.FetchEnforcedAsync(args, context.Policies[0]); // already ran the pipeline
+        return (object?)EnforcedResult.For(enforced, context);
+    });
+```
+
+The marker travels through the `Func<Task<object?>>` overload. The typed
+`IReadOnlyList<Dictionary<string, object?>>` overload has no room for one.
+
+Only `ExecuteWithEnforcementAsync` honours a marker, because only there does the wrapper run the
+tool itself. On the SQL path (`ExecuteSqlWithEnforcementAsync`), the write path
+(`ExecuteWriteWithEnforcementAsync`) and `PostExecuteResult` called directly, a marker is
+logged, unwrapped, and its data runs the full pipeline.
+
+An honoured marker skips masking, because `hash` is not idempotent, and the size ceiling,
+because a record's size changes once it is projected and masked. Every other step still runs,
+except where it would test a field the data layer already transformed. A field is transformed
+when the policy hides it, projects it out (`AllowedFields` is set and does not list it) or masks
+it.
+
+- A row filter on a visible, unmasked, allowed field runs again. Over data that really is
+  enforced it is a no-op, and it drops any row the data layer let through. A row filter on a
+  transformed field is skipped: the output no longer carries the value, so the filter would drop
+  every row, or compare against the mask.
+- `deniedTags` always runs, reading tags only from tag keys (`tags`, `labels`,
+  `classification`) that are not masked. A denylist never drops an untagged record, so a tag
+  key the data layer removed cannot make it over-drop. `allowedTags` runs unless a tag key is
+  transformed, because it does drop an untagged record.
+- The relevance floor runs per record, walking the score keys in precedence order (`score`,
+  `similarity`, `similarityScore`, `_score`):
+  - a key that is present and not masked (even a hidden or projected-out key the tool left in)
+    decides: the floor is applied to its value, and the walk stops;
+  - a key that is masked, or hidden or projected out and absent, is noted as a transformed
+    score key, and the walk continues. "Masked" means a masking rule matches the key and it is
+    neither hidden nor projected out; a hidden and masked key counts as hidden;
+  - an absent, untouched key moves the walk on.
+
+  A record with no present, unmasked score key is kept only if a transformed score key was
+  seen, and is otherwise dropped. A visible low score is never kept because a higher-precedence
+  key was removed or masked. This over-drops on purpose: with `score` hidden, a record the data
+  layer kept on a high `score` is dropped when its next visible score key is below the floor,
+  since the marker path cannot know the raw `score`. The same holds for a masked key: with
+  `score` masked and `similarity` 0.1 visible, the record is dropped.
+- `deniedTags` uses the same masked test, so it reads a hidden and masked tag key the tool left
+  in. `allowedTags` still skips every key a masking rule matches, because reading more keys
+  could only let it keep more.
+- Hidden fields are stripped again, the result is projected to `AllowedFields` again, and
+  `MaxResults` still truncates it.
+
+Pre-execution checks run as usual.
+
+A marker is honoured only if **all** of these hold. Otherwise it is logged (without the
+signatures), unwrapped, and its data runs the full pipeline, which is exactly what happened
+before this existed:
+
+- `EnforceSignatures` is on and the context's signature verifies under the wrapper's signing
+  key. It is re-verified after the tool runs, because the tool could have changed the context.
+- The marker names that exact signature, compared in constant time. The signature covers the
+  whole envelope (policy, expiry, `jti`, purpose, delegation chain), so a marker bound to
+  another user's context, or to a context re-signed with a new `jti`, does not match. A marker
+  bound to *this* context does match, on every call made with the context, for the context's
+  whole TTL: the binding is to the context, not to one call.
+- The marker is an `EnforcedResult`. Its constructor is `private protected` and
+  `EnforcedResult<T>` is sealed, so no other type can pose as one.
+- No marker is nested inside the data. A marker anywhere else in a result (inside a list, in a
+  record field) is never honoured. The pipeline unwraps it and enforces its contents, so it
+  cannot carry records past the hidden-field strip. The search walks
+  `IReadOnlyDictionary<string, object?>` (which covers `Dictionary<string, object?>`) and
+  `IReadOnlyList`. It does not look inside an `ExpandoObject` or other non-generic
+  `IDictionary`, a `Hashtable`, a POCO or a `JsonElement`; the pipeline passes those through
+  unenforced anyway, so do not return them.
+
+A `Dictionary<string, object?>` with `data` and `contextSignature` keys is ordinary data. Only a
+typed object built by your tool code counts, and nothing the model sends as arguments can become
+one. The registry wrapper (`SecureMcpToolWrapper`) never hands a tool a signed context, so it
+unwraps every marker and enforces it in full.
+
+The marker is a claim by your code, not proof that the pipeline ran. The wrapper checks only
+that it is bound to the current context. If your tool returns a marker over data the pipeline
+never ran on, masked fields come back raw. Return it only when the data layer really ran
+`EnforcementEngine.ApplyResultPipeline` against this context's policy, with the wrapper's hash
+salt. SQL pushdown on its own does not qualify: the rewriter pushes row filters into the query,
+but not masking or field rules, so the post pass is still required.
+
 ## Step 4: Use the Secure Tool Factory
 
 The SDK ships the factory: `SecureToolFactory` in `Tolap.Mcp`. It is the composition root

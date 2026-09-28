@@ -5,9 +5,16 @@ from typing import Any, Callable
 
 from tolap_core.context import validate_context, validate_expiry
 from tolap_core.delegation import validate_delegation_chain
+from tolap_core.enforced_result import (
+    EnforcedResult,
+    contains_enforced_result,
+    is_bound_to,
+    unwrap_enforced_results,
+)
 from tolap_core.enforcement import (
     TARGET_ROW_UNKNOWN,
     AccessResult,
+    apply_idempotent_result_steps,
     apply_result_pipeline,
     classify_result_shape,
     describe_result_shape,
@@ -426,8 +433,46 @@ class SecureMcpToolWrapper:
         identical pipeline (a get-by-id tool must not skip row/tag filters).
         Any other shape is denied with PermissionError unless the wrapper was
         configured with allow_unenforceable_shapes.
+
+        This method never honours an
+        :class:`~tolap_core.enforced_result.EnforcedResult`: a marker in the
+        mappings and lists of ``results`` is unwrapped and its data runs the full pipeline. Only
+        :meth:`execute_with_enforcement` honours one. The SQL and write paths call
+        this method, so a marker returned there is enforced in full too; on the SQL
+        path that keeps a filter that could not be pushed down enforced.
+        """
+        return self._post_execute(context, results, honour_marker=False)
+
+    def _post_execute(
+        self, context: SecurityContext, results: Any, *, honour_marker: bool
+    ) -> Any:
+        """:meth:`post_execute`, optionally honouring a top-level marker.
+
+        ``honour_marker`` is private on purpose: only :meth:`execute_with_enforcement`
+        sets it. When set and the marker's binding verifies (see
+        :meth:`_honours_enforced_result`), masking and the filters whose field
+        masking or removal changes are skipped, so hashed fields are not hashed
+        twice; see :func:`~tolap_core.enforcement.apply_idempotent_result_steps`.
+        Any other marker is unwrapped and its data runs the full pipeline.
         """
         policy = context.effective_policy
+
+        if isinstance(results, EnforcedResult):
+            if not honour_marker:
+                _LOG.warning(
+                    "TOLAP: an EnforcedResult is honoured only by execute_with_enforcement; "
+                    "applying the full result pipeline."
+                )
+            elif self._honours_enforced_result(context, results):
+                return self._post_execute_already_enforced(results.data, policy)
+            else:
+                # Never names the signatures: they are credentials.
+                _LOG.warning(
+                    "TOLAP: the tool returned an EnforcedResult that is not bound to this "
+                    "call's verified context signature; applying the full result pipeline."
+                )
+
+        results = unwrap_enforced_results(results)
 
         if classify_result_shape(results) is None and self._options.allow_unenforceable_shapes:
             _LOG.warning(
@@ -438,6 +483,63 @@ class SecureMcpToolWrapper:
             return results
 
         return apply_result_pipeline(results, policy, self._options.hash_salt)
+
+    def _honours_enforced_result(self, context: SecurityContext, marker: EnforcedResult) -> bool:
+        """Whether ``marker`` may skip the non-idempotent pipeline steps.
+
+        Every condition must hold; each failure falls back to the full pipeline,
+        which is always safe for data that is genuinely already enforced -- at worst
+        a hash is hashed again -- whereas honouring a bad marker would return data
+        nothing enforced.
+
+        * exact type -- a subclass could override ``data`` or equality, so it is
+          treated as data like any other object;
+        * signatures enforced, and the context signature verifies under the
+          signing key -- without that the signature field is whatever the sender
+          wrote, and matching it proves nothing. Re-verified here, after the tool
+          ran, because the tool holds the context object and could have changed it
+          since ``pre_execute`` checked it;
+        * the marker names that exact signature, compared in constant time. The
+          signature covers the whole envelope (policy, expiry, jti, purpose,
+          delegation chain), so a marker bound to any other context does not match.
+          A marker bound to this context matches on every call made with it until
+          it expires: the binding names the context, not the call;
+        * no marker nested inside -- an inner marker's binding is not what was
+          checked, so the whole result is enforced instead.
+        """
+        if type(marker) is not EnforcedResult:
+            return False
+        if not self._options.enforce_signatures or not context.signature:
+            return False
+        try:
+            if not validate_context(context, self._options.signing_key):
+                return False
+        except (TypeError, ValueError):
+            # A malformed context (a non-string signature, an unknown algorithm) is
+            # a reason not to honour, never an exception escaping enforcement.
+            return False
+        if not is_bound_to(marker, context):
+            return False
+        return not contains_enforced_result(marker.data)
+
+    def _post_execute_already_enforced(self, data: Any, policy: EffectivePolicy) -> Any:
+        """The idempotent pipeline steps over data a verified marker carried.
+
+        ``None`` is returned as is: it is what the pipeline itself yields for a single
+        record it dropped, and it carries no data to enforce.
+        """
+        if data is None:
+            return None
+
+        if classify_result_shape(data) is None and self._options.allow_unenforceable_shapes:
+            _LOG.warning(
+                "TOLAP enforcement bypassed: allow_unenforceable_shapes is enabled and the "
+                "tool returned %s, which is passed through unfiltered.",
+                describe_result_shape(data),
+            )
+            return data
+
+        return apply_idempotent_result_steps(data, policy)
 
     def execute_sql_with_enforcement(
         self,
@@ -519,6 +621,15 @@ class SecureMcpToolWrapper:
 
         Raises PermissionError if the pre-execution check fails or if the tool
         returns a shape the policy cannot be applied to.
+
+        A tool that enforces at its data layer returns
+        ``EnforcedResult.for_context(data, context)``. This is the only method that
+        honours such a marker: when its binding verifies, masking and the filters on
+        fields that masking or removal changes are skipped, and every other step
+        still runs. Pre-execution checks, history recording and the judge run
+        either way. The marker is a claim by the tool code, not proof that the
+        pipeline ran: return one only when the data layer really applied this
+        context's full pipeline, with this wrapper's hash salt.
         """
         pre_result = self.pre_execute(
             context=context,
@@ -534,5 +645,5 @@ class SecureMcpToolWrapper:
         # Execute the tool
         raw_results = tool_fn(**tool_args)
 
-        # Post-execution enforcement
-        return self.post_execute(context, raw_results)
+        # Post-execution enforcement. The one path that honours an EnforcedResult.
+        return self._post_execute(context, raw_results, honour_marker=True)

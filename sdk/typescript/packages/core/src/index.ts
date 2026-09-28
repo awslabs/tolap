@@ -146,6 +146,7 @@ export {
   applyResultLimit,
   applySimilarityFloor,
   applyResultPipeline,
+  applyIdempotentResultSteps,
   applyRowFilters,
   filterByTags,
   classifyResultShape,
@@ -156,6 +157,17 @@ export {
   validateToolAccess,
   fieldNameMatches,
 } from "./enforcement.js";
+
+// Already-enforced results (issue #33). A tool whose data layer already ran the
+// result pipeline returns an EnforcedResult bound to the context signature, so the
+// context wrapper does not hash its hashed fields a second time.
+export {
+  EnforcedResult,
+  isExactEnforcedResult,
+  isBoundTo,
+  containsEnforcedResult,
+  unwrapEnforcedResults,
+} from "./enforced-result.js";
 
 // Write validation (connector spec §4).
 //

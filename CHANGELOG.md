@@ -22,6 +22,58 @@ All notable changes to TOLAP are documented in this file. The format follows
   permission, and drop null and non-string entries.
 - Console editor for tool rules.
 
+**A tool can declare its result already enforced** ([#33](https://github.com/awslabs/tolap/issues/33)).
+A tool whose data layer already ran the result pipeline, such as an ORM adapter, used to get
+it run a second time by `execute_with_enforcement` / `executeWithEnforcement` /
+`ExecuteWithEnforcementAsync`. `hash` masking is not idempotent, so every hashed field came
+back hashed twice. Such a tool now returns a typed marker bound to the signed context:
+`EnforcedResult.for_context(data, context)` in Python, `EnforcedResult.forContext(data, context)`
+in TypeScript, and `EnforcedResult.For(data, context)` in .NET.
+
+- Only `execute_with_enforcement` / `executeWithEnforcement` / `ExecuteWithEnforcementAsync`
+  honour a marker. The SQL path, the write path and the public post-execution method
+  (`post_execute` / `postExecute` / `PostExecuteResult`) called directly unwrap it and run the
+  full pipeline.
+- The marker is honoured only when signature enforcement is on, the context's signature
+  verifies (re-checked after the tool runs), and the marker names that exact signature,
+  compared in constant time. Any other marker (bound to another context, tampered, empty, or
+  nested inside the data) is logged without the signatures, unwrapped, and its data runs the
+  full pipeline, which is what happened before this change.
+- An honoured marker skips masking and the size ceiling. A row filter still runs unless its
+  field is hidden, projected out or masked. `deniedTags` always runs, reading only the tag
+  keys that are not masked; `allowedTags` runs unless a tag key is transformed. The relevance
+  floor reads the first present, unmasked score key in precedence order, even a hidden or
+  projected-out one the tool left in. A record with none is kept only when a score key is
+  masked, or hidden or projected out and absent, and is otherwise dropped. A higher-precedence
+  score key that was removed or masked never keeps a record whose visible score is low: with
+  `score` hidden, a record kept on a high raw `score` is dropped when its visible `similarity`
+  is low, and with `score` masked and `similarity` 0.1 visible, the record is dropped. This is
+  an intentional fail-closed over-drop. A key that is both hidden and masked counts as hidden,
+  for the floor and for `deniedTags`. Hidden-field removal, allowed-field projection
+  and `maxResults` still run.
+  Pre-execution checks are unchanged.
+- A marker is bound to a context, not to one call: it is honoured on every call made with that
+  context until the context expires. It is a claim by the tool code, not proof that the
+  pipeline ran, so return one only when the data layer really ran it. SQL pushdown alone does
+  not qualify.
+- A record with lookalike keys (`data`, `contextSignature`) is ordinary data. There is no
+  flag or argument that switches enforcement off. In TypeScript the honour check uses a
+  private-field brand, so a Proxy or an `Object.create(EnforcedResult.prototype)` object is
+  not honoured. A marker from a second copy of the package is recognized by its
+  `Symbol.for("tolap.EnforcedResult")` brand and unwrapped, never honoured. In Python the
+  signature is kept out of the marker's `repr`.
+- The result pipeline (`apply_result_pipeline` / `applyResultPipeline` /
+  `ApplyResultPipeline`) and the registry wrappers never honour a marker. They unwrap
+  markers nested in lists and string-keyed maps and enforce the contents, so a marker can
+  never carry records past the hidden-field strip or through `allowUnenforceableShapes`
+  whole. Other containers (for example a Python `set`, a TypeScript `Map`, a .NET
+  `ExpandoObject`) are not searched.
+- New helper: `apply_idempotent_result_steps` / `applyIdempotentResultSteps` /
+  `EnforcementEngine.ApplyIdempotentResultSteps`.
+- Shared fixture: [`fixtures/enforcement/already-enforced-results.json`](fixtures/enforcement/already-enforced-results.json).
+  The guides describe it under "A result your data layer already enforced", and the rules
+  are in [canonical-enforcement-spec.md §4](docs/canonical-enforcement-spec.md#already-enforced-results).
+
 ### Fixed
 
 **The SQL pre-checks validate every table a query references.** The SQL prepare paths

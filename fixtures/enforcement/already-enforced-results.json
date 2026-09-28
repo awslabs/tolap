@@ -1,0 +1,1633 @@
+{
+  "description": "Already-enforced results: a tool opts out of re-enforcement by returning an EnforcedResult marker bound to the signed context's signature. Honoured only on an exact, constant-time signature match, and only by executeWithEnforcement. An honoured marker skips masking, the size ceiling, each row filter or allowedTags filter whose field the policy hides, projects out or masks, and the similarity floor on a record with no present, unmasked score key when a score key is masked (and neither hidden nor projected out) or is hidden or projected out and absent. The first present, unmasked score key is always read, even a hidden one the tool left in, so a visible low score is never kept because a higher-precedence key was removed. The filters on visible, unmasked, allowed fields, the hidden-field strip, the allowed-field projection and maxResults are re-applied, because over already-enforced output they are no-ops.",
+  "action": "executeWithEnforcement",
+  "signingKey": "already-enforced-fixture-key-0123456789abcdef",
+  "context": {
+    "userId": "user-1",
+    "tenantId": "tenant-1"
+  },
+  "otherContext": {
+    "userId": "user-2",
+    "tenantId": "tenant-1"
+  },
+  "markers": {
+    "context": "EnforcedResult bound to the signature of the context the call runs under",
+    "otherContext": "EnforcedResult bound to the signature of a different context signed with the same key",
+    "tampered": "EnforcedResult bound to the context signature with its last character changed",
+    "empty": "EnforcedResult bound to an empty signature",
+    "null": "the tool returns the data unwrapped"
+  },
+  "substitutions": {
+    "$CONTEXT_SIGNATURE": "replace with the signature of the context the call runs under"
+  },
+  "cases": [
+    {
+      "name": "matching marker returns the enforced rows unchanged (no second hash)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ]
+    },
+    {
+      "name": "matching marker still enforces maxResults",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        },
+        {
+          "id": 3,
+          "region": "us-east",
+          "email": "898628e28890f937"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "notes": "Re-truncation is idempotent, so the limit is a backstop even when the marker is honoured."
+    },
+    {
+      "name": "matching marker still strips hidden fields the data layer left behind",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191",
+          "ssn": "000-00-0001"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ]
+    },
+    {
+      "name": "matching marker over a single record returns it unchanged",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": {
+        "id": 1,
+        "region": "us-east",
+        "email": "b36a83701f1c3191"
+      },
+      "expected": {
+        "id": 1,
+        "region": "us-east",
+        "email": "b36a83701f1c3191"
+      }
+    },
+    {
+      "name": "matching marker over null data returns null",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": null,
+      "expected": null,
+      "notes": "null is what the pipeline itself returns for a single record it dropped."
+    },
+    {
+      "name": "matching marker over an empty list returns an empty list",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [],
+      "expected": []
+    },
+    {
+      "name": "marker bound to a different signed context re-applies the full pipeline",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "otherContext",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "765158dfef62c606"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "41a4fae4553afde1"
+        }
+      ]
+    },
+    {
+      "name": "marker with a tampered signature re-applies the full pipeline",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "tampered",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "765158dfef62c606"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "41a4fae4553afde1"
+        }
+      ]
+    },
+    {
+      "name": "marker with an empty signature re-applies the full pipeline",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "empty",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "765158dfef62c606"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "41a4fae4553afde1"
+        }
+      ]
+    },
+    {
+      "name": "mismatched marker over a single record re-applies the full pipeline",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "tampered",
+      "data": {
+        "id": 1,
+        "region": "us-east",
+        "email": "b36a83701f1c3191"
+      },
+      "expected": {
+        "id": 1,
+        "region": "us-east",
+        "email": "765158dfef62c606"
+      }
+    },
+    {
+      "name": "mismatched marker over null data is denied as an unenforceable shape, as unmarked null is",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "tampered",
+      "data": null,
+      "expectDenied": true
+    },
+    {
+      "name": "mismatched marker over an empty list returns an empty list",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "tampered",
+      "data": [],
+      "expected": []
+    },
+    {
+      "name": "unmarked result runs the full pipeline, as before (the double hash this feature exists to avoid)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": null,
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "765158dfef62c606"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "41a4fae4553afde1"
+        }
+      ]
+    },
+    {
+      "name": "a plain record with lookalike marker keys is data, not a marker",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": null,
+      "data": {
+        "data": [
+          {
+            "id": 1,
+            "region": "us-east",
+            "email": "b36a83701f1c3191"
+          },
+          {
+            "id": 2,
+            "region": "us-east",
+            "email": "2b3b2b9ce842ab8b"
+          }
+        ],
+        "contextSignature": "$CONTEXT_SIGNATURE",
+        "policySignature": "$CONTEXT_SIGNATURE",
+        "__tolapEnforced": true
+      },
+      "expected": null,
+      "notes": "The record has no region field, so the region row filter fails closed and drops it: null. Were the keys honoured, the enforced rows would be returned instead."
+    },
+    {
+      "name": "matching marker keeps rows whose filter field the data layer already hid",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "status"
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "status",
+              "operator": "equals",
+              "value": "active"
+            }
+          ]
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "name": "Ada"
+        },
+        {
+          "id": 2,
+          "name": "Grace"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "name": "Ada"
+        },
+        {
+          "id": 2,
+          "name": "Grace"
+        }
+      ]
+    },
+    {
+      "name": "mismatched marker re-runs the row filter over hidden output and drops every row",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "status"
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "status",
+              "operator": "equals",
+              "value": "active"
+            }
+          ]
+        }
+      },
+      "marker": "tampered",
+      "data": [
+        {
+          "id": 1,
+          "name": "Ada"
+        },
+        {
+          "id": 2,
+          "name": "Grace"
+        }
+      ],
+      "expected": [],
+      "notes": "Demonstrates why record-dropping steps are skipped for an honoured marker: a filter on a field the data layer already removed fails closed."
+    },
+    {
+      "name": "matching marker still applies a row filter on a visible, unmasked, allowed field",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "eu-west",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        }
+      ],
+      "notes": "region is neither hidden, projected out nor masked, so the data layer's output carries the value the filter needs. Re-running the filter is a no-op on correctly enforced data and drops the row the data layer let through (a filter it could not push down, say)."
+    },
+    {
+      "name": "matching marker over a single record that fails a filter on a visible field returns null",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": {
+        "id": 2,
+        "region": "eu-west",
+        "email": "2b3b2b9ce842ab8b"
+      },
+      "expected": null
+    },
+    {
+      "name": "matching marker skips a row filter on a masked field",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "email",
+              "operator": "equals",
+              "value": "a@example.com"
+            }
+          ]
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "email": "b36a83701f1c3191"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "email": "b36a83701f1c3191"
+        }
+      ],
+      "notes": "email is masked, so the output holds the hash and a filter on it would compare against the mask."
+    },
+    {
+      "name": "mismatched marker re-runs a row filter on a masked field and drops every row",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "email",
+              "operator": "equals",
+              "value": "a@example.com"
+            }
+          ]
+        }
+      },
+      "marker": "tampered",
+      "data": [
+        {
+          "id": 1,
+          "email": "b36a83701f1c3191"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "matching marker skips a row filter on a field allowedFields projects out",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "id",
+              "email"
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "email": "a@example.com"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "email": "a@example.com"
+        }
+      ]
+    },
+    {
+      "name": "matching marker still applies a tag filter when the tag keys are visible",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "tags": [
+            "public"
+          ]
+        },
+        {
+          "id": 2,
+          "tags": [
+            "secret"
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "tags": [
+            "public"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "matching marker skips allowedTags when a tag key is hidden",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "tags"
+            ]
+          },
+          "tagRules": {
+            "allowedTags": [
+              "public"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1
+        }
+      ],
+      "expected": [
+        {
+          "id": 1
+        }
+      ]
+    },
+    {
+      "name": "matching marker still applies the similarity floor when the score keys are visible",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "score": 0.9
+        },
+        {
+          "id": 2,
+          "score": 0.1
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "score": 0.9
+        }
+      ]
+    },
+    {
+      "name": "matching marker still applies deniedTags when allowedFields projects out other tag keys",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name",
+              "tags"
+            ]
+          },
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "tags": [
+            "secret"
+          ]
+        }
+      ],
+      "expected": [],
+      "notes": "allowedFields projects out labels and classification, but tags stays visible. A denylist never drops an untagged record, so it always re-runs."
+    },
+    {
+      "name": "matching marker still applies deniedTags when another tag key is hidden",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "classification"
+            ]
+          },
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "tags": [
+            "secret"
+          ]
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "matching marker does not read deniedTags from a masked tag key",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "tags",
+                "maskType": "full"
+              }
+            ]
+          },
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "tags": "secret"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "tags": "secret"
+        }
+      ],
+      "notes": "A masked tag key holds the mask, not the tags, so the backstop does not read it."
+    },
+    {
+      "name": "matching marker reads deniedTags from a hidden and masked tag key the tool left in the record",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "tags"
+            ],
+            "maskedFields": [
+              {
+                "field": "tags",
+                "maskType": "redact"
+              }
+            ]
+          },
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "tags": [
+            "secret"
+          ]
+        },
+        {
+          "id": 2
+        }
+      ],
+      "expected": [
+        {
+          "id": 2
+        }
+      ],
+      "notes": "A hidden and masked key counts as hidden: the pipeline strips it before masking, so a tag key the tool left in holds the raw tags, not a mask. deniedTags reads it and drops the record; hidden-field removal then strips nothing from the survivor."
+    },
+    {
+      "name": "matching marker still applies the similarity floor on a visible score key when allowedFields projects out the others",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name",
+              "score"
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "score": 0.1
+        },
+        {
+          "name": "b",
+          "score": 0.9
+        }
+      ],
+      "expected": [
+        {
+          "name": "b",
+          "score": 0.9
+        }
+      ]
+    },
+    {
+      "name": "matching marker keeps a record with no visible score key when a score key is hidden",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "score"
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1
+        },
+        {
+          "id": 2,
+          "similarity": 0.1
+        }
+      ],
+      "expected": [
+        {
+          "id": 1
+        }
+      ],
+      "notes": "score is hidden and absent, so a transformed score key is seen. {id: 1} has no present, unmasked score key and is kept, since its score may have been removed after the producer's pipeline checked it. {id: 2} carries a visible similarity, which is read and is below the floor."
+    },
+    {
+      "name": "matching marker drops a record on a low visible score key when a higher-precedence score key is hidden (intentional over-drop)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "score"
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "similarity": 0.1
+        }
+      ],
+      "expected": [],
+      "notes": "Intentional fail-closed over-drop. The marked record is what the full pipeline makes of {name: a, score: 0.9, similarity: 0.1}: the floor reads score (0.9) and keeps it, then score is stripped. The marker path cannot know the raw score was high, so it reads the visible similarity (0.1) and drops the record. Over-dropping is preferred to keeping a visible low score because a higher-precedence key was removed."
+    },
+    {
+      "name": "matching marker reads a hidden score key the tool left in the record",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "score"
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "score": 0.1
+        }
+      ],
+      "expected": [],
+      "notes": "Only a masked score key hides the value. A hidden key still present is read, as deniedTags reads a hidden tag key that is still present."
+    },
+    {
+      "name": "matching marker reads a visible score key past a masked one",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "score",
+                "maskType": "redact"
+              }
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "score": "***",
+          "similarity": 0.1
+        }
+      ],
+      "expected": [],
+      "notes": "score is masked, so the walk notes it and continues. similarity is present and unmasked, so it is read and is below the floor."
+    },
+    {
+      "name": "matching marker reads a hidden and masked score key the tool left in the record",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "score"
+            ],
+            "maskedFields": [
+              {
+                "field": "score",
+                "maskType": "redact"
+              }
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "score": 0.1
+        }
+      ],
+      "expected": [],
+      "notes": "A hidden and masked key counts as hidden: the full pipeline strips it before masking, so no mask ever lands. Present, so it is read and the record dropped."
+    },
+    {
+      "name": "matching marker reads a visible score key past a hidden and masked one",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "score"
+            ],
+            "maskedFields": [
+              {
+                "field": "score",
+                "maskType": "redact"
+              }
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "similarity": 0.1
+        }
+      ],
+      "expected": [],
+      "notes": "A hidden and masked key counts as hidden. score is absent, so the walk notes it and continues; similarity is present and unmasked, so it is read and is below the floor."
+    },
+    {
+      "name": "matching marker keeps a record whose only score key is masked",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "score",
+                "maskType": "redact"
+              }
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "score": "***"
+        }
+      ],
+      "expected": [
+        {
+          "name": "a",
+          "score": "***"
+        }
+      ],
+      "notes": "score holds the mask, so it is not read. No other score key is present, and a masked score key was seen, so the record is kept."
+    },
+    {
+      "name": "matching marker reads a visible score key when allowedFields projects out a higher-precedence one",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name",
+              "similarity"
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "similarity": 0.1
+        }
+      ],
+      "expected": [],
+      "notes": "score is projected out and absent, so the walk notes it and continues. similarity is visible and below the floor, so the record is dropped: a removed higher-precedence key never keeps a visible low score."
+    },
+    {
+      "name": "matching marker drops an unscored record when no score key is transformed",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a"
+        }
+      ],
+      "expected": [],
+      "notes": "With no score key hidden, projected out or masked the walk never stops, so the record is unscored and dropped, as the full pipeline drops it."
+    },
+    {
+      "name": "matching marker skips the size ceiling",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "limits": {
+          "maxObjectSizeBytes": 10
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "size": 100
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "size": 100
+        }
+      ],
+      "notes": "A record's size changes once it is projected and masked, so the ceiling is not re-checked over already-enforced output."
+    }
+  ],
+  "notes": "Hashes are unsalted sha256, first 16 hex characters. Expected values for mismatched markers are the pipeline applied a second time to already-enforced data."
+}

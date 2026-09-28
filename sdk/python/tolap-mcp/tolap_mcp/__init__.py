@@ -1,5 +1,6 @@
 """TOLAP MCP - Secure MCP tool wrapper with policy enforcement."""
 
+from tolap_core.enforced_result import EnforcedResult
 from tolap_mcp.interfaces import RequestIdentityExtractor
 from tolap_mcp.options import SecureMcpServerOptions
 from tolap_mcp.wrapper import SecureMcpToolWrapper
@@ -28,6 +29,9 @@ from tolap_mcp.bedrock_judge import (
 )
 
 __all__ = [
+    # Re-exported so a tool built against the MCP wrapper can declare its result
+    # already enforced without importing tolap-core directly.
+    "EnforcedResult",
     "RequestIdentityExtractor",
     "SecureMcpServerOptions",
     "SecureMcpToolWrapper",
