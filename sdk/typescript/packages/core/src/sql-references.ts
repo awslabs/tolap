@@ -15,10 +15,10 @@
  * answer: a construct the check cannot see into is one whose tables it cannot
  * vouch for.
  *
- * A query that reads exactly one table is left to the existing single-table checks
- * (the object check and `validateQuery`), so their decisions are unchanged. This
- * check only validates that table's access, which those checks already did when
- * the table name came from the query itself.
+ * A query that reads exactly one table still goes through the existing single-table
+ * checks (the object check and `validateQuery`). This check adds to them: it
+ * validates that table's access and checks every column the query references, so it
+ * can refuse a query they allow but never allow one they refuse.
  *
  * Lexing differs between engines: a backslash escapes a quote in MySQL but not in
  * standard SQL, `#` starts a comment only in MySQL, and block comments nest only in
@@ -226,14 +226,12 @@ function lex(sql: string, mode: Mode): Tok[] {
     if (ch === "-" && nxt === "-") {
       const after = i + 2 < n ? sql[i + 2]! : "";
       if (mode !== "mysql" || after === "" || WHITESPACE.has(after)) {
-        const end = sql.indexOf("\n", i);
-        i = end < 0 ? n : end + 1;
+        i = lineCommentEnd(sql, i);
         continue;
       }
     }
     if (ch === "#" && mode === "mysql") {
-      const end = sql.indexOf("\n", i);
-      i = end < 0 ? n : end + 1;
+      i = lineCommentEnd(sql, i);
       continue;
     }
     if (ch === "/" && nxt === "*") {
@@ -353,6 +351,15 @@ function lex(sql: string, mode: Mode): Tok[] {
     i += 1;
   }
   return toks;
+}
+
+/**
+ * Index just past a line comment. PostgreSQL also ends one at a carriage return, and
+ * ending it early can only expose more tokens to the check.
+ */
+function lineCommentEnd(sql: string, start: number): number {
+  const ends = [sql.indexOf("\n", start), sql.indexOf("\r", start)].filter((k) => k >= 0);
+  return ends.length > 0 ? Math.min(...ends) + 1 : sql.length;
 }
 
 /** Whether the character before the quote belongs to the preceding word. */
@@ -526,8 +533,9 @@ class Analysis {
     const scope = clause.scope;
 
     if (depth === 0 && scope.refs.length <= 1 && clause.derived.length === 0) {
-      // At most one table: the single-table checks own the field rules. Only its
-      // access is checked here, and the query must not reach further tables.
+      // At most one table: check its access and refuse anything that reaches a further
+      // table. Its columns are checked below as well as by the single-table checks, so
+      // a column either check misses is still caught.
       for (let idx = start + 1; idx < end; idx++) {
         if (toks[idx]!.isWord("SELECT", "TABLE")) throw new Unsupported("subquery");
       }
@@ -540,7 +548,6 @@ class Analysis {
       if (this.objectName !== undefined && !sameObject(this.objectName, ref.path)) {
         return { allowed: false, reason: OBJECT_MISMATCH_REASON };
       }
-      return access;
     }
 
     for (const ref of scope.refs) {
@@ -1075,9 +1082,8 @@ function sameObject(objectName: string, path: string[]): boolean {
  * cannot be known without the schema. Constructs the check cannot resolve are
  * refused with a reason beginning with {@link UNSUPPORTED_REASON_PREFIX}.
  *
- * A query that reads a single table returns that table's `validateAccess` result
- * and leaves the field checks to `validateQuery`, so single-table decisions are
- * unchanged. When the caller supplies `objectName` it is checked with
+ * A query that reads a single table has its columns checked here as well as by
+ * `validateQuery`. When the caller supplies `objectName` it is checked with
  * {@link validateAccess} as well, and a query over one table must read that
  * object: a different table is refused with {@link OBJECT_MISMATCH_REASON}. Every
  * table of a query is checked whether or not an object name is supplied.

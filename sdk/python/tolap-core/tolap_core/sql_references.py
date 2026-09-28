@@ -15,10 +15,10 @@ subqueries outside ``FROM``, ``LATERAL``, table-valued functions and so on).
 Refusing is the safe answer: a construct the check cannot see into is one whose
 tables it cannot vouch for.
 
-A query that reads exactly one table is left to the existing single-table checks
-(the object check and :func:`tolap_core.sql_rewriter.validate_query`), so their
-decisions are unchanged. This check only validates that table's access, which
-those checks already did when the table name came from the query itself.
+A query that reads exactly one table still goes through the existing single-table
+checks (the object check and :func:`tolap_core.sql_rewriter.validate_query`). This
+check adds to them: it validates that table's access and checks every column the
+query references, so it can refuse a query they allow but never allow one they refuse.
 
 Lexing differs between engines: a backslash escapes a quote in MySQL but not in
 standard SQL, ``#`` starts a comment only in MySQL, and block comments nest only
@@ -234,12 +234,10 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
         if ch == "-" and nxt == "-":
             after = sql[i + 2] if i + 2 < n else ""
             if mode != "mysql" or after == "" or after in _WHITESPACE:
-                end = sql.find("\n", i)
-                i = n if end < 0 else end + 1
+                i = _line_comment_end(sql, i)
                 continue
         if ch == "#" and mode == "mysql":
-            end = sql.find("\n", i)
-            i = n if end < 0 else end + 1
+            i = _line_comment_end(sql, i)
             continue
         if ch == "/" and nxt == "*":
             if mode == "mysql" and i + 2 < n and sql[i + 2] == "!":
@@ -341,6 +339,13 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
         toks.append(_Tok("punct", ch))
         i += 1
     return toks
+
+
+def _line_comment_end(sql: str, start: int) -> int:
+    """Index just past a line comment. PostgreSQL also ends one at a carriage return,
+    and ending it early can only expose more tokens to the check."""
+    ends = [k for k in (sql.find("\n", start), sql.find("\r", start)) if k >= 0]
+    return min(ends) + 1 if ends else len(sql)
 
 
 def _adjacent(sql: str, quote_index: int) -> bool:
@@ -504,8 +509,9 @@ class _Analysis:
         scope = clause.scope
 
         if depth == 0 and len(scope.refs) <= 1 and not clause.derived:
-            # At most one table: the single-table checks own the field rules. Only its
-            # access is checked here, and the query must not reach further tables.
+            # At most one table: check its access and refuse anything that reaches a
+            # further table. Its columns are checked below as well as by the
+            # single-table checks, so a column either check misses is still caught.
             for idx in range(start + 1, end):
                 if toks[idx].is_word("SELECT", "TABLE"):
                     raise _Unsupported("subquery")
@@ -519,7 +525,6 @@ class _Analysis:
             # the object checked is not the object read.
             if self.object_name is not None and not _same_object(self.object_name, ref.path):
                 return AccessResult(allowed=False, reason=OBJECT_MISMATCH_REASON)
-            return access
 
         for ref in scope.refs:
             if not ref.derived and ref.table is not None:
@@ -997,10 +1002,8 @@ def validate_query_references(
     resolve are refused with a reason beginning with
     :data:`UNSUPPORTED_REASON_PREFIX`.
 
-    A query that reads a single table returns that table's :func:`validate_access`
-    result and leaves the field checks to
-    :func:`tolap_core.sql_rewriter.validate_query`, so single-table decisions are
-    unchanged. When the caller supplies ``object_name`` it is checked with
+    A query that reads a single table has its columns checked here as well as by
+    :func:`tolap_core.sql_rewriter.validate_query`. When the caller supplies ``object_name`` it is checked with
     :func:`validate_access` as well, and a query over one table must read that object:
     a different table is refused with :data:`OBJECT_MISMATCH_REASON`. Every table of
     a query is checked whether or not an object name is supplied.

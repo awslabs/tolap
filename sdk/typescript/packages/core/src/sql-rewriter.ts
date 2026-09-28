@@ -398,8 +398,13 @@ const POST_FROM_CLAUSES: RegExp[] = [
   /\bEXCEPT\b/gi,
 ];
 
-/** The table reference immediately after `FROM`: a bare, dotted, or quoted name. */
-const FROM_TABLE_PATTERN = /\bFROM\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))*)/i;
+/**
+ * The table reference immediately after `FROM`: a bare, dotted, or quoted name. A name
+ * character is any Unicode letter, digit, mark or connector, as `\w` is in the Python and
+ * .NET SDKs; JavaScript's `\w` is ASCII-only and would miss a non-ASCII table name.
+ */
+const FROM_TABLE_PATTERN =
+  /(?<![\p{L}\p{N}\p{M}\p{Pc}])FROM\s+((?:"[^"]+"|[\p{L}\p{N}\p{M}\p{Pc}]+)(?:\.(?:"[^"]+"|[\p{L}\p{N}\p{M}\p{Pc}]+))*)/iu;
 
 // -- Clause-body patterns, used only by validateQuery's field extraction --
 

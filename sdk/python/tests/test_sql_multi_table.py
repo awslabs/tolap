@@ -23,7 +23,7 @@ from tolap_core.sql_rewriter import prepare_sql_query
 FIXTURE_PATH = "enforcement/sql-multi-table.json"
 
 #: Asserted so that a dropped case fails the suite rather than shrinking it quietly.
-EXPECTED_CASE_COUNT = 131
+EXPECTED_CASE_COUNT = 245
 
 CASES: list[dict] = load_fixture(FIXTURE_PATH)["cases"]
 

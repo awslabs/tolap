@@ -3596,6 +3596,32 @@
             "encounters"
           ],
           "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "dollar-quoted-literal-is-a-column-to-mysql",
+      "query": "SELECT name FROM patients WHERE name = $tag$x$tag$",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
             "allowedFields": [
               "patients.name"
             ]
@@ -3603,7 +3629,8 @@
         }
       },
       "expected": {
-        "allowed": true
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
       }
     },
     {
@@ -3654,6 +3681,3508 @@
       },
       "expected": {
         "allowed": true
+      }
+    },
+    {
+      "name": "probe-quoting-variants-1",
+      "query": "SELECT id FROM \"encounters\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-quoting-variants-2",
+      "query": "SELECT id FROM `encounters`",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-quoting-variants-3",
+      "query": "SELECT id FROM [encounters]",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-quoting-variants-4",
+      "query": "SELECT \"ssn\" FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-quoting-variants-5",
+      "query": "SELECT `ssn` FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-quoting-variants-6",
+      "query": "SELECT [ssn] FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-quoting-variants-7",
+      "query": "SELECT p.\"ssn\" FROM patients p",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-quoting-variants-8",
+      "query": "SELECT \"patients\".\"ssn\" FROM \"patients\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-quoting-variants-9",
+      "query": "SELECT id FROM \"Encounters\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-quoting-variants-10",
+      "query": "SELECT id FROM \"encounters\" \"p\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-case-1",
+      "query": "SELECT id FROM ENCOUNTERS",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-case-2",
+      "query": "SELECT SSN FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-case-3",
+      "query": "select Ssn from Patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-schema-catalog-qualified-1",
+      "query": "SELECT id FROM public.encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-schema-catalog-qualified-2",
+      "query": "SELECT id FROM db.public.encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-schema-catalog-qualified-3",
+      "query": "SELECT id FROM \"public\".\"encounters\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-schema-catalog-qualified-4",
+      "query": "SELECT id FROM [dbo].[encounters]",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-schema-catalog-qualified-5",
+      "query": "SELECT id FROM `db`.`encounters`",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-comments-1",
+      "query": "SELECT id FROM /**/encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-comments-2",
+      "query": "SELECT id FROM enc/**/ounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "probe-comments-3",
+      "query": "SELECT id FROM patients, --x\n encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-comments-4",
+      "query": "SELECT id FROM patients /* , encounters */ , encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-comments-5",
+      "query": "SELECT id FROM patients # x\n , encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: FROM clause"
+      }
+    },
+    {
+      "name": "probe-comments-6",
+      "query": "SELECT ssn/**/FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-comments-7",
+      "query": "SELECT id FROM patients /* /* */ , encounters */",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: FROM clause"
+      }
+    },
+    {
+      "name": "probe-comments-8",
+      "query": "SELECT id FROM patients -- \r, encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-whitespace-and-invisible-characters-1",
+      "query": "SELECT id FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-whitespace-and-invisible-characters-2",
+      "query": "SELECT id FROM patients,​encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII whitespace"
+      }
+    },
+    {
+      "name": "probe-whitespace-and-invisible-characters-3",
+      "query": "SELECT\tssn\nFROM\rpatients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-whitespace-and-invisible-characters-4",
+      "query": "SELECT id FROM patients　JOIN encounters ON 1=1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII whitespace"
+      }
+    },
+    {
+      "name": "probe-whitespace-and-invisible-characters-5",
+      "query": "SELECT s​sn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII whitespace"
+      }
+    },
+    {
+      "name": "probe-lookalikes-1",
+      "query": "SELECT id FROM еncounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "probe-lookalikes-2",
+      "query": "SELECT ſsn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII identifier"
+      }
+    },
+    {
+      "name": "probe-lookalikes-3",
+      "query": "SELECT id FROM encounterѕ",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "probe-joins-1",
+      "query": "SELECT p.id FROM patients p, encounters e",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-joins-2",
+      "query": "SELECT p.id FROM patients p CROSS JOIN encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-joins-3",
+      "query": "SELECT id FROM patients JOIN encounters USING (id)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-joins-4",
+      "query": "SELECT id FROM patients NATURAL JOIN encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-joins-5",
+      "query": "SELECT p.id FROM patients p LEFT OUTER JOIN encounters e ON e.pid = p.id",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-joins-6",
+      "query": "SELECT p.id FROM (patients p JOIN encounters e ON 1=1)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: parenthesized join"
+      }
+    },
+    {
+      "name": "probe-joins-7",
+      "query": "SELECT p.id FROM ((patients p)) , ((encounters))",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: parenthesized join"
+      }
+    },
+    {
+      "name": "probe-joins-8",
+      "query": "SELECT p.id FROM patients p STRAIGHT_JOIN encounters e",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-joins-9",
+      "query": "SELECT p.id FROM patients p FULL JOIN encounters e ON 1=1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-alias-shadowing-1",
+      "query": "SELECT patients.id FROM encounters patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-alias-shadowing-2",
+      "query": "SELECT patients.id FROM encounters AS patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-alias-shadowing-3",
+      "query": "SELECT p.ssn FROM patients p",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-alias-shadowing-4",
+      "query": "SELECT x.ssn FROM patients AS x",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-alias-shadowing-5",
+      "query": "SELECT e.name FROM patients e JOIN encounters p ON 1=1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-alias-shadowing-6",
+      "query": "SELECT p.name FROM patients p JOIN encounters p ON 1=1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: duplicate table name"
+      }
+    },
+    {
+      "name": "probe-alias-shadowing-7",
+      "query": "SELECT id FROM encounters AS \"patients\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-derived-tables-subqueries-1",
+      "query": "SELECT id FROM (SELECT id FROM encounters) p",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-derived-tables-subqueries-2",
+      "query": "SELECT id FROM (SELECT ssn AS id FROM patients) t",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-derived-tables-subqueries-3",
+      "query": "SELECT id FROM patients WHERE id IN (SELECT pid FROM encounters)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: subquery"
+      }
+    },
+    {
+      "name": "probe-derived-tables-subqueries-4",
+      "query": "SELECT (SELECT max(id) FROM encounters) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-derived-tables-subqueries-5",
+      "query": "SELECT id FROM patients WHERE EXISTS (SELECT 1 FROM encounters)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: subquery"
+      }
+    },
+    {
+      "name": "probe-cte-set-ops-1",
+      "query": "WITH x AS (SELECT * FROM encounters) SELECT id FROM x",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-cte-set-ops-2",
+      "query": "WITH patients AS (SELECT * FROM encounters) SELECT id FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-cte-set-ops-3",
+      "query": "SELECT id FROM patients UNION SELECT id FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: set operation"
+      }
+    },
+    {
+      "name": "probe-cte-set-ops-4",
+      "query": "SELECT id FROM patients UNION ALL SELECT ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: set operation"
+      }
+    },
+    {
+      "name": "probe-cte-set-ops-5",
+      "query": "(SELECT id FROM encounters)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-cte-set-ops-6",
+      "query": "SELECT id FROM patients INTERSECT SELECT id FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: set operation"
+      }
+    },
+    {
+      "name": "probe-star-1",
+      "query": "SELECT * FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-star-2",
+      "query": "SELECT e.* FROM patients p JOIN encounters e ON 1=1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-1",
+      "query": "SELECT upper(ssn) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-2",
+      "query": "SELECT id FROM patients WHERE ssn = '1'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-3",
+      "query": "SELECT id FROM patients ORDER BY ssn",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-4",
+      "query": "SELECT id FROM patients GROUP BY ssn",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-5",
+      "query": "SELECT id FROM patients HAVING max(ssn) > 0",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-6",
+      "query": "SELECT CASE WHEN ssn > 0 THEN 1 END FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-7",
+      "query": "SELECT id, ssn AS name FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-8",
+      "query": "SELECT cast(ssn as text) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-9",
+      "query": "SELECT ssn::text FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-expressions-hiding-columns-10",
+      "query": "SELECT id FROM patients p JOIN encounters e ON e.x = p.ssn",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-literals-that-should-not-hide-real-sql-1",
+      "query": "SELECT 'a', ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-literals-that-should-not-hide-real-sql-2",
+      "query": "SELECT 'it''s', ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-literals-that-should-not-hide-real-sql-3",
+      "query": "SELECT 'a\\', ssn FROM patients -- '",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-literals-that-should-not-hide-real-sql-4",
+      "query": "SELECT $$x$$, ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-literals-that-should-not-hide-real-sql-5",
+      "query": "SELECT $t$ $$ $t$, ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-literals-that-should-not-hide-real-sql-6",
+      "query": "SELECT E'\\'', ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-literals-that-should-not-hide-real-sql-7",
+      "query": "SELECT id FROM patients WHERE name = '' , encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-literals-that-should-not-hide-real-sql-8",
+      "query": "SELECT N'x', ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-literals-that-should-not-hide-real-sql-9",
+      "query": "SELECT id FROM patients WHERE name = 'x' -- ' , encounters\n",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "probe-string-literal-contained-keywords-1",
+      "query": "SELECT id FROM patients WHERE name = 'FROM encounters' , encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-multiple-statements-1",
+      "query": "SELECT id FROM patients; SELECT * FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: multiple statements"
+      }
+    },
+    {
+      "name": "probe-multiple-statements-2",
+      "query": "SELECT id FROM patients;SELECT ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: multiple statements"
+      }
+    },
+    {
+      "name": "probe-multiple-statements-3",
+      "query": "SELECT id FROM patients ; DROP TABLE encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: multiple statements"
+      }
+    },
+    {
+      "name": "probe-into-insert-select-1",
+      "query": "SELECT ssn INTO t FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: SELECT INTO"
+      }
+    },
+    {
+      "name": "probe-into-insert-select-2",
+      "query": "INSERT INTO t SELECT * FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-into-insert-select-3",
+      "query": "SELECT id INTO encounters FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: SELECT INTO"
+      }
+    },
+    {
+      "name": "probe-identifier-escapes-1",
+      "query": "SELECT U&\"\\0073sn\" FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: Unicode escape"
+      }
+    },
+    {
+      "name": "probe-identifier-escapes-2",
+      "query": "SELECT u&\"s\\0073n\" FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: Unicode escape"
+      }
+    },
+    {
+      "name": "probe-identifier-escapes-3",
+      "query": "SELECT id FROM U&\"\\0065ncounters\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "probe-db-qualifier-collapse-1",
+      "query": "SELECT id FROM otherdb.patients JOIN encounters ON 1=1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-functions-lateral-apply-tvf-1",
+      "query": "SELECT id FROM patients, LATERAL (SELECT * FROM encounters) e",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: LATERAL"
+      }
+    },
+    {
+      "name": "probe-functions-lateral-apply-tvf-2",
+      "query": "SELECT id FROM patients CROSS APPLY (SELECT * FROM encounters) e",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: APPLY"
+      }
+    },
+    {
+      "name": "probe-functions-lateral-apply-tvf-3",
+      "query": "SELECT * FROM generate_series(1,2), encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "probe-functions-lateral-apply-tvf-4",
+      "query": "SELECT id FROM patients TABLESAMPLE SYSTEM (10), encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: FROM clause"
+      }
+    },
+    {
+      "name": "probe-hints-partition-1",
+      "query": "SELECT id FROM patients WITH (NOLOCK), encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: WITH"
+      }
+    },
+    {
+      "name": "probe-hints-partition-2",
+      "query": "SELECT id FROM encounters PARTITION (p1)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-window-1",
+      "query": "SELECT id, row_number() OVER (ORDER BY ssn) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-table-function-via-string-1",
+      "query": "SELECT * FROM dblink('x', 'SELECT * FROM encounters') AS t(id int)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "probe-trailing-garbage-1",
+      "query": "SELECT id FROM patients\u0000, encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: FROM clause"
+      }
+    },
+    {
+      "name": "probe-trailing-garbage-2",
+      "query": "SELECT id FROM patients\\\n, encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: FROM clause"
+      }
+    },
+    {
+      "name": "probe-clause-commas-1",
+      "query": "SELECT id FROM patients WHERE (name, ssn) IN ((1,2))",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-clause-commas-2",
+      "query": "SELECT id FROM patients WHERE name = 1 , ssn",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-clause-commas-3",
+      "query": "SELECT id FROM patients WHERE name = '' , ssn",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-clause-commas-4",
+      "query": "SELECT id FROM patients HAVING count(*) > 1, ssn",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-clause-commas-5",
+      "query": "SELECT coalesce(name, ssn) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-clause-commas-6",
+      "query": "SELECT id FROM patients WHERE name IN (1, ssn)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-clause-commas-7",
+      "query": "SELECT id FROM patients -- x\r, encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "probe-clause-commas-8",
+      "query": "SELECT id FROM patients -- x\r, ssn",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "probe-clause-commas-9",
+      "query": "SELECT id FROM patients # x\r, encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: FROM clause"
+      }
+    },
+    {
+      "name": "probe-clause-commas-10",
+      "query": "SELECT E'\\'', ssn FROM patients --'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: FROM clause"
       }
     }
   ]

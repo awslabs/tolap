@@ -21,10 +21,10 @@ namespace Tolap.Core;
 /// answer: a construct the check cannot see into is one whose tables it cannot vouch for.
 /// </para>
 /// <para>
-/// A query that reads exactly one table is left to the existing single-table checks (the
-/// object check and <see cref="SqlQueryRewriter.ValidateQuery"/>), so their decisions are
-/// unchanged. This check only validates that table's access, which those checks already
-/// did when the table name came from the query itself.
+/// A query that reads exactly one table still goes through the existing single-table checks
+/// (the object check and <see cref="SqlQueryRewriter.ValidateQuery"/>). This check adds to
+/// them: it validates that table's access and checks every column the query references, so
+/// it can refuse a query they allow but never allow one they refuse.
 /// </para>
 /// <para>
 /// Lexing differs between engines: a backslash escapes a quote in MySQL but not in
@@ -144,9 +144,8 @@ public static class SqlQueryReferences
     /// check cannot resolve are refused with a reason beginning with
     /// <see cref="UnsupportedReasonPrefix"/>.
     /// <para>
-    /// A query that reads a single table returns that table's <c>ValidateAccess</c> result
-    /// and leaves the field checks to <c>ValidateQuery</c>, so single-table decisions are
-    /// unchanged. When the caller supplies <paramref name="objectName"/> it is checked with
+    /// A query that reads a single table has its columns checked here as well as by
+    /// <c>ValidateQuery</c>. When the caller supplies <paramref name="objectName"/> it is checked with
     /// <see cref="EnforcementEngine.ValidateAccess"/> as well, and a query over one table
     /// must read that object: a different table is refused with
     /// <see cref="ObjectMismatchReason"/>. Every table of a query is checked whether or not
@@ -413,15 +412,13 @@ public static class SqlQueryReferences
                 var afterEnd = i + 2 >= n;
                 if (mode != Mode.MySql || afterEnd || Whitespace.Contains(sql[i + 2]))
                 {
-                    var end = sql.IndexOf('\n', i);
-                    i = end < 0 ? n : end + 1;
+                    i = LineCommentEnd(sql, i);
                     continue;
                 }
             }
             if (ch == '#' && mode == Mode.MySql)
             {
-                var end = sql.IndexOf('\n', i);
-                i = end < 0 ? n : end + 1;
+                i = LineCommentEnd(sql, i);
                 continue;
             }
             if (ch == '/' && hasNext && nxt == '*')
@@ -588,6 +585,14 @@ public static class SqlQueryReferences
     // which is one past the end of the input when the literal is unterminated.
     private static string Body(string sql, int start, int end) =>
         sql.Substring(start + 1, Math.Min(end - 1, sql.Length) - (start + 1));
+
+    // Index just past a line comment. PostgreSQL also ends one at a carriage return,
+    // and ending it early can only expose more tokens to the check.
+    private static int LineCommentEnd(string sql, int start)
+    {
+        var end = sql.IndexOfAny(new[] { '\n', '\r' }, start);
+        return end < 0 ? sql.Length : end + 1;
+    }
 
     // Whether the character before the quote belongs to the preceding word.
     private static bool Adjacent(string sql, int quoteIndex) =>
@@ -814,8 +819,9 @@ public static class SqlQueryReferences
 
             if (depth == 0 && scope.Refs.Count <= 1 && clause.Derived.Count == 0)
             {
-                // At most one table: the single-table checks own the field rules. Only its
-                // access is checked here, and the query must not reach further tables.
+                // At most one table: check its access and refuse anything that reaches a
+                // further table. Its columns are checked below as well as by the
+                // single-table checks, so a column either check misses is still caught.
                 for (var idx = start + 1; idx < end; idx++)
                 {
                     if (_toks[idx].IsWord("SELECT", "TABLE"))
@@ -839,7 +845,6 @@ public static class SqlQueryReferences
                 {
                     return new AccessResult(false, ObjectMismatchReason);
                 }
-                return onlyAccess;
             }
 
             foreach (var r in scope.Refs)
