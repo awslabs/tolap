@@ -33,6 +33,7 @@ counterparts implement the same rules, pinned by
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from tolap_core.enforcement import (
@@ -48,6 +49,9 @@ FIELD_DENIAL_REASON = "query references fields you do not have permission to acc
 
 UNSUPPORTED_REASON_PREFIX = "query uses a construct the pre-execution check cannot resolve: "
 """Prefix of the reason given when the query uses a construct the check refuses."""
+
+OBJECT_MISMATCH_REASON = "object name does not match the table the query reads"
+"""The reason given when a supplied object name and the query's one table differ."""
 
 # Derived tables nest; each level recurses once. Real queries stay far below this.
 _MAX_NESTING = 32
@@ -136,6 +140,21 @@ _SELECT_MODIFIERS = frozenset(
 # The value an operand can end with, before a bare alias.
 _OPERAND_END_KEYWORDS = frozenset(("END", "NULL", "TRUE", "FALSE", "UNKNOWN"))
 
+# The words recognised directly before a string literal: national (N), escape (E),
+# hex (X), bit or bytes (B), raw (R, RB, BR) and typed literals. A MySQL character
+# set introducer (_utf8mb4) is recognised by its leading underscore. Any other word
+# directly before a quote is a form the check does not model, so it is refused.
+_LITERAL_PREFIXES = frozenset(("N", "E", "X", "B", "R", "RB", "BR", "DATE", "TIME", "TIMESTAMP"))
+
+# A numeric literal: digits (with PostgreSQL's digit separators), an optional
+# fraction and exponent, or a hex or binary literal. A token that starts with a digit
+# and is none of these is an identifier some engines accept (MySQL's 1abc), which
+# would otherwise go unread as a column.
+_NUMBER = re.compile(
+    r"(?:[0-9][0-9_]*(?:\.[0-9_]*)?|\.[0-9][0-9_]*)(?:[eE][+-]?[0-9]+)?"
+    r"|0[xX][0-9a-fA-F]+|0[bB][01]+"
+)
+
 
 class _Unsupported(Exception):
     def __init__(self, construct: str) -> None:
@@ -184,6 +203,19 @@ def _is_digit(ch: str) -> bool:
     return "0" <= ch <= "9"
 
 
+def _identifier(text: str) -> str:
+    """Refuse an identifier with a non-ASCII character; engines fold those differently."""
+    if any(ord(c) >= 0x80 for c in text):
+        raise _Unsupported("non-ASCII identifier")
+    return text
+
+
+def _is_literal_prefix(word: str) -> bool:
+    if word.translate(_ASCII_UPPER) in _LITERAL_PREFIXES:
+        return True
+    return len(word) > 1 and word[0] == "_" and all(_is_word_char(c) for c in word[1:])
+
+
 def _lex(sql: str, mode: str) -> list[_Tok]:
     """Tokenize ``sql`` under one engine's lexical conventions."""
     toks: list[_Tok] = []
@@ -224,6 +256,10 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
             i += 2
             continue
         # Literals and quoted identifiers.
+        if ch == "&" and nxt in ("'", '"') and i > 0 and _is_word_char(sql[i - 1]):
+            raise _Unsupported("Unicode escape")  # U&'...' and U&"..."
+        if ch in ("'", '"') and sql.startswith(ch * 3, i):
+            raise _Unsupported("triple-quoted literal")
         if ch == "'":
             backslash = mode == "mysql" or (
                 mode == "postgres"
@@ -234,6 +270,8 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
             )
             if toks and toks[-1].kind == "word" and _adjacent(sql, i):
                 # A literal prefix (N'', E'', X'', _utf8'') belongs to the literal.
+                if not _is_literal_prefix(toks[-1].text):
+                    raise _Unsupported("string literal prefix")
                 toks.pop()
             i = _skip_quoted(sql, i, "'", backslash=backslash)
             toks.append(_Tok("string", ""))
@@ -244,17 +282,17 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
                 toks.append(_Tok("string", ""))
             else:
                 end = _skip_quoted(sql, i, '"', backslash=False)
-                toks.append(_Tok("qident", _unquote(sql[i + 1 : end - 1], '"')))
+                toks.append(_Tok("qident", _identifier(_unquote(sql[i + 1 : end - 1], '"'))))
                 i = end
             continue
         if ch == "`":
             end = _skip_quoted(sql, i, "`", backslash=False)
-            toks.append(_Tok("qident", _unquote(sql[i + 1 : end - 1], "`")))
+            toks.append(_Tok("qident", _identifier(_unquote(sql[i + 1 : end - 1], "`"))))
             i = end
             continue
         if ch == "[" and mode == "ansi":
             end = _skip_quoted(sql, i, "]", backslash=False)
-            toks.append(_Tok("qident", _unquote(sql[i + 1 : end - 1], "]")))
+            toks.append(_Tok("qident", _identifier(_unquote(sql[i + 1 : end - 1], "]"))))
             i = end
             continue
         if ch == "$":
@@ -282,6 +320,8 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
                 if sql[j] in "eE" and j + 1 < n and sql[j + 1] in "+-":
                     j += 1
                 j += 1
+            if not _NUMBER.fullmatch(sql[i:j]):
+                raise _Unsupported("identifier starting with a digit")
             toks.append(_Tok("number", sql[i:j]))
             i = j
             continue
@@ -291,7 +331,7 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
                 if sql[j] in _UNICODE_SPACES:
                     raise _Unsupported("non-ASCII whitespace")
                 j += 1
-            toks.append(_Tok("word", sql[i:j]))
+            toks.append(_Tok("word", _identifier(sql[i:j])))
             i = j
             continue
         if ch == "?":
@@ -369,6 +409,7 @@ class _Ref:
     table: str | None  # the base table's name, or None when it cannot be resolved
     names: set[str]  # the ASCII-folded names a column qualifier may use for it
     derived: bool = False
+    path: tuple[str, ...] = ()  # a base table's ASCII-folded name, part by part
 
 
 @dataclass
@@ -397,11 +438,11 @@ class _From:
 
 class _Analysis:
     def __init__(
-        self, toks: list[_Tok], policy: EffectivePolicy, *, object_named: bool = False
+        self, toks: list[_Tok], policy: EffectivePolicy, *, object_name: str | None = None
     ) -> None:
         self.toks = toks
         self.policy = policy
-        self.object_named = object_named
+        self.object_name = object_name
         rules = policy.object_rules.field_rules if policy.object_rules else None
         self.hidden: list[str] = list(rules.hidden_fields or []) if rules else []
         self.allowed: list[str] | None = rules.allowed_fields if rules else None
@@ -468,11 +509,17 @@ class _Analysis:
             for idx in range(start + 1, end):
                 if toks[idx].is_word("SELECT", "TABLE"):
                     raise _Unsupported("subquery")
-            if not scope.refs or self.object_named:
-                # An object name the caller supplies is authoritative for a
-                # single-table query; the caller has already checked it.
+            if not scope.refs:
                 return AccessResult(allowed=True)
-            return validate_access(scope.refs[0].table or "", self.policy)
+            ref = scope.refs[0]
+            access = validate_access(ref.table or "", self.policy)
+            if not access.allowed:
+                return access
+            # A supplied object name must name the table the query reads; otherwise
+            # the object checked is not the object read.
+            if self.object_name is not None and not _same_object(self.object_name, ref.path):
+                return AccessResult(allowed=False, reason=OBJECT_MISMATCH_REASON)
+            return access
 
         for ref in scope.refs:
             if not ref.derived and ref.table is not None:
@@ -669,7 +716,12 @@ class _Analysis:
         else:
             folded = [p.fold for p in parts]
             names = {".".join(folded[k:]) for k in range(len(folded))}
-        clause.scope.add(_Ref(table=leaf, names=names))
+        path = tuple(
+            segment.translate(_ASCII_LOWER)
+            for p in parts
+            for segment in (p.text.split(".") if p.kind == "qident" else [p.text])
+        )
+        clause.scope.add(_Ref(table=leaf, names=names, path=path))
         return i
 
     def _parse_alias(self, i: int, end: int) -> tuple[_Tok | None, int]:
@@ -919,6 +971,19 @@ class _Analysis:
             self._walk(a, b, scope)
 
 
+def _same_object(object_name: str, path: tuple[str, ...]) -> bool:
+    """Whether a supplied object name and a table's name can name the same object.
+
+    Both are compared part by part, ASCII case-insensitively, from the right. A name
+    with fewer parts matches one qualified further (``patients`` and
+    ``public.patients``); names whose shared parts differ do not (``db1.patients``
+    and ``db2.patients``).
+    """
+    given = tuple(s.translate(_ASCII_LOWER) for s in object_name.split("."))
+    k = min(len(given), len(path))
+    return k > 0 and given[-k:] == path[-k:]
+
+
 def validate_query_references(
     query: str, policy: EffectivePolicy, *, object_name: str | None = None
 ) -> AccessResult:
@@ -935,11 +1000,21 @@ def validate_query_references(
     A query that reads a single table returns that table's :func:`validate_access`
     result and leaves the field checks to
     :func:`tolap_core.sql_rewriter.validate_query`, so single-table decisions are
-    unchanged. When the caller supplies ``object_name`` it is authoritative for a
-    single-table query, as it is for :func:`tolap_core.sql_rewriter.prepare_sql_query`,
-    and that table's access is not checked here; every table of a query over
-    several is checked regardless.
+    unchanged. When the caller supplies ``object_name`` it is checked with
+    :func:`validate_access` as well, and a query over one table must read that object:
+    a different table is refused with :data:`OBJECT_MISMATCH_REASON`. Every table of
+    a query is checked whether or not an object name is supplied.
+
+    Identifier and literal forms the check does not model are refused rather than
+    guessed at: Unicode-escape forms (``U&"..."``, ``U&'...'``), string literal
+    prefixes other than the recognised ones (such as Oracle's ``q'[...]'``),
+    triple-quoted literals, identifiers with a non-ASCII character and identifiers
+    that start with a digit.
     """
+    if object_name is not None:
+        named = validate_access(object_name, policy)
+        if not named.allowed:
+            return named
     if not query:
         return AccessResult(allowed=True)
     seen: list[list[_Tok]] = []
@@ -949,7 +1024,7 @@ def validate_query_references(
             if toks in seen:
                 continue
             seen.append(toks)
-            result = _Analysis(toks, policy, object_named=object_name is not None).run()
+            result = _Analysis(toks, policy, object_name=object_name).run()
         except _Unsupported as unsupported:
             return AccessResult(
                 allowed=False, reason=UNSUPPORTED_REASON_PREFIX + unsupported.construct

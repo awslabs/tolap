@@ -40,6 +40,9 @@ export const FIELD_DENIAL_REASON =
 export const UNSUPPORTED_REASON_PREFIX =
   "query uses a construct the pre-execution check cannot resolve: ";
 
+/** The reason given when a supplied object name and the query's one table differ. */
+export const OBJECT_MISMATCH_REASON = "object name does not match the table the query reads";
+
 // Derived tables nest; each level recurses once. Real queries stay far below this.
 const MAX_NESTING = 32;
 
@@ -123,6 +126,19 @@ const SELECT_MODIFIERS = words(
 // The value an operand can end with, before a bare alias.
 const OPERAND_END_KEYWORDS = words("END NULL TRUE FALSE UNKNOWN");
 
+// The words recognised directly before a string literal: national (N), escape (E),
+// hex (X), bit or bytes (B), raw (R, RB, BR) and typed literals. A MySQL character
+// set introducer (_utf8mb4) is recognised by its leading underscore. Any other word
+// directly before a quote is a form the check does not model, so it is refused.
+const LITERAL_PREFIXES = words("N E X B R RB BR DATE TIME TIMESTAMP");
+
+// A numeric literal: digits (with PostgreSQL's digit separators), an optional
+// fraction and exponent, or a hex or binary literal. A token that starts with a digit
+// and is none of these is an identifier some engines accept (MySQL's 1abc), which
+// would otherwise go unread as a column.
+const NUMBER =
+  /^(?:(?:[0-9][0-9_]*(?:\.[0-9_]*)?|\.[0-9][0-9_]*)(?:[eE][+-]?[0-9]+)?|0[xX][0-9a-fA-F]+|0[bB][01]+)$/;
+
 class Unsupported extends Error {
   constructor(readonly construct: string) {
     super(construct);
@@ -179,6 +195,19 @@ function isWordChar(ch: string): boolean {
   return isWordStart(ch) || isDigit(ch) || ch === "$";
 }
 
+/** Refuse an identifier with a non-ASCII character; engines fold those differently. */
+function identifier(text: string): string {
+  for (let k = 0; k < text.length; k++) {
+    if (text.charCodeAt(k) >= 0x80) throw new Unsupported("non-ASCII identifier");
+  }
+  return text;
+}
+
+function isLiteralPrefix(word: string): boolean {
+  if (LITERAL_PREFIXES.has(asciiUpper(word))) return true;
+  return word.length > 1 && word[0] === "_" && [...word.slice(1)].every(isWordChar);
+}
+
 function lex(sql: string, mode: Mode): Tok[] {
   const toks: Tok[] = [];
   const n = sql.length;
@@ -224,6 +253,12 @@ function lex(sql: string, mode: Mode): Tok[] {
       continue;
     }
     // Literals and quoted identifiers.
+    if (ch === "&" && (nxt === "'" || nxt === '"') && i > 0 && isWordChar(sql[i - 1]!)) {
+      throw new Unsupported("Unicode escape"); // U&'...' and U&"..."
+    }
+    if ((ch === "'" || ch === '"') && sql.startsWith(ch.repeat(3), i)) {
+      throw new Unsupported("triple-quoted literal");
+    }
     if (ch === "'") {
       const prev = last();
       const backslash =
@@ -235,6 +270,7 @@ function lex(sql: string, mode: Mode): Tok[] {
           adjacent(sql, i));
       if (prev !== undefined && prev.kind === "word" && adjacent(sql, i)) {
         // A literal prefix (N'', E'', X'', _utf8'') belongs to the literal.
+        if (!isLiteralPrefix(prev.text)) throw new Unsupported("string literal prefix");
         toks.pop();
       }
       i = skipQuoted(sql, i, "'", backslash);
@@ -247,20 +283,20 @@ function lex(sql: string, mode: Mode): Tok[] {
         toks.push(new Tok("string", ""));
       } else {
         const end = skipQuoted(sql, i, '"', false);
-        toks.push(new Tok("qident", unquote(sql.slice(i + 1, end - 1), '"')));
+        toks.push(new Tok("qident", identifier(unquote(sql.slice(i + 1, end - 1), '"'))));
         i = end;
       }
       continue;
     }
     if (ch === "`") {
       const end = skipQuoted(sql, i, "`", false);
-      toks.push(new Tok("qident", unquote(sql.slice(i + 1, end - 1), "`")));
+      toks.push(new Tok("qident", identifier(unquote(sql.slice(i + 1, end - 1), "`"))));
       i = end;
       continue;
     }
     if (ch === "[" && mode === "ansi") {
       const end = skipQuoted(sql, i, "]", false);
-      toks.push(new Tok("qident", unquote(sql.slice(i + 1, end - 1), "]")));
+      toks.push(new Tok("qident", identifier(unquote(sql.slice(i + 1, end - 1), "]"))));
       i = end;
       continue;
     }
@@ -293,6 +329,7 @@ function lex(sql: string, mode: Mode): Tok[] {
         }
         j += 1;
       }
+      if (!NUMBER.test(sql.slice(i, j))) throw new Unsupported("identifier starting with a digit");
       toks.push(new Tok("number", sql.slice(i, j)));
       i = j;
       continue;
@@ -303,7 +340,7 @@ function lex(sql: string, mode: Mode): Tok[] {
         if (UNICODE_SPACES.has(sql[j]!)) throw new Unsupported("non-ASCII whitespace");
         j += 1;
       }
-      toks.push(new Tok("word", sql.slice(i, j)));
+      toks.push(new Tok("word", identifier(sql.slice(i, j))));
       i = j;
       continue;
     }
@@ -382,6 +419,8 @@ interface Ref {
   // The ASCII-folded names a column qualifier may use for it.
   names: Set<string>;
   derived: boolean;
+  // A base table's ASCII-folded name, part by part.
+  path: string[];
 }
 
 class Scope {
@@ -414,7 +453,7 @@ class Analysis {
   constructor(
     private readonly toks: Tok[],
     private readonly policy: EffectivePolicy,
-    private readonly objectNamed: boolean,
+    private readonly objectName: string | undefined,
   ) {
     const rules = policy.objectRules?.fieldRules;
     this.hidden = [...(rules?.hiddenFields ?? [])];
@@ -492,12 +531,16 @@ class Analysis {
       for (let idx = start + 1; idx < end; idx++) {
         if (toks[idx]!.isWord("SELECT", "TABLE")) throw new Unsupported("subquery");
       }
-      if (scope.refs.length === 0 || this.objectNamed) {
-        // An object name the caller supplies is authoritative for a single-table
-        // query; the caller has already checked it.
-        return { allowed: true };
+      if (scope.refs.length === 0) return { allowed: true };
+      const ref = scope.refs[0]!;
+      const access = validateAccess(ref.table ?? "", this.policy);
+      if (!access.allowed) return access;
+      // A supplied object name must name the table the query reads; otherwise the
+      // object checked is not the object read.
+      if (this.objectName !== undefined && !sameObject(this.objectName, ref.path)) {
+        return { allowed: false, reason: OBJECT_MISMATCH_REASON };
       }
-      return validateAccess(scope.refs[0]!.table ?? "", this.policy);
+      return access;
     }
 
     for (const ref of scope.refs) {
@@ -689,6 +732,7 @@ class Analysis {
         table,
         names: alias ? new Set([alias.fold]) : new Set(),
         derived: true,
+        path: [],
       });
       return i;
     }
@@ -717,7 +761,10 @@ class Analysis {
       const folded = parts.map((p) => p.fold);
       names = new Set(folded.map((_, k) => folded.slice(k).join(".")));
     }
-    clause.scope.add({ table: leaf, names, derived: false });
+    const path = parts.flatMap((p) =>
+      (p.kind === "qident" ? p.text.split(".") : [p.text]).map(asciiLower),
+    );
+    clause.scope.add({ table: leaf, names, derived: false, path });
     return i;
   }
 
@@ -1001,6 +1048,24 @@ function tokensKey(toks: Tok[]): string {
 }
 
 /**
+ * Whether a supplied object name and a table's name can name the same object.
+ *
+ * Both are compared part by part, ASCII case-insensitively, from the right. A name
+ * with fewer parts matches one qualified further (`patients` and
+ * `public.patients`); names whose shared parts differ do not (`db1.patients` and
+ * `db2.patients`).
+ */
+function sameObject(objectName: string, path: string[]): boolean {
+  const given = objectName.split(".").map(asciiLower);
+  const k = Math.min(given.length, path.length);
+  if (k === 0) return false;
+  for (let m = 1; m <= k; m++) {
+    if (given[given.length - m] !== path[path.length - m]) return false;
+  }
+  return true;
+}
+
+/**
  * Check every table and column a query references against the policy.
  *
  * Every table the query reads must pass {@link validateAccess}, and every column
@@ -1012,15 +1077,26 @@ function tokensKey(toks: Tok[]): string {
  *
  * A query that reads a single table returns that table's `validateAccess` result
  * and leaves the field checks to `validateQuery`, so single-table decisions are
- * unchanged. When the caller supplies `objectName` it is authoritative for a
- * single-table query, as it is for `prepareSqlQuery`, and that table's access is
- * not checked here; every table of a query over several is checked regardless.
+ * unchanged. When the caller supplies `objectName` it is checked with
+ * {@link validateAccess} as well, and a query over one table must read that
+ * object: a different table is refused with {@link OBJECT_MISMATCH_REASON}. Every
+ * table of a query is checked whether or not an object name is supplied.
+ *
+ * Identifier and literal forms the check does not model are refused rather than
+ * guessed at: Unicode-escape forms (`U&"..."`, `U&'...'`), string literal prefixes
+ * other than the recognised ones (such as Oracle's `q'[...]'`), triple-quoted
+ * literals, identifiers with a non-ASCII character and identifiers that start with
+ * a digit.
  */
 export function validateQueryReferences(
   query: string,
   policy: EffectivePolicy,
   options: { objectName?: string } = {},
 ): AccessResult {
+  if (options.objectName !== undefined) {
+    const named = validateAccess(options.objectName, policy);
+    if (!named.allowed) return named;
+  }
   if (!query) return { allowed: true };
   const seen = new Set<string>();
   for (const mode of MODES) {
@@ -1030,7 +1106,7 @@ export function validateQueryReferences(
       const key = tokensKey(toks);
       if (seen.has(key)) continue;
       seen.add(key);
-      result = new Analysis(toks, policy, options.objectName !== undefined).run();
+      result = new Analysis(toks, policy, options.objectName).run();
     } catch (error) {
       if (error instanceof Unsupported) {
         return { allowed: false, reason: UNSUPPORTED_REASON_PREFIX + error.construct };

@@ -48,6 +48,9 @@ public static class SqlQueryReferences
     public const string UnsupportedReasonPrefix =
         "query uses a construct the pre-execution check cannot resolve: ";
 
+    /// <summary>The reason given when a supplied object name and the query's one table differ.</summary>
+    public const string ObjectMismatchReason = "object name does not match the table the query reads";
+
     // Derived tables nest; each level recurses once. Real queries stay far below this.
     private const int MaxNesting = 32;
 
@@ -123,6 +126,12 @@ public static class SqlQueryReferences
     // The value an operand can end with, before a bare alias.
     private static readonly HashSet<string> OperandEndKeywords = Words("END NULL TRUE FALSE UNKNOWN");
 
+    // The words recognised directly before a string literal: national (N), escape (E),
+    // hex (X), bit or bytes (B), raw (R, RB, BR) and typed literals. A MySQL character
+    // set introducer (_utf8mb4) is recognised by its leading underscore. Any other word
+    // directly before a quote is a form the check does not model, so it is refused.
+    private static readonly HashSet<string> LiteralPrefixes = Words("N E X B R RB BR DATE TIME TIMESTAMP");
+
     /// <summary>
     /// Checks every table and column <paramref name="sql"/> references against the policy.
     /// </summary>
@@ -137,15 +146,31 @@ public static class SqlQueryReferences
     /// <para>
     /// A query that reads a single table returns that table's <c>ValidateAccess</c> result
     /// and leaves the field checks to <c>ValidateQuery</c>, so single-table decisions are
-    /// unchanged. When the caller supplies <paramref name="objectName"/> it is
-    /// authoritative for a single-table query, as it is for the prepare paths, and that
-    /// table's access is not checked here; every table of a query over several is checked
-    /// regardless.
+    /// unchanged. When the caller supplies <paramref name="objectName"/> it is checked with
+    /// <see cref="EnforcementEngine.ValidateAccess"/> as well, and a query over one table
+    /// must read that object: a different table is refused with
+    /// <see cref="ObjectMismatchReason"/>. Every table of a query is checked whether or not
+    /// an object name is supplied.
+    /// </para>
+    /// <para>
+    /// Identifier and literal forms the check does not model are refused rather than
+    /// guessed at: Unicode-escape forms (<c>U&amp;"..."</c>, <c>U&amp;'...'</c>), string
+    /// literal prefixes other than the recognised ones (such as Oracle's <c>q'[...]'</c>),
+    /// triple-quoted literals, identifiers with a non-ASCII character and identifiers that
+    /// start with a digit.
     /// </para>
     /// </remarks>
     public static AccessResult Validate(string sql, EffectivePolicy policy, string? objectName = null)
     {
         ArgumentNullException.ThrowIfNull(policy);
+        if (objectName is not null)
+        {
+            var named = EnforcementEngine.ValidateAccess(objectName, policy);
+            if (!named.Allowed)
+            {
+                return named;
+            }
+        }
         if (string.IsNullOrEmpty(sql))
         {
             return new AccessResult(true);
@@ -162,7 +187,7 @@ public static class SqlQueryReferences
                 {
                     continue;
                 }
-                result = new Analysis(toks, policy, objectName is not null).Run();
+                result = new Analysis(toks, policy, objectName).Run();
             }
             catch (UnsupportedException unsupported)
             {
@@ -253,6 +278,114 @@ public static class SqlQueryReferences
 
     private static bool IsWordChar(char ch) => IsWordStart(ch) || IsDigit(ch) || ch == '$';
 
+    // Refuses an identifier with a non-ASCII character; engines fold those differently.
+    private static string Identifier(string text)
+    {
+        foreach (var c in text)
+        {
+            if (c >= 0x80)
+            {
+                throw new UnsupportedException("non-ASCII identifier");
+            }
+        }
+        return text;
+    }
+
+    private static bool IsLiteralPrefix(string word)
+    {
+        if (LiteralPrefixes.Contains(AsciiUpper(word)))
+        {
+            return true;
+        }
+        return word.Length > 1 && word[0] == '_' && word.Skip(1).All(IsWordChar);
+    }
+
+    // A numeric literal: digits (with PostgreSQL's digit separators), an optional fraction
+    // and exponent, or a hex or binary literal. A token that starts with a digit and is
+    // none of these is an identifier some engines accept (MySQL's 1abc), which would
+    // otherwise go unread as a column.
+    private static bool IsNumericLiteral(string t)
+    {
+        var n = t.Length;
+        if (n > 2 && t[0] == '0' && t[1] is 'x' or 'X')
+        {
+            return t.Skip(2).All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F');
+        }
+        if (n > 2 && t[0] == '0' && t[1] is 'b' or 'B')
+        {
+            return t.Skip(2).All(c => c is '0' or '1');
+        }
+        int k;
+        if (n > 0 && IsDigit(t[0]))
+        {
+            k = 1;
+            while (k < n && (IsDigit(t[k]) || t[k] == '_'))
+            {
+                k++;
+            }
+            if (k < n && t[k] == '.')
+            {
+                k++;
+                while (k < n && (IsDigit(t[k]) || t[k] == '_'))
+                {
+                    k++;
+                }
+            }
+        }
+        else if (n > 1 && t[0] == '.' && IsDigit(t[1]))
+        {
+            k = 2;
+            while (k < n && (IsDigit(t[k]) || t[k] == '_'))
+            {
+                k++;
+            }
+        }
+        else
+        {
+            return false;
+        }
+        if (k < n && t[k] is 'e' or 'E')
+        {
+            k++;
+            if (k < n && t[k] is '+' or '-')
+            {
+                k++;
+            }
+            var digits = k;
+            while (k < n && IsDigit(t[k]))
+            {
+                k++;
+            }
+            if (k == digits)
+            {
+                return false;
+            }
+        }
+        return k == n;
+    }
+
+    // Whether a supplied object name and a table's name can name the same object. Both
+    // are compared part by part, ASCII case-insensitively, from the right. A name with
+    // fewer parts matches one qualified further (patients and public.patients); names
+    // whose shared parts differ do not (db1.patients and db2.patients).
+    private static bool SameObject(string objectName, string[] path)
+    {
+        var given = objectName.Split('.').Select(AsciiLower).ToArray();
+        var k = Math.Min(given.Length, path.Length);
+        if (k == 0)
+        {
+            return false;
+        }
+        for (var m = 1; m <= k; m++)
+        {
+            if (!string.Equals(given[^m], path[^m], StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static List<Tok> Lex(string sql, Mode mode)
     {
         var toks = new List<Tok>();
@@ -315,6 +448,14 @@ public static class SqlQueryReferences
             }
 
             // Literals and quoted identifiers.
+            if (ch == '&' && hasNext && nxt is '\'' or '"' && i > 0 && IsWordChar(sql[i - 1]))
+            {
+                throw new UnsupportedException("Unicode escape"); // U&'...' and U&"..."
+            }
+            if (ch is '\'' or '"' && i + 2 < n && sql[i + 1] == ch && sql[i + 2] == ch)
+            {
+                throw new UnsupportedException("triple-quoted literal");
+            }
             if (ch == '\'')
             {
                 var prev = toks.Count > 0 ? toks[^1] : null;
@@ -326,6 +467,10 @@ public static class SqlQueryReferences
                 if (prev is { Kind: TokKind.Word } && Adjacent(sql, i))
                 {
                     // A literal prefix (N'', E'', X'', _utf8'') belongs to the literal.
+                    if (!IsLiteralPrefix(prev.Text))
+                    {
+                        throw new UnsupportedException("string literal prefix");
+                    }
                     toks.RemoveAt(toks.Count - 1);
                 }
                 i = SkipQuoted(sql, i, '\'', backslash);
@@ -342,7 +487,7 @@ public static class SqlQueryReferences
                 else
                 {
                     var end = SkipQuoted(sql, i, '"', false);
-                    toks.Add(new Tok(TokKind.QIdent, Unquote(Body(sql, i, end), '"')));
+                    toks.Add(new Tok(TokKind.QIdent, Identifier(Unquote(Body(sql, i, end), '"'))));
                     i = end;
                 }
                 continue;
@@ -350,14 +495,14 @@ public static class SqlQueryReferences
             if (ch == '`')
             {
                 var end = SkipQuoted(sql, i, '`', false);
-                toks.Add(new Tok(TokKind.QIdent, Unquote(Body(sql, i, end), '`')));
+                toks.Add(new Tok(TokKind.QIdent, Identifier(Unquote(Body(sql, i, end), '`'))));
                 i = end;
                 continue;
             }
             if (ch == '[' && mode == Mode.Ansi)
             {
                 var end = SkipQuoted(sql, i, ']', false);
-                toks.Add(new Tok(TokKind.QIdent, Unquote(Body(sql, i, end), ']')));
+                toks.Add(new Tok(TokKind.QIdent, Identifier(Unquote(Body(sql, i, end), ']'))));
                 i = end;
                 continue;
             }
@@ -404,6 +549,10 @@ public static class SqlQueryReferences
                     }
                     j++;
                 }
+                if (!IsNumericLiteral(sql[i..j]))
+                {
+                    throw new UnsupportedException("identifier starting with a digit");
+                }
                 toks.Add(new Tok(TokKind.Number, sql[i..j]));
                 i = j;
                 continue;
@@ -419,7 +568,7 @@ public static class SqlQueryReferences
                     }
                     j++;
                 }
-                toks.Add(new Tok(TokKind.Word, sql[i..j]));
+                toks.Add(new Tok(TokKind.Word, Identifier(sql[i..j])));
                 i = j;
                 continue;
             }
@@ -512,12 +661,13 @@ public static class SqlQueryReferences
 
     // A table or derived table in a FROM clause. Table is the base table's name, or null
     // when it cannot be resolved; Names are the ASCII-folded names a column qualifier
-    // may use for it.
-    private sealed class Ref(string? table, HashSet<string> names, bool derived)
+    // may use for it; Path is a base table's ASCII-folded name, part by part.
+    private sealed class Ref(string? table, HashSet<string> names, bool derived, string[]? path = null)
     {
         public string? Table { get; } = table;
         public HashSet<string> Names { get; } = names;
         public bool Derived { get; } = derived;
+        public string[] Path { get; } = path ?? [];
     }
 
     private sealed class Scope
@@ -552,16 +702,16 @@ public static class SqlQueryReferences
     {
         private readonly List<Tok> _toks;
         private readonly EffectivePolicy _policy;
-        private readonly bool _objectNamed;
+        private readonly string? _objectName;
         private readonly string[] _hidden;
         private readonly string[]? _allowed;
         private readonly Dictionary<int, int> _match;
 
-        public Analysis(List<Tok> toks, EffectivePolicy policy, bool objectNamed)
+        public Analysis(List<Tok> toks, EffectivePolicy policy, string? objectName)
         {
             _toks = toks;
             _policy = policy;
-            _objectNamed = objectNamed;
+            _objectName = objectName;
             var rules = policy.ObjectRules?.FieldRules;
             _hidden = rules?.HiddenFields ?? [];
             _allowed = rules?.AllowedFields;
@@ -673,13 +823,23 @@ public static class SqlQueryReferences
                         throw new UnsupportedException("subquery");
                     }
                 }
-                if (scope.Refs.Count == 0 || _objectNamed)
+                if (scope.Refs.Count == 0)
                 {
-                    // An object name the caller supplies is authoritative for a
-                    // single-table query; the caller has already checked it.
                     return new AccessResult(true);
                 }
-                return EnforcementEngine.ValidateAccess(scope.Refs[0].Table ?? "", _policy);
+                var only = scope.Refs[0];
+                var onlyAccess = EnforcementEngine.ValidateAccess(only.Table ?? "", _policy);
+                if (!onlyAccess.Allowed)
+                {
+                    return onlyAccess;
+                }
+                // A supplied object name must name the table the query reads; otherwise
+                // the object checked is not the object read.
+                if (_objectName is not null && !SameObject(_objectName, only.Path))
+                {
+                    return new AccessResult(false, ObjectMismatchReason);
+                }
+                return onlyAccess;
             }
 
             foreach (var r in scope.Refs)
@@ -1007,7 +1167,11 @@ public static class SqlQueryReferences
                     names.Add(string.Join(".", folded.Skip(k)));
                 }
             }
-            clause.Scope.Add(new Ref(leaf, names, false));
+            var path = parts
+                .SelectMany(p => p.Kind == TokKind.QIdent ? p.Text.Split('.') : [p.Text])
+                .Select(AsciiLower)
+                .ToArray();
+            clause.Scope.Add(new Ref(leaf, names, false, path));
             return i;
         }
 

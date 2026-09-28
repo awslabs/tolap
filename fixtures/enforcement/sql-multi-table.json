@@ -1,6 +1,6 @@
 {
   "description": "Pre-execution SQL checks validate every table a query references. Each case runs the full prepare path (empty and canQuery checks, object access, references, field validation) and pins whether the query is allowed and, when refused, why.",
-  "notes": "Consumed by sdk/python/tests/test_sql_multi_table.py, sdk/typescript/packages/core/tests/sql-multi-table.test.ts, sdk/typescript/packages/mcp/tests/sql-multi-table.test.ts and sdk/dotnet/tests/Tolap.Mcp.Tests/SqlMultiTableTests.cs (both .NET wrappers). Each runner asserts the case count. Where a query is refused by more than one check, the reason is the first check to refuse it: the object check on the first FROM table, then the reference check (read under ANSI, then MySQL, then PostgreSQL lexing), then the field check.",
+  "notes": "Consumed by sdk/python/tests/test_sql_multi_table.py, sdk/typescript/packages/core/tests/sql-multi-table.test.ts, sdk/typescript/packages/mcp/tests/sql-multi-table.test.ts and sdk/dotnet/tests/Tolap.Mcp.Tests/SqlMultiTableTests.cs (both .NET wrappers). Each runner asserts the case count. Where a query is refused by more than one check, the reason is the first check to refuse it: the object check on the supplied object name (or else the first FROM table), then the reference check (read under ANSI, then MySQL, then PostgreSQL lexing), then the field check.",
   "cases": [
     {
       "name": "join-hidden-table-qualified-column",
@@ -2708,8 +2708,320 @@
       }
     },
     {
-      "name": "object-name-authoritative-single-table",
+      "name": "object-name-checks-the-query-table",
       "query": "SELECT name FROM encounters",
+      "objectName": "patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "object-name-checks-hidden-query-table",
+      "query": "SELECT name FROM billing",
+      "objectName": "patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "hiddenObjects": [
+            "billing"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "object-name-checks-unlisted-query-table",
+      "query": "SELECT name FROM visits",
+      "objectName": "patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "object-name-differs-from-query-table",
+      "query": "SELECT name FROM encounters",
+      "objectName": "patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object name does not match the table the query reads"
+      }
+    },
+    {
+      "name": "object-name-matches-query-table",
+      "query": "SELECT name FROM patients",
+      "objectName": "patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "object-name-matches-case-insensitively",
+      "query": "SELECT name FROM patients",
+      "objectName": "PATIENTS",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "object-name-bare-matches-qualified-table",
+      "query": "SELECT name FROM public.patients",
+      "objectName": "patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "object-name-qualified-matches-bare-table",
+      "query": "SELECT name FROM patients",
+      "objectName": "public.patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "hiddenObjects": [
+            "encounters"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "object-name-qualifier-differs",
+      "query": "SELECT name FROM db2.patients",
+      "objectName": "db1.patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "hiddenObjects": [
+            "encounters"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object name does not match the table the query reads"
+      }
+    },
+    {
+      "name": "object-name-quoted-qualified-table",
+      "query": "SELECT name FROM \"db2.patients\"",
+      "objectName": "db1.patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "hiddenObjects": [
+            "encounters"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object name does not match the table the query reads"
+      }
+    },
+    {
+      "name": "object-name-hidden",
+      "query": "SELECT name FROM patients",
+      "objectName": "billing",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "hiddenObjects": [
+            "billing"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "object-name-unlisted",
+      "query": "SELECT name FROM patients",
+      "objectName": "visits",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "object not in allowed set"
+      }
+    },
+    {
+      "name": "object-name-no-table",
+      "query": "SELECT 1",
       "objectName": "patients",
       "policy": {
         "version": "1.0",
@@ -2760,6 +3072,588 @@
       "expected": {
         "allowed": false,
         "reason": "object is hidden"
+      }
+    },
+    {
+      "name": "unicode-escape-identifier",
+      "query": "SELECT name FROM U&\"encounter\\0073\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "hiddenObjects": [
+            "encounters"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: Unicode escape"
+      }
+    },
+    {
+      "name": "unicode-escape-identifier-lower-case",
+      "query": "SELECT u&\"d\\0069agnosis\" FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: Unicode escape"
+      }
+    },
+    {
+      "name": "unicode-escape-string",
+      "query": "SELECT name FROM patients WHERE name = U&'\\0041'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: Unicode escape"
+      }
+    },
+    {
+      "name": "unicode-escape-hides-join",
+      "query": "SELECT p.name FROM patients p WHERE p.name = U&'x' JOIN encounters e ON true",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: Unicode escape"
+      }
+    },
+    {
+      "name": "quote-operator-literal",
+      "query": "SELECT name FROM patients WHERE name = q'[x' FROM encounters]'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: string literal prefix"
+      }
+    },
+    {
+      "name": "national-quote-operator-literal",
+      "query": "SELECT name FROM patients WHERE name = nq'{x}'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: string literal prefix"
+      }
+    },
+    {
+      "name": "unknown-literal-prefix",
+      "query": "SELECT name FROM patients WHERE name = zz'x'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: string literal prefix"
+      }
+    },
+    {
+      "name": "triple-quoted-single",
+      "query": "SELECT name FROM patients WHERE name = '''x' FROM encounters'''",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: triple-quoted literal"
+      }
+    },
+    {
+      "name": "triple-quoted-double",
+      "query": "SELECT name FROM patients WHERE name = \"\"\"x\"\"\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: triple-quoted literal"
+      }
+    },
+    {
+      "name": "non-ascii-table",
+      "query": "SELECT name FROM encountérs",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "hiddenObjects": [
+            "encounters"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII identifier"
+      }
+    },
+    {
+      "name": "non-ascii-quoted-table",
+      "query": "SELECT name FROM \"encountérs\"",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "hiddenObjects": [
+            "encounters"
+          ]
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII identifier"
+      }
+    },
+    {
+      "name": "non-ascii-backtick-column",
+      "query": "SELECT `diagnósis` FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII identifier"
+      }
+    },
+    {
+      "name": "non-ascii-bracket-column",
+      "query": "SELECT [diagnósis] FROM encounters",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: non-ASCII identifier"
+      }
+    },
+    {
+      "name": "digit-leading-column",
+      "query": "SELECT 2fa_secret FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: identifier starting with a digit"
+      }
+    },
+    {
+      "name": "digit-leading-table",
+      "query": "SELECT p.name FROM patients p JOIN 1encounters e ON true",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: identifier starting with a digit"
+      }
+    },
+    {
+      "name": "digit-leading-qualified-column",
+      "query": "SELECT p.1col FROM patients p",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: identifier starting with a digit"
+      }
+    },
+    {
+      "name": "modelled-literal-prefixes",
+      "query": "SELECT name FROM patients WHERE name IN (N'a', X'41', B'01', E'b', _utf8mb4'c', n'd', TIMESTAMP'2024-01-01 00:00:00')",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "modelled-escape-string",
+      "query": "SELECT name FROM patients WHERE name = E'a\\\\b'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "modelled-dollar-quoted",
+      "query": "SELECT name FROM patients WHERE name = $tag$x$tag$",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "modelled-numbers",
+      "query": "SELECT name FROM patients WHERE id IN (1, 1.5, .5, 1e5, 2.5E-3, 1_000, 0x1F, 0b101)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "modelled-doubled-quote-in-string",
+      "query": "SELECT name FROM patients WHERE name = 'O''Brien'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "hiddenObjects": [
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
       }
     }
   ]

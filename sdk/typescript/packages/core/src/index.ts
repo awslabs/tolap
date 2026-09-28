@@ -204,4 +204,5 @@ export {
   validateQueryReferences,
   FIELD_DENIAL_REASON,
   UNSUPPORTED_REASON_PREFIX,
+  OBJECT_MISMATCH_REASON,
 } from "./sql-references.js";
