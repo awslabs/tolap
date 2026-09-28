@@ -26,7 +26,7 @@ public class AllowedFieldsQualifiedTests
     private const string FixturePath = "enforcement/allowed-fields-qualified.json";
 
     /// <summary>Asserted so that a dropped case fails the suite rather than shrinking it quietly.</summary>
-    private const int ExpectedCaseCount = 36;
+    private const int ExpectedCaseCount = 49;
 
     private static readonly string[] Actions =
         ["projectAllowedFields", "applyResultPipeline", "validateWrite"];
@@ -65,6 +65,17 @@ public class AllowedFieldsQualifiedTests
 
     private static IReadOnlyList<Dictionary<string, object?>> RecordsOf(JsonElement testCase, string property)
         => testCase.GetProperty(property).EnumerateArray().Select(RecordOf).ToList();
+
+    private static WriteOperation OperationOf(JsonElement testCase)
+        => testCase.GetProperty("operation").GetString() switch
+        {
+            "insert" => WriteOperation.Insert,
+            "update" => WriteOperation.Update,
+            "delete" => WriteOperation.Delete,
+            "upsert" => WriteOperation.Upsert,
+            var other => throw new InvalidOperationException(
+                $"case '{CaseName(testCase)}' names an unknown operation '{other}'")
+        };
 
     private static EffectivePolicy PolicyOf(JsonElement testCase)
         => TolapJsonOptions.Deserialize<EffectivePolicy>(testCase.GetProperty("policy").GetRawText());
@@ -139,10 +150,9 @@ public class AllowedFieldsQualifiedTests
     public void ValidateWrite_MatchesTheSharedCorpus(string caseName)
     {
         var testCase = CaseByName(caseName);
-        testCase.GetProperty("operation").GetString().Should().Be("insert");
 
         var result = EnforcementEngine.ValidateWrite(
-            WriteOperation.Insert,
+            OperationOf(testCase),
             testCase.GetProperty("objectName").GetString(),
             RecordOf(testCase.GetProperty("payload")),
             PolicyOf(testCase));

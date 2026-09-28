@@ -93,15 +93,31 @@ describe("validateAccess (glob metacharacters)", () => {
 // ---------------------------------------------------------------------------
 
 describe("validateFieldAccess (allowed set)", () => {
+  // Shared with the Python and .NET runners. Order is part of the contract: both
+  // lists follow the input order.
   const fixture = loadFixture("validate-field-access-allowed-set.json");
-  const input = fixture["input"] as { fields: string[] };
-  const policy = toEffectivePolicy(fixture["policy"] as Record<string, unknown>);
-  const expected = fixture["expected"] as { allowed: string[]; denied: string[] };
+  const cases = fixture["cases"] as Array<{
+    name: string;
+    input: { fields: string[]; objectName?: string };
+    policy: Record<string, unknown>;
+    expected: { allowed: string[]; denied: string[] };
+  }>;
 
-  it("should allow fields in the allowed set and deny others", () => {
-    const result = validateFieldAccess(input.fields, policy);
-    expect(result.allowed.sort()).toEqual(expected.allowed.sort());
-    expect(result.denied.sort()).toEqual(expected.denied.sort());
+  it("carries every case", () => {
+    // Asserted so that a dropped case fails the suite rather than shrinking it quietly.
+    expect(cases).toHaveLength(13);
+    expect(new Set(cases.map((c) => c.name)).size).toBe(cases.length);
+  });
+
+  it.each(cases.map((c) => [c.name, c] as const))("%s", (_name, testCase) => {
+    const policy = toEffectivePolicy(testCase.policy);
+    const result = validateFieldAccess(
+      testCase.input.fields,
+      policy,
+      testCase.input.objectName,
+    );
+    expect(result.allowed).toEqual(testCase.expected.allowed);
+    expect(result.denied).toEqual(testCase.expected.denied);
   });
 });
 

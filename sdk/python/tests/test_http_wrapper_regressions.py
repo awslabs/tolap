@@ -101,6 +101,35 @@ class TestHttpAllowedFieldsProjection:
         assert body == BODY
 
 
+class TestHttpAllowedFieldsQualifier:
+    """The wrapper's projection keeps the core allowedFields qualifier rule (issue #36).
+
+    Pinned at wrapper level so an inlined projection that drops the rule is caught,
+    not only a change to the core function the shared fixture covers.
+    """
+
+    def test_qualified_entry_drops_another_objects_column_under_a_collection_path(self) -> None:
+        body = {
+            "meta": {"total": 1},
+            "results": [
+                {"patients.name": "pat", "encounters.name": "enc", "name": "bare", "encounters.id": 2}
+            ],
+        }
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=body)
+
+        context = _context(FieldRules(allowed_fields=["patients.name"]))
+        with httpx.Client(
+            base_url="https://api.example.gov", transport=httpx.MockTransport(handler)
+        ) as client:
+            wrapper = SecureHttpToolWrapper(SecureMcpServerOptions(signing_key=KEY), client)
+            result = wrapper.request(context, "GET", "/v1/reports", collection_path="results")
+
+        assert result["results"] == [{"patients.name": "pat", "name": "bare"}]
+        assert result["meta"] == {"total": 1}
+
+
 class TestHttpHiddenFieldsAfterRefactor:
     """Defect 1: the shared core function must keep walking nested trees."""
 

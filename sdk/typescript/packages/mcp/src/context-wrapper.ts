@@ -245,7 +245,7 @@ export class SecureContextToolWrapper {
       if (!r.allowed) return r;
     }
     if (args.fields && args.fields.length > 0) {
-      const r = validateFieldAccess(args.fields, policy);
+      const r = validateFieldAccess(args.fields, policy, args.objectName);
       if (r.denied.length > 0) {
         return { allowed: false, reason: `denied fields: ${r.denied.join(", ")}` };
       }

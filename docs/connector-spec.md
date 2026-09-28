@@ -262,7 +262,9 @@ that the cheapest checks come first; all must pass.
    - in `readOnlyFields` → denied. This is what that field means (see §4.3).
    - `allowedFields` specified and field absent from it → denied. An entry qualified with
      one object does not allow a field qualified with another (canonical enforcement spec §4,
-     "`allowedFields` does not cross objects").
+     "`allowedFields` does not cross objects"). When the write names its target object, a
+     bare payload key is checked as `object.key`, so under `patients.name` a `name` written to
+     `encounters` is denied.
 4. **Row filters must match the target row** for an update or delete. A caller MUST NOT be
    able to modify a row it could not have selected. Where the SDK cannot evaluate the
    filters against the target — because it has not read the row — the integrator MUST

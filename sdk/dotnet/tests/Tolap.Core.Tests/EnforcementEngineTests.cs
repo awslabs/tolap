@@ -48,18 +48,48 @@ public class EnforcementEngineTests
 
     // -- ValidateFieldAccess tests from fixtures --
 
+    private const string FieldAccessAllowedSetFixture = "enforcement/validate-field-access-allowed-set.json";
+
+    /// <summary>Asserted so that a dropped case fails the suite rather than shrinking it quietly.</summary>
+    private const int FieldAccessAllowedSetCaseCount = 13;
+
+    private static IReadOnlyList<JsonElement> FieldAccessAllowedSetCases()
+        => FixtureHelper.ReadFixtureAsJson(FieldAccessAllowedSetFixture).Clone()
+            .GetProperty("cases").EnumerateArray().Select(c => c.Clone()).ToList();
+
+    public static IEnumerable<object[]> FieldAccessAllowedSetCaseNames()
+        => FieldAccessAllowedSetCases().Select(c => new object[] { c.GetProperty("name").GetString()! });
+
     [Fact]
-    public void ValidateFieldAccess_AllowedSet_DeniesFieldsOutsideSet()
+    public void ValidateFieldAccess_AllowedSet_CarriesEveryCase()
     {
-        var policy = CreatePolicyWithFieldRules(
-            allowedFields: new[] { "name", "age", "region" },
-            hiddenFields: null);
+        var names = FieldAccessAllowedSetCases().Select(c => c.GetProperty("name").GetString()).ToList();
 
-        var result = EnforcementEngine.ValidateFieldAccess(
-            new[] { "name", "age", "ssn", "region" }, policy);
+        names.Should().HaveCount(FieldAccessAllowedSetCaseCount);
+        names.Distinct(StringComparer.Ordinal).Should().HaveCount(names.Count);
+    }
 
-        result.Allowed.Should().BeEquivalentTo(new[] { "name", "age", "region" });
-        result.Denied.Should().BeEquivalentTo(new[] { "ssn" });
+    /// <summary>
+    /// Shared with the Python and TypeScript runners. Order is part of the contract: both
+    /// lists follow the input order.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(FieldAccessAllowedSetCaseNames))]
+    public void ValidateFieldAccess_AllowedSet_MatchesTheSharedCorpus(string caseName)
+    {
+        var testCase = FieldAccessAllowedSetCases().Single(c => c.GetProperty("name").GetString() == caseName);
+        var input = testCase.GetProperty("input");
+        var fields = input.GetProperty("fields").EnumerateArray().Select(f => f.GetString()!).ToArray();
+        var objectName = input.TryGetProperty("objectName", out var o) ? o.GetString() : null;
+        var policy = TolapJsonOptions.Deserialize<EffectivePolicy>(testCase.GetProperty("policy").GetRawText());
+
+        var result = EnforcementEngine.ValidateFieldAccess(fields, policy, objectName);
+
+        var expected = testCase.GetProperty("expected");
+        result.Allowed.Should().Equal(
+            expected.GetProperty("allowed").EnumerateArray().Select(f => f.GetString()), caseName);
+        result.Denied.Should().Equal(
+            expected.GetProperty("denied").EnumerateArray().Select(f => f.GetString()), caseName);
     }
 
     [Fact]

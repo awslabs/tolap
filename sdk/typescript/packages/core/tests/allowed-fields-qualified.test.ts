@@ -33,7 +33,7 @@ const FIXTURE_PATH = path.resolve(
 );
 
 /** Asserted so that a dropped case fails the suite rather than shrinking it quietly. */
-const EXPECTED_CASE_COUNT = 36;
+const EXPECTED_CASE_COUNT = 49;
 
 const ACTIONS = ["projectAllowedFields", "applyResultPipeline", "validateWrite"];
 
@@ -43,7 +43,7 @@ interface AllowedCase {
   action: string;
   records?: Array<Record<string, unknown>>;
   operation?: string;
-  objectName?: string;
+  objectName?: string | null;
   payload?: Record<string, unknown>;
   policy: Partial<EffectivePolicy>;
   expected: unknown;
@@ -78,7 +78,7 @@ function run(testCase: AllowedCase): unknown {
     default: {
       const result = validateWrite(
         testCase.operation!,
-        testCase.objectName,
+        testCase.objectName ?? undefined,
         testCase.payload,
         policy,
       );

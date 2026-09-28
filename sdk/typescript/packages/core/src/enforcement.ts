@@ -293,10 +293,22 @@ function containsIgnoreCase(haystack: string[], needle: string): boolean {
 
 /**
  * Validate which fields can be accessed under the given effective policy.
+ *
+ * `hiddenFields` uses the broad field-name matcher the post-execution pass uses
+ * (`fieldNameMatches`), so a hidden `patients.ssn` also denies a bare `ssn`.
+ * `allowedFields` uses the allow-direction rule (`allowedFieldMatches`), so an
+ * entry does not allow another object's field: `*.name` does not allow
+ * `encounters.name` (issue #36).
+ *
+ * `objectName` is the object the fields belong to, when the caller knows it. A
+ * bare field is then checked against `allowedFields` as `objectName.field`, so
+ * under `patients.name` a bare `name` read from `encounters` is denied and one
+ * read from `patients` is allowed.
  */
 export function validateFieldAccess(
   fields: string[],
   policy: EffectivePolicy,
+  objectName?: string,
 ): FieldAccessResult {
   const allowed: string[] = [];
   const denied: string[] = [];
@@ -305,17 +317,15 @@ export function validateFieldAccess(
 
   for (const field of fields) {
     // Hidden fields are always denied
-    if (
-      fieldRules?.hiddenFields &&
-      matchesAnyGlob(fieldRules.hiddenFields, field)
-    ) {
+    if (fieldRules?.hiddenFields?.some((pattern) => fieldNameMatches(pattern, field))) {
       denied.push(field);
       continue;
     }
 
-    // If allowedFields is defined, field must be in it
+    // If allowedFields is defined, field must be in it ([] denies every field)
     if (fieldRules?.allowedFields) {
-      if (matchesAnyGlob(fieldRules.allowedFields, field)) {
+      const key = qualifyWithObject(field, objectName);
+      if (fieldRules.allowedFields.some((pattern) => allowedFieldMatches(pattern, key))) {
         allowed.push(field);
       } else {
         denied.push(field);
@@ -328,6 +338,17 @@ export function validateFieldAccess(
   }
 
   return { allowed, denied };
+}
+
+/**
+ * `objectName.field` for a bare field when the object is known, else `field`.
+ *
+ * Used only for the `allowedFields` check (issue #36). A field that already carries
+ * a qualifier keeps it, and the deny-direction rules always see the field as
+ * written.
+ */
+function qualifyWithObject(field: string, objectName: string | undefined): string {
+  return objectName && !field.includes(".") ? `${objectName}.${field}` : field;
 }
 
 // ---------------------------------------------------------------------------
@@ -1692,6 +1713,7 @@ function validateWriteObject(
 function validateWrittenFields(
   fields: string[],
   policy: EffectivePolicy,
+  objectName?: string,
 ): AccessResult {
   const fieldRules = policy.objectRules?.fieldRules;
   if (!fieldRules) return { allowed: true };
@@ -1716,8 +1738,10 @@ function validateWrittenFields(
     // tests for presence rather than truthiness.
     if (fieldRules.allowedFields !== undefined) {
       // The allow direction does not let a qualified entry reach another object's
-      // key (issue #36); see allowedFieldMatches.
-      if (!fieldRules.allowedFields.some((pattern) => allowedFieldMatches(pattern, name))) {
+      // key (issue #36); see allowedFieldMatches. A bare key is read as belonging
+      // to the write's target object.
+      const key = qualifyWithObject(name, objectName);
+      if (!fieldRules.allowedFields.some((pattern) => allowedFieldMatches(pattern, key))) {
         return { allowed: false, reason: `field not in allowed set: ${name}` };
       }
     }
@@ -1931,7 +1955,7 @@ export function validateWrite(
     }
   }
 
-  const fields = validateWrittenFields(written, policy);
+  const fields = validateWrittenFields(written, policy, objectName);
   if (!fields.allowed) return fields;
 
   return validateWriteTargetRow(

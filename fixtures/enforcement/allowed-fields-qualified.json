@@ -1,6 +1,6 @@
 {
   "description": "How an allowedFields entry decides whether a key is allowed when entries and keys may be bare or qualified with an object name. Exists because allowedFields used the field-name matcher, which drops qualifiers, so 'patients.name' also allowed 'encounters.name' in the read projection and on the write path (issue #36).",
-  "notes": "Rule, identical in every SDK, for the ALLOW direction only: an entry allows a key when the field-name matcher accepts it AND the two are not both qualified with different objects. The qualifier is everything before the last '.', compared ASCII case-insensitively (only A-Z folds to a-z), and glob characters in the entry's qualifier are literal for that comparison. This is the same qualifier rule row filters use (#32). A qualified entry still allows a bare key, a bare entry still allows qualified keys of every object, 'patients.*' allows the object's own columns and bare keys, and a bare '*' allows everything. hiddenFields, readOnlyFields and maskedFields keep the broad matcher. Actions: 'projectAllowedFields' projects 'records' and compares them to 'expected'; 'applyResultPipeline' runs the full post-execution pipeline over 'records'; 'validateWrite' validates an insert of 'payload' into 'objectName' and compares 'allowed' and, when given, 'reason'. Each case carries a full policy so the shared corpus walk validates it against policy-definition.schema.json.",
+  "notes": "Rule, identical in every SDK, for the ALLOW direction only: an entry allows a key when the field-name matcher accepts it AND the two are not both qualified with different objects. The qualifier is everything before the last '.', compared ASCII case-insensitively (only A-Z folds to a-z), and glob characters in the entry's qualifier are literal for that comparison. This is the same qualifier rule row filters use (#32). A qualified entry still allows a bare key, a bare entry still allows qualified keys of every object, 'patients.*' allows the object's own columns and bare keys, and a bare '*' allows everything. hiddenFields, readOnlyFields and maskedFields keep the broad matcher. Actions: 'projectAllowedFields' projects 'records' and compares them to 'expected'; 'applyResultPipeline' runs the full post-execution pipeline over 'records'; 'validateWrite' validates the 'operation' ('insert' or 'update') of 'payload' into 'objectName' (null when no object is named) and compares 'allowed' and, when given, 'reason'. When 'objectName' is set, a bare payload key is read as 'objectName.key' for the allowedFields check only. Each case carries a full policy so the shared corpus walk validates it against policy-definition.schema.json.",
   "cases": [
     {
       "name": "qualified-entry-drops-other-object-key",
@@ -960,11 +960,40 @@
       }
     },
     {
-      "name": "write-glob-qualifier-permits-a-bare-key",
-      "notes": "'*.name' still admits a bare 'name'.",
+      "name": "write-glob-qualifier-refuses-a-bare-key-of-a-named-object",
+      "notes": "The write names its target object, so the bare 'name' is read as 'patients.name', and '*.name' admits no qualified key.",
       "action": "validateWrite",
       "operation": "insert",
       "objectName": "patients",
+      "payload": {
+        "name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: name"
+      }
+    },
+    {
+      "name": "write-glob-qualifier-permits-a-bare-key-without-object",
+      "notes": "With no target object named, a bare 'name' stays bare and '*.name' admits it, as on the read path.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": null,
       "payload": {
         "name": "a"
       },
@@ -1076,6 +1105,348 @@
         "allowed": false,
         "reason": "field is hidden: encounters.ssn"
       }
+    },
+    {
+      "name": "write-bare-key-into-other-object-refused",
+      "notes": "A bare payload key is read as belonging to the write's target object, so under 'patients.name' an insert into 'encounters' carrying 'name' is refused.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "encounters",
+      "payload": {
+        "name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: name"
+      }
+    },
+    {
+      "name": "write-bare-key-without-object-permitted",
+      "notes": "With no target object named, a bare key stays bare and a qualified entry admits it.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": null,
+      "payload": {
+        "name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "write-bare-entry-permits-a-bare-key-of-any-object",
+      "notes": "A bare entry names no object, so a bare key written to any object is admitted. Unchanged.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "encounters",
+      "payload": {
+        "name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "write-empty-allowed-fields-refuses-every-field",
+      "notes": "allowedFields: [] denies every field, qualified or bare.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": []
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: name"
+      }
+    },
+    {
+      "name": "write-update-refuses-other-object-key",
+      "notes": "An update follows the same allowedFields rule as an insert.",
+      "action": "validateWrite",
+      "operation": "update",
+      "objectName": "patients",
+      "payload": {
+        "encounters.name": "x"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canUpdate": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: encounters.name"
+      }
+    },
+    {
+      "name": "write-update-bare-key-into-other-object-refused",
+      "notes": "An update of 'encounters' carrying a bare 'name' is refused under 'patients.name'.",
+      "action": "validateWrite",
+      "operation": "update",
+      "objectName": "encounters",
+      "payload": {
+        "name": "x"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canUpdate": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: name"
+      }
+    },
+    {
+      "name": "write-update-bare-key-into-own-object-permitted",
+      "notes": "An update of 'patients' carrying a bare 'name' is admitted under 'patients.name'.",
+      "action": "validateWrite",
+      "operation": "update",
+      "objectName": "patients",
+      "payload": {
+        "name": "x"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canUpdate": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "exact-nested-entry-keeps-itself",
+      "notes": "A nested entry allows exactly its own key: the qualifier 'patients.address' matches on both sides.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.address.city": "x",
+          "patients.address.zip": "y"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.address.city"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.address.city": "x"
+        }
+      ]
+    },
+    {
+      "name": "shorter-nested-entry-drops-longer-qualified-key",
+      "notes": "'address.city' and 'patients.address.city' have different qualifiers ('address' and 'patients.address'), so the longer key is dropped.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.address.city": "x",
+          "address.city": "y"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "address.city"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "address.city": "y"
+        }
+      ]
+    },
+    {
+      "name": "edge-keys-under-a-qualified-entry",
+      "notes": "'.name' is qualified with the empty object, which conflicts with 'patients'. 'patients.' has an empty leaf and matches no entry leaf. Only the bare key survives.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          ".name": 1,
+          "patients.": 2,
+          "name": 3
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "name": 3
+        }
+      ]
+    },
+    {
+      "name": "edge-keys-under-an-object-wildcard",
+      "notes": "'patients.*' admits the object's own keys, including 'patients.' with an empty leaf, and drops '.name', whose empty qualifier is a different object.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          ".name": 1,
+          "patients.": 2,
+          "patients.id": 3
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.*"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.": 2,
+          "patients.id": 3
+        }
+      ]
+    },
+    {
+      "name": "empty-allowed-fields-drops-every-key",
+      "notes": "allowedFields: [] denies every field, qualified or bare.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "name": 1,
+          "patients.id": 2
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": []
+          }
+        }
+      },
+      "expected": [
+        {}
+      ]
     }
   ]
 }
