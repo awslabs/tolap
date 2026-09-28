@@ -585,6 +585,25 @@ function allowedFieldPatterns(policy: EffectivePolicy): string[] | undefined {
   return policy.objectRules?.fieldRules?.allowedFields;
 }
 
+/**
+ * Whether an `allowedFields` entry allows a record or payload key.
+ *
+ * {@link fieldNameMatches} drops qualifiers, which is the right breadth for the
+ * deny-direction rules (hidden, read-only, masked) but widens an allow-list:
+ * `patients.name` allowed `encounters.name` (issue #36). So an entry allows a
+ * key only if the matcher accepts it *and* the two are not qualified with
+ * different objects — the same qualifier rule row filters use
+ * ({@link qualifiersConflict}, spec §4).
+ *
+ * A qualified entry still allows a bare key, a bare entry allows every object's
+ * key, and `patients.*` allows the object's own columns and bare keys but not
+ * `encounters.id`. Glob characters in the entry's qualifier are literal for the
+ * comparison, so `*.name` allows `name` and no qualified key.
+ */
+function allowedFieldMatches(pattern: string, key: string): boolean {
+  return fieldNameMatches(pattern, key) && !qualifiersConflict(pattern, key);
+}
+
 function projectRecord(
   record: Record<string, unknown>,
   patterns: string[],
@@ -596,7 +615,7 @@ function projectRecord(
        dangerous key. Retained so the projection cannot copy one forward even if it
        is ever called on an un-cloned record. */
     if (isDangerousKey(key)) continue;
-    if (patterns.some((pattern) => fieldNameMatches(pattern, key))) {
+    if (patterns.some((pattern) => allowedFieldMatches(pattern, key))) {
       safeSet(out, key, record[key]);
     }
   }
@@ -1056,7 +1075,11 @@ function objectQualifier(name: string): string | null {
   return dot >= 0 ? asciiLower(name.slice(0, dot)) : null;
 }
 
-/** Whether a filter and a row key are both qualified, by different objects. */
+/**
+ * Whether a policy field reference and a key are both qualified, by different
+ * objects. Used by row filters (issue #32) and by the allowedFields check
+ * (issue #36).
+ */
 function qualifiersConflict(fieldName: string, key: string): boolean {
   const fieldQualifier = objectQualifier(fieldName);
   const keyQualifier = objectQualifier(key);
@@ -1659,7 +1682,9 @@ function validateWriteObject(
  *
  * Field names match with the bidirectional, case-insensitive, glob-aware matcher the
  * read path uses (§3.2), so a `readOnlyFields` entry of `patients.created_at` blocks
- * a payload key of `created_at`.
+ * a payload key of `created_at`. The `allowedFields` check additionally refuses a key
+ * qualified with a different object than the entry ({@link allowedFieldMatches}), so
+ * `patients.name` does not make `encounters.name` writable.
  *
  * The field is named in the reason. That discloses nothing: the caller supplied it.
  * Row denials, by contrast, never name a value.
@@ -1690,7 +1715,9 @@ function validateWrittenFields(
     // undefined is unrestricted; [] denies every field (canonical spec §3), so this
     // tests for presence rather than truthiness.
     if (fieldRules.allowedFields !== undefined) {
-      if (!fieldRules.allowedFields.some((pattern) => fieldNameMatches(pattern, name))) {
+      // The allow direction does not let a qualified entry reach another object's
+      // key (issue #36); see allowedFieldMatches.
+      if (!fieldRules.allowedFields.some((pattern) => allowedFieldMatches(pattern, name))) {
         return { allowed: false, reason: `field not in allowed set: ${name}` };
       }
     }

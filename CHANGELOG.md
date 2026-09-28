@@ -27,6 +27,27 @@ through a conflicting qualifier or an ambiguous bare name, are now dropped rathe
 The update and delete target-row check uses the same lookup, so a write whose target row has
 only a conflicting key, or an ambiguous one, is now refused with `target row not permitted` (#32).
 
+**`allowedFields` for one object allowed another object's column.** The allow-list was matched
+with the same field-name matcher as the deny rules, and that matcher drops qualifiers, so an
+entry `patients.name` also allowed `encounters.name`. When a result carried columns from more
+than one object, as joins and multi-object projections do, the projection kept a column the
+policy never listed, and the write path accepted it in a payload. All three SDKs now apply the
+row-filter qualifier rule from #32 when `allowedFields` decides inclusion
+([canonical-enforcement-spec §4](docs/canonical-enforcement-spec.md#allowedfields-does-not-cross-objects)).
+An entry does not allow a key qualified with a different object. Qualifiers are compared ASCII
+case-insensitively, and `db.patients` and `patients` count as different. A qualified entry
+still allows a bare key, a bare entry still allows every object's key, `patients.*` allows the
+object's own columns and bare keys but not `encounters.id`, and `*` allows everything. Glob
+characters in an entry's qualifier are literal, so `*.name` now allows only a bare `name`.
+This covers the post-execution projection, the .NET HTTP wrapper's projection, and the write
+path's allowed-field check. `hiddenFields`, `readOnlyFields` and masking keep the broad matcher.
+The shared fixture
+[`fixtures/enforcement/allowed-fields-qualified.json`](fixtures/enforcement/allowed-fields-qualified.json)
+pins the behaviour. Policies that relied on the old matching through a conflicting qualifier,
+a longer qualifier such as `db.patients.name`, a deeper key such as `patients.address.city`
+under `patients.*`, or a qualified key under `*.name` now drop that column on reads and refuse
+it on writes with `field not in allowed set` (#36).
+
 ## 1.1.0 — 2026-09-01
 
 Purpose binding. TOLAP could already answer "what may this identity see?"; it can now answer

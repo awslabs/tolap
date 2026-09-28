@@ -260,7 +260,9 @@ that the cheapest checks come first; all must pass.
 3. **Every field in the payload** must be writable:
    - in `hiddenFields` → denied. A field the caller cannot read, it cannot write.
    - in `readOnlyFields` → denied. This is what that field means (see §4.3).
-   - `allowedFields` specified and field absent from it → denied.
+   - `allowedFields` specified and field absent from it → denied. An entry qualified with
+     one object does not allow a field qualified with another (canonical enforcement spec §4,
+     "`allowedFields` does not cross objects").
 4. **Row filters must match the target row** for an update or delete. A caller MUST NOT be
    able to modify a row it could not have selected. Where the SDK cannot evaluate the
    filters against the target — because it has not read the row — the integrator MUST

@@ -1,0 +1,1081 @@
+{
+  "description": "How an allowedFields entry decides whether a key is allowed when entries and keys may be bare or qualified with an object name. Exists because allowedFields used the field-name matcher, which drops qualifiers, so 'patients.name' also allowed 'encounters.name' in the read projection and on the write path (issue #36).",
+  "notes": "Rule, identical in every SDK, for the ALLOW direction only: an entry allows a key when the field-name matcher accepts it AND the two are not both qualified with different objects. The qualifier is everything before the last '.', compared ASCII case-insensitively (only A-Z folds to a-z), and glob characters in the entry's qualifier are literal for that comparison. This is the same qualifier rule row filters use (#32). A qualified entry still allows a bare key, a bare entry still allows qualified keys of every object, 'patients.*' allows the object's own columns and bare keys, and a bare '*' allows everything. hiddenFields, readOnlyFields and maskedFields keep the broad matcher. Actions: 'projectAllowedFields' projects 'records' and compares them to 'expected'; 'applyResultPipeline' runs the full post-execution pipeline over 'records'; 'validateWrite' validates an insert of 'payload' into 'objectName' and compares 'allowed' and, when given, 'reason'. Each case carries a full policy so the shared corpus walk validates it against policy-definition.schema.json.",
+  "cases": [
+    {
+      "name": "qualified-entry-drops-other-object-key",
+      "notes": "The reported defect. 'patients.name' must not admit 'encounters.name' just because the leaf names coincide.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "encounters.name": "enc",
+          "patients.id": 1
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.id": 1
+        }
+      ]
+    },
+    {
+      "name": "qualified-entry-keeps-own-object-key-own-first",
+      "notes": "Both objects' columns present, the allowed object's key written first. Only the allowed object's column survives.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.name": "pat",
+          "encounters.name": "enc"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.name": "pat"
+        }
+      ]
+    },
+    {
+      "name": "qualified-entry-keeps-own-object-key-other-first",
+      "notes": "The same record with the other object's key written first. Key order must not change the outcome.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "encounters.name": "enc",
+          "patients.name": "pat"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.name": "pat"
+        }
+      ]
+    },
+    {
+      "name": "qualified-entry-keeps-bare-key",
+      "notes": "A bare key has no qualifier to conflict with, so a qualified entry still admits it, as before.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "name": "pat",
+          "ssn": "123"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "name": "pat"
+        }
+      ]
+    },
+    {
+      "name": "bare-entry-keeps-qualified-keys-of-every-object",
+      "notes": "A bare entry names no object, so it admits the leaf on every object. Unchanged.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.name": "pat",
+          "encounters.name": "enc",
+          "name": "bare",
+          "ssn": "123"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.name": "pat",
+          "encounters.name": "enc",
+          "name": "bare"
+        }
+      ]
+    },
+    {
+      "name": "qualifier-case-variant-matches",
+      "notes": "Qualifiers compare ASCII case-insensitively, so 'PATIENTS.Name' is the allowed object's column.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "PATIENTS.Name": "pat"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "PATIENTS.Name": "pat"
+        }
+      ]
+    },
+    {
+      "name": "qualifier-case-variant-still-conflicts",
+      "notes": "Case folding does not make a different object the same object: 'ENCOUNTERS.NAME' is dropped under 'Patients.Name'.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "ENCOUNTERS.NAME": "enc",
+          "patients.NAME": "pat"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "Patients.Name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.NAME": "pat"
+        }
+      ]
+    },
+    {
+      "name": "non-ascii-qualifier-folds-ascii-only-conflict",
+      "notes": "'PAT\u0130ENTS' (U+0130) folds to 'pat\u0130ents', which is not 'pati\u0307ents' (i followed by U+0307). Full Unicode lower-casing would equate them in some SDKs and not others, so the qualifiers conflict and the key is dropped.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "pati\u0307ents.name": "combining-dot",
+          "id": 1
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "PAT\u0130ENTS.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {}
+      ]
+    },
+    {
+      "name": "non-ascii-qualifier-folds-ascii-only-match",
+      "notes": "'PAT\u0130ENTS' and 'pat\u0130ents' differ only in ASCII letters, so they are the same qualifier and the key is kept.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "pat\u0130ents.NAME": "same",
+          "id": 1
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "PAT\u0130ENTS.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "pat\u0130ents.NAME": "same"
+        }
+      ]
+    },
+    {
+      "name": "longer-key-qualifier-is-a-different-object",
+      "notes": "The qualifier is everything before the last '.', so 'db.patients' and 'patients' are different qualifiers and 'db.patients.name' is dropped. Fails toward not-allowed.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "db.patients.name": "long",
+          "name": "bare"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "name": "bare"
+        }
+      ]
+    },
+    {
+      "name": "longer-entry-qualifier-is-a-different-object",
+      "notes": "The reverse: the entry 'db.patients.name' does not admit the key 'patients.name'.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.name": "short",
+          "name": "bare"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "db.patients.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "name": "bare"
+        }
+      ]
+    },
+    {
+      "name": "object-wildcard-keeps-own-object-and-bare-keys",
+      "notes": "'patients.*' admits every column qualified with 'patients' and every bare key (the qualifier is implied by the result set), but never 'encounters.id'.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.id": 1,
+          "id": 2,
+          "encounters.id": 3,
+          "encounters.status": "open"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.*"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.id": 1,
+          "id": 2
+        }
+      ]
+    },
+    {
+      "name": "object-wildcard-does-not-reach-a-deeper-qualifier",
+      "notes": "'patients.address.city' has the qualifier 'patients.address', which is not 'patients', so 'patients.*' does not admit it. Fails toward not-allowed.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.address.city": "x",
+          "patients.id": 1
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.*"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.id": 1
+        }
+      ]
+    },
+    {
+      "name": "leaf-glob-stays-within-its-object",
+      "notes": "A glob in the leaf is still honoured, but only for the entry's own object.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.name": "pat",
+          "patients.nickname": "p",
+          "encounters.name": "enc"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.n*"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.name": "pat",
+          "patients.nickname": "p"
+        }
+      ]
+    },
+    {
+      "name": "bare-star-keeps-every-key",
+      "notes": "A bare '*' names no object, so it admits every key. Unchanged.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.id": 1,
+          "encounters.id": 2,
+          "id": 3
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.id": 1,
+          "encounters.id": 2,
+          "id": 3
+        }
+      ]
+    },
+    {
+      "name": "glob-qualifier-is-literal-against-a-qualified-key",
+      "notes": "Glob characters in an entry's qualifier are literal for the qualifier comparison, as they are for row filters (#32). '*' is not 'patients' or 'encounters', so '*.name' admits no qualified key. Chosen to fail toward not-allowed: an author who means every object can write the bare 'name'.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.name": "pat",
+          "encounters.name": "enc",
+          "name": "bare"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "name": "bare"
+        }
+      ]
+    },
+    {
+      "name": "several-records-are-projected-independently",
+      "notes": "A list of records: each record is projected on its own, and a record left with no allowed key becomes an empty record.",
+      "action": "projectAllowedFields",
+      "records": [
+        {
+          "patients.name": "pat",
+          "encounters.name": "enc"
+        },
+        {
+          "encounters.name": "enc-only"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.name": "pat"
+        },
+        {}
+      ]
+    },
+    {
+      "name": "hidden-still-wins-over-a-qualified-allow",
+      "notes": "Hidden removal runs before the projection. A bare hidden entry removes the allowed object's column even though allowedFields names it.",
+      "action": "applyResultPipeline",
+      "records": [
+        {
+          "patients.ssn": "123",
+          "patients.name": "pat"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.ssn",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "ssn"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.name": "pat"
+        }
+      ]
+    },
+    {
+      "name": "hidden-matching-is-unchanged-across-objects",
+      "notes": "Regression guard. hiddenFields keeps the broad matcher: a hidden 'patients.ssn' still removes 'encounters.ssn'. Only the allow direction gained the qualifier rule.",
+      "action": "applyResultPipeline",
+      "records": [
+        {
+          "encounters.ssn": "123",
+          "name": "pat"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "name": "pat"
+        }
+      ]
+    },
+    {
+      "name": "masking-matching-is-unchanged-across-objects",
+      "notes": "Regression guard. maskedFields keeps the broad matcher: a mask on 'patients.ssn' still masks 'encounters.ssn'.",
+      "action": "applyResultPipeline",
+      "records": [
+        {
+          "encounters.ssn": "123",
+          "name": "pat"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "patients.ssn",
+                "maskType": "redact"
+              }
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "encounters.ssn": "[REDACTED]",
+          "name": "pat"
+        }
+      ]
+    },
+    {
+      "name": "projection-drops-other-object-column-before-masking",
+      "notes": "The other object's column is dropped by the projection rather than returned masked.",
+      "action": "applyResultPipeline",
+      "records": [
+        {
+          "patients.ssn": "111",
+          "encounters.ssn": "222"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "patients.ssn",
+                "maskType": "redact"
+              }
+            ]
+          }
+        }
+      },
+      "expected": [
+        {
+          "patients.ssn": "[REDACTED]"
+        }
+      ]
+    },
+    {
+      "name": "write-qualified-entry-refuses-other-object-key",
+      "notes": "The write-path twin of the reported defect.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "encounters.name": "x"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: encounters.name"
+      }
+    },
+    {
+      "name": "write-refuses-other-object-key-own-first",
+      "notes": "Both objects' keys in the payload, the allowed one first. The whole write is refused and the offending key is named.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "patients.name": "a",
+        "encounters.name": "b"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: encounters.name"
+      }
+    },
+    {
+      "name": "write-refuses-other-object-key-other-first",
+      "notes": "The same payload with the other object's key first.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "encounters.name": "b",
+        "patients.name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: encounters.name"
+      }
+    },
+    {
+      "name": "write-qualified-entry-permits-bare-key",
+      "notes": "A qualified entry still admits a bare payload key.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "write-qualifier-case-variant-permitted",
+      "notes": "Qualifiers compare ASCII case-insensitively.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "PATIENTS.NAME": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "write-qualifier-case-variant-still-conflicts",
+      "notes": "Case folding does not turn 'Encounters' into 'patients'.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "Encounters.Name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: Encounters.Name"
+      }
+    },
+    {
+      "name": "write-non-ascii-qualifier-folds-ascii-only-conflict",
+      "notes": "As the read case: only A-Z folds, so 'pati\u0307ents' is not 'PAT\u0130ENTS'.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "pati\u0307ents.name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "PAT\u0130ENTS.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: pati\u0307ents.name"
+      }
+    },
+    {
+      "name": "write-non-ascii-qualifier-folds-ascii-only-match",
+      "notes": "'pat\u0130ents' and 'PAT\u0130ENTS' differ only in ASCII letters.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "pat\u0130ents.name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "PAT\u0130ENTS.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "write-object-wildcard-refuses-other-object-key",
+      "notes": "'patients.*' does not admit 'encounters.id' on the write path either.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "patients.id": 1,
+        "encounters.id": 2
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: encounters.id"
+      }
+    },
+    {
+      "name": "write-object-wildcard-permits-own-object-and-bare-keys",
+      "notes": "'patients.*' admits the object's own columns and bare keys.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "patients.id": 1,
+        "status": "open"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "write-glob-qualifier-refuses-a-qualified-key",
+      "notes": "'*.name' admits no qualified key, as on the read path.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "patients.name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field not in allowed set: patients.name"
+      }
+    },
+    {
+      "name": "write-glob-qualifier-permits-a-bare-key",
+      "notes": "'*.name' still admits a bare 'name'.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "name": "a"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "write-bare-entry-permits-every-object",
+      "notes": "A bare entry names no object, so every object's column with that leaf is writable. Unchanged.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "patients.name": "a",
+        "encounters.name": "b"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "write-read-only-matching-is-unchanged-across-objects",
+      "notes": "Regression guard. readOnlyFields keeps the broad matcher: 'patients.created_at' still blocks 'encounters.created_at'.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "encounters.created_at": "2026-01-01"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "readOnlyFields": [
+              "patients.created_at"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field is read-only: encounters.created_at"
+      }
+    },
+    {
+      "name": "write-hidden-still-wins-and-is-unchanged-across-objects",
+      "notes": "Regression guard. Hidden is checked first and keeps the broad matcher, so a hidden 'patients.ssn' refuses 'encounters.ssn' even though allowedFields names it.",
+      "action": "validateWrite",
+      "operation": "insert",
+      "objectName": "patients",
+      "payload": {
+        "encounters.ssn": "x"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true,
+          "canInsert": true,
+          "readOnly": false
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "encounters.ssn"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "field is hidden: encounters.ssn"
+      }
+    }
+  ]
+}

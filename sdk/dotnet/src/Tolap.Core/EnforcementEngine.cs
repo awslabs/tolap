@@ -211,6 +211,24 @@ public static class EnforcementEngine
     }
 
     /// <summary>
+    /// Whether an <c>allowedFields</c> entry allows a record or payload key.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="FieldNameMatches"/> drops qualifiers, which is the right breadth for the
+    /// deny-direction rules (hidden, read-only, masked) but widens an allow-list:
+    /// <c>patients.name</c> allowed <c>encounters.name</c> (issue #36). So an entry allows a
+    /// key only if the matcher accepts it <em>and</em> the two are not qualified with
+    /// different objects, the same qualifier rule row filters use (spec section 4).
+    /// A qualified entry still allows a bare key, a bare entry allows every object's key, and
+    /// <c>patients.*</c> allows the object's own columns and bare keys but not
+    /// <c>encounters.id</c>. Glob characters in the entry's qualifier are literal for the
+    /// comparison, so <c>*.name</c> allows <c>name</c> and no qualified key. Public so the
+    /// HTTP wrapper's projection uses exactly this rule.
+    /// </remarks>
+    public static bool AllowedFieldMatches(string pattern, string key)
+        => FieldNameMatches(pattern, key) && !QualifiersConflict(pattern, key);
+
+    /// <summary>
     /// Applies field masking rules to a data record.
     /// </summary>
     /// <remarks>
@@ -371,7 +389,7 @@ public static class EnforcementEngine
         var projected = new Dictionary<string, object?>();
         foreach (var (key, value) in record)
         {
-            if (allowed.Any(a => FieldNameMatches(a, key)))
+            if (allowed.Any(a => AllowedFieldMatches(a, key)))
                 projected[key] = value;
         }
         return projected;
@@ -731,7 +749,10 @@ public static class EnforcementEngine
         return dot >= 0 ? AsciiLower(name[..dot]) : null;
     }
 
-    /// <summary>Whether a filter and a row key are both qualified, by different objects.</summary>
+    /// <summary>
+    /// Whether a policy field reference and a key are both qualified, by different objects.
+    /// Used by row filters (issue #32) and by <see cref="AllowedFieldMatches"/> (issue #36).
+    /// </summary>
     private static bool QualifiersConflict(string fieldName, string key)
     {
         var fieldQualifier = ObjectQualifier(fieldName);
@@ -1461,7 +1482,10 @@ public static class EnforcementEngine
     /// <para>
     /// Field names match with the bidirectional, case-insensitive, glob-aware matcher the
     /// read path uses (section 3.2), so a <c>readOnlyFields</c> entry of
-    /// <c>patients.created_at</c> blocks a payload key of <c>created_at</c>.
+    /// <c>patients.created_at</c> blocks a payload key of <c>created_at</c>. The
+    /// <c>allowedFields</c> check additionally refuses a key qualified with a different object
+    /// than the entry (<see cref="AllowedFieldMatches"/>), so <c>patients.name</c> does not make
+    /// <c>encounters.name</c> writable.
     /// </para>
     /// <para>
     /// The field is named in the reason. That discloses nothing: the caller supplied it. Row
@@ -1493,9 +1517,10 @@ public static class EnforcementEngine
             }
 
             // A null allow-list is unrestricted; an empty one denies every field (spec
-            // section 3), so this tests for null rather than for emptiness.
+            // section 3), so this tests for null rather than for emptiness. The allow
+            // direction does not let a qualified entry reach another object's key (issue #36).
             if (fieldRules.AllowedFields is not null
-                && !fieldRules.AllowedFields.Any(p => FieldNameMatches(p, name)))
+                && !fieldRules.AllowedFields.Any(p => AllowedFieldMatches(p, name)))
             {
                 return new AccessResult(false, $"field not in allowed set: {name}");
             }
