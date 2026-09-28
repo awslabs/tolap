@@ -1083,7 +1083,7 @@
       ]
     },
     {
-      "name": "matching marker skips a tag filter when a tag key is hidden",
+      "name": "matching marker skips allowedTags when a tag key is hidden",
       "policy": {
         "version": "1.0",
         "permissions": {
@@ -1142,6 +1142,179 @@
           "score": 0.9
         }
       ]
+    },
+    {
+      "name": "matching marker still applies deniedTags when allowedFields projects out other tag keys",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name",
+              "tags"
+            ]
+          },
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "tags": [
+            "secret"
+          ]
+        }
+      ],
+      "expected": [],
+      "notes": "allowedFields projects out labels and classification, but tags stays visible. A denylist never drops an untagged record, so it always re-runs."
+    },
+    {
+      "name": "matching marker still applies deniedTags when another tag key is hidden",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "classification"
+            ]
+          },
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "tags": [
+            "secret"
+          ]
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "matching marker does not read deniedTags from a masked tag key",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "maskedFields": [
+              {
+                "field": "tags",
+                "maskType": "full"
+              }
+            ]
+          },
+          "tagRules": {
+            "deniedTags": [
+              "secret"
+            ]
+          }
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "tags": "secret"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "tags": "secret"
+        }
+      ],
+      "notes": "A masked tag key holds the mask, not the tags, so the backstop does not read it."
+    },
+    {
+      "name": "matching marker still applies the similarity floor on a visible score key when allowedFields projects out the others",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name",
+              "score"
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "name": "a",
+          "score": 0.1
+        },
+        {
+          "name": "b",
+          "score": 0.9
+        }
+      ],
+      "expected": [
+        {
+          "name": "b",
+          "score": 0.9
+        }
+      ]
+    },
+    {
+      "name": "matching marker keeps a record with no visible score key when a score key is hidden",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "score"
+            ]
+          }
+        },
+        "limits": {
+          "minSimilarityScore": 0.5
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1
+        },
+        {
+          "id": 2,
+          "similarity": 0.1
+        }
+      ],
+      "expected": [
+        {
+          "id": 1
+        }
+      ],
+      "notes": "The data layer hid score, so an absent score proves nothing. similarity is still visible, so the floor applies to it."
     },
     {
       "name": "matching marker skips the size ceiling",

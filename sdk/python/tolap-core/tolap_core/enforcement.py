@@ -570,6 +570,35 @@ def apply_similarity_floor(results: list, policy: EffectivePolicy) -> list:
     return kept
 
 
+def _apply_visible_similarity_floor(results: list, policy: EffectivePolicy) -> list:
+    """The relevance floor over already-enforced output, per record.
+
+    Reads a record's score only from the score keys the field-level steps leave
+    untouched. A record carrying none of those keys is kept when some score key is
+    hidden, projected out or masked: its score may have been removed or masked, so
+    its absence proves nothing. When no score key is transformed this is
+    :func:`apply_similarity_floor` exactly, which drops an unscored record.
+    """
+    if not policy.limits or policy.limits.min_similarity_score is None:
+        return results
+    visible = tuple(key for key in _SCORE_KEYS if not _field_is_transformed(policy, key))
+    if len(visible) == len(_SCORE_KEYS):
+        return apply_similarity_floor(results, policy)
+
+    floor = policy.limits.min_similarity_score
+    kept = []
+    for record in results:
+        lowered = {str(k).lower() for k in record} if isinstance(record, Mapping) else set()
+        if not any(key in lowered for key in visible):
+            kept.append(record)
+            continue
+        score = _numeric_field(record, visible)
+        if score is None or score < floor:
+            continue
+        kept.append(record)
+    return kept
+
+
 def apply_object_size_ceiling(results: list, policy: EffectivePolicy) -> list:
     """Drop records larger than ``maxObjectSizeBytes`` (spec section 4, step 4).
 
@@ -708,8 +737,10 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
     ``EnforcedResult`` the context wrapper has verified). Runs, in pipeline order:
 
       1. row filters      each filter whose field is visible, unmasked and allowed
-      2. tag filters      when no tag key is hidden, projected out or masked
-      3. relevance floor  when no score key is hidden, projected out or masked
+      2. tag filters      deniedTags always, over the tag keys that are not masked;
+                          allowedTags when no tag key is hidden, projected out or masked
+      3. relevance floor  per record, over the score keys that are not hidden,
+                          projected out or masked
       5. hidden fields    removing an absent field is a no-op
       6. allowed fields   projecting a projection is a no-op
       8. result limit     truncating a truncated list is a no-op
@@ -719,9 +750,13 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
     backstop on data the data layer let through (a filter it could not push down, for
     example). It deliberately skips:
 
-      1-3. any of those filters whose field is hidden, projected out or masked -- the
-           field is missing from every record, so the filter fails closed and drops
-           all of them, or it holds the mask, so the filter compares against the mask;
+      1-3. any row filter, the allowedTags half of the tag filter, and any score key
+           whose field is hidden, projected out or masked -- the field is missing
+           from every record, so the filter fails closed and drops all of them, or it
+           holds the mask, so the filter compares against the mask. deniedTags is
+           never skipped (it cannot drop a record for a missing tag) and the floor
+           keeps a record with no visible score key only when a score key is
+           transformed (its score may have been removed);
       4.   the size ceiling -- a record's size changes once it is projected and masked;
       7.   masking -- ``hash`` is not idempotent, so a second pass hashes the hash.
 
@@ -742,10 +777,17 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
     filtered = [
         row for row in records if all(_row_passes_filter(row, rf) for rf in visible_filters)
     ]
-    if not any(_field_is_transformed(policy, key) for key in _TAG_KEYS):
-        filtered = filter_by_tags(filtered, policy)
-    if not any(_field_is_transformed(policy, key) for key in _SCORE_KEYS):
-        filtered = apply_similarity_floor(filtered, policy)
+    # deniedTags always re-runs: a denylist never drops an untagged record, so a tag
+    # key the field-level steps removed cannot make it over-drop. A masked tag key
+    # holds the mask, not the tags, so it is not read. allowedTags does drop an
+    # untagged record, so it runs only when every tag key is left untouched.
+    filtered = _filter_by_tag_rules(
+        filtered,
+        policy,
+        check_allowed=not any(_field_is_transformed(policy, key) for key in _TAG_KEYS),
+        masked_rules=_masking_rules(policy),
+    )
+    filtered = _apply_visible_similarity_floor(filtered, policy)
 
     stripped = strip_hidden_fields(filtered, policy)
     projected = project_allowed_fields(stripped, policy)
@@ -1112,35 +1154,44 @@ def _harvest_tag_values(value: Any, into: list[str]) -> None:
             _harvest_tag_values(item, into)
 
 
-def _collect_tags(node: Any, into: list[str]) -> None:
+def _collect_tags(
+    node: Any, into: list[str], masked_rules: list[MaskingRule] | None = None
+) -> None:
     """Collect tags from every recognized tag key anywhere in ``node``.
 
     Recurses into nested mappings and lists, matching keys with the same
     bidirectional, case-insensitive, glob-aware matcher masking and hidden-field
     removal use (spec section 4), so ``Tags`` and ``metadata.tags`` are found
     alongside ``tags``.
+
+    ``masked_rules`` skips every key a masking rule matches, value and all, as
+    masking replaces that value wholesale. Used over already-enforced output, where
+    such a key holds the mask rather than the tags.
     """
     if isinstance(node, Mapping):
         for key, value in node.items():
+            if masked_rules and _rule_for_key(masked_rules, str(key)) is not None:
+                continue
             if any(_field_name_matches(tag_key, str(key)) for tag_key in _TAG_KEYS):
                 _harvest_tag_values(value, into)
             # Walked whether or not the key matched: a matched key holding a
             # mapping may still nest a tag key of its own.
-            _collect_tags(value, into)
+            _collect_tags(value, into, masked_rules)
         return
     if isinstance(node, (list, tuple)):
         for item in node:
-            _collect_tags(item, into)
+            _collect_tags(item, into, masked_rules)
 
 
-def _extract_tags(record: Any) -> set[str]:
+def _extract_tags(record: Any, masked_rules: list[MaskingRule] | None = None) -> set[str]:
     """Every tag on a record, lower-cased, from any tag key at any depth.
 
     Lower-cased because tag values compare case-insensitively: ``deniedTags:
     ["Secret"]`` must drop a record tagged ``secret`` (connector spec section 7).
+    ``masked_rules`` skips masked keys, as in :func:`_collect_tags`.
     """
     collected: list[str] = []
-    _collect_tags(record, collected)
+    _collect_tags(record, collected, masked_rules)
     return {tag.lower() for tag in collected}
 
 
@@ -1159,20 +1210,37 @@ def filter_by_tags(results: list[dict], policy: EffectivePolicy) -> list[dict]:
     Tags are read by :func:`_extract_tags` and compared case-insensitively on
     both sides.
     """
+    return _filter_by_tag_rules(results, policy, check_allowed=True)
+
+
+def _filter_by_tag_rules(
+    results: list,
+    policy: EffectivePolicy,
+    *,
+    check_allowed: bool,
+    masked_rules: list[MaskingRule] | None = None,
+) -> list:
+    """:func:`filter_by_tags`, with the allowedTags half optional and masked keys skippable.
+
+    ``check_allowed=False`` applies deniedTags alone. ``masked_rules`` reads tags
+    only from keys no masking rule matches (see :func:`_collect_tags`).
+    """
     if not policy.object_rules or not policy.object_rules.tag_rules:
         return results
 
     tag_rules = policy.object_rules.tag_rules
     allowed_tags = (
         {tag.lower() for tag in tag_rules.allowed_tags}
-        if tag_rules.allowed_tags is not None
+        if check_allowed and tag_rules.allowed_tags is not None
         else None
     )
     denied_tags = {tag.lower() for tag in tag_rules.denied_tags} if tag_rules.denied_tags else None
+    if allowed_tags is None and not denied_tags:
+        return results
 
-    filtered: list[dict] = []
+    filtered: list = []
     for item in results:
-        tags = _extract_tags(item)
+        tags = _extract_tags(item, masked_rules)
 
         # Check denied tags first (takes precedence)
         if denied_tags and tags & denied_tags:

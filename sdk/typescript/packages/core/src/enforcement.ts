@@ -789,6 +789,31 @@ export function applySimilarityFloor<T>(
 }
 
 /**
+ * The similarity floor over already-enforced output, per record.
+ *
+ * Reads a record's score only from the score keys the field-level steps leave
+ * untouched. A record carrying none of those keys is kept when some score key is
+ * hidden, projected out or masked: its score may have been removed or masked, so
+ * its absence proves nothing. When no score key is transformed this is
+ * {@link applySimilarityFloor} exactly, which drops an unscored record.
+ */
+function applyVisibleSimilarityFloor<T>(results: T[], policy: EffectivePolicy): T[] {
+  const floor = policy.limits?.minSimilarityScore;
+  if (floor === undefined || floor === null) return results;
+  const visible = SCORE_KEYS.filter((key) => !fieldIsTransformed(policy, key));
+  if (visible.length === SCORE_KEYS.length) return applySimilarityFloor(results, policy);
+
+  return results.filter((record) => {
+    const present = isRecord(record)
+      ? new Set(Object.keys(record).map((key) => key.toLowerCase()))
+      : new Set<string>();
+    if (!visible.some((key) => present.has(key))) return true;
+    const score = numericField(record, visible);
+    return score !== undefined && score >= floor;
+  });
+}
+
+/**
  * Drop records larger than `maxObjectSizeBytes` (canonical spec §4, step 4).
  *
  * Fails closed on the same reasoning as the relevance floor: a record with no
@@ -962,8 +987,9 @@ function fieldIsTransformed(policy: EffectivePolicy, name: string): boolean {
  * `EnforcedResult` the context wrapper has verified). Runs, in pipeline order:
  *
  *   1. row filters        only those on a visible field (see below)
- *   2. tag filters        only if no tag key is transformed
- *   3. similarity floor   only if no score key is transformed
+ *   2. tag filters        deniedTags always, over the tag keys that are not
+ *                         masked; allowedTags only if no tag key is transformed
+ *   3. similarity floor   per record, over the score keys that are not transformed
  *   5. hidden fields      removing an absent field is a no-op
  *   6. allowed fields     projecting a projection is a no-op
  *   8. result limit       truncating a truncated list is a no-op
@@ -974,6 +1000,10 @@ function fieldIsTransformed(policy: EffectivePolicy, name: string): boolean {
  * filter would fail closed on every record, or compare against the mask. A filter
  * on a visible, unmasked, allowed field re-runs: over correctly enforced data it is
  * a no-op, and it drops any record the data layer let through.
+ *
+ * deniedTags is never skipped: it cannot drop a record for a missing tag. The
+ * similarity floor keeps a record with no visible score key only when some score
+ * key is transformed, since its score may have been removed or masked.
  *
  * Always skipped:
  *
@@ -1003,12 +1033,17 @@ export function applyIdempotentResultSteps(
   if (visibleFilters.length > 0) {
     out = out.filter((row) => visibleFilters.every((rf) => rowPassesFilter(row, rf)));
   }
-  if (!TAG_KEYS.some((key) => fieldIsTransformed(policy, key))) {
-    out = filterByTags(out, policy);
-  }
-  if (!SCORE_KEYS.some((key) => fieldIsTransformed(policy, key))) {
-    out = applySimilarityFloor(out, policy);
-  }
+  // deniedTags always re-runs: a denylist never drops an untagged record, so a tag
+  // key the field-level steps removed cannot make it over-drop. A masked tag key
+  // holds the mask, not the tags, so it is not read. allowedTags does drop an
+  // untagged record, so it runs only when every tag key is left untouched.
+  out = filterByTagRules(
+    out,
+    policy,
+    !TAG_KEYS.some((key) => fieldIsTransformed(policy, key)),
+    maskingRules(policy),
+  );
+  out = applyVisibleSimilarityFloor(out, policy);
   out = stripHiddenFields(out, policy);
   out = projectAllowedFields(out, policy);
   out = applyResultLimit(out, policy);
@@ -1502,20 +1537,27 @@ function harvestTagValues(value: unknown, into: string[]): void {
  * removal use (canonical spec §4), so `Tags` and `metadata.tags` are found
  * alongside `tags`.
  */
-function collectTags(node: unknown, into: string[]): void {
+function collectTags(
+  node: unknown,
+  into: string[],
+  maskedRules: MaskingRule[] = [],
+): void {
   if (Array.isArray(node)) {
-    for (const item of node) collectTags(item, into);
+    for (const item of node) collectTags(item, into, maskedRules);
     return;
   }
   if (!isRecord(node)) return;
 
   for (const key of Object.keys(node)) {
+    // A masked key holds the mask, not the tags: masking replaces its value
+    // wholesale, so neither it nor anything under it is read.
+    if (maskedRules.length > 0 && ruleForKey(maskedRules, key) !== undefined) continue;
     if (TAG_KEYS.some((tagKey) => fieldNameMatches(tagKey, key))) {
       harvestTagValues(node[key], into);
     }
     // Walked whether or not the key matched: a matched key holding a record may
     // still nest a tag key of its own.
-    collectTags(node[key], into);
+    collectTags(node[key], into, maskedRules);
   }
 }
 
@@ -1525,9 +1567,9 @@ function collectTags(node: unknown, into: string[]): void {
  * Lower-cased because tag values compare case-insensitively: `deniedTags:
  * ["Secret"]` must drop a record tagged `secret` (connector spec §7).
  */
-function extractTags(record: unknown): Set<string> {
+function extractTags(record: unknown, maskedRules: MaskingRule[] = []): Set<string> {
   const collected: string[] = [];
-  collectTags(record, collected);
+  collectTags(record, collected, maskedRules);
   return new Set(collected.map((tag) => tag.toLowerCase()));
 }
 
@@ -1550,14 +1592,32 @@ export function filterByTags(
   results: Array<Record<string, unknown>>,
   policy: EffectivePolicy,
 ): Array<Record<string, unknown>> {
+  return filterByTagRules(results, policy, true, []);
+}
+
+/**
+ * {@link filterByTags}, with the allowedTags half optional and masked keys skipped.
+ *
+ * `checkAllowed = false` applies deniedTags alone. `maskedRules` reads tags only
+ * from keys no masking rule matches (see {@link collectTags}).
+ */
+function filterByTagRules(
+  results: Array<Record<string, unknown>>,
+  policy: EffectivePolicy,
+  checkAllowed: boolean,
+  maskedRules: MaskingRule[],
+): Array<Record<string, unknown>> {
   const tagRules = policy.objectRules?.tagRules;
   if (!tagRules) return results;
 
-  const allowedTags = tagRules.allowedTags?.map((tag) => tag.toLowerCase());
+  const allowedTags = checkAllowed
+    ? tagRules.allowedTags?.map((tag) => tag.toLowerCase())
+    : undefined;
   const deniedTags = tagRules.deniedTags?.map((tag) => tag.toLowerCase());
+  if (!allowedTags && !deniedTags?.length) return results;
 
   return results.filter((result) => {
-    const tags = extractTags(result);
+    const tags = extractTags(result, maskedRules);
 
     // Denied tags take precedence: exclude if any tag is denied.
     if (deniedTags && deniedTags.some((tag) => tags.has(tag))) {

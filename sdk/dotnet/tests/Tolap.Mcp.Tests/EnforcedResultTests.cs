@@ -333,16 +333,19 @@ public class EnforcedResultTests
     [Fact]
     public async Task TheSqlPathStillEnforcesAFilterOnAVisibleField()
     {
+        // A record carrying a valid marker in one of its fields still fails the row
+        // filter on its own visible field: the marker does not vouch for the record.
         var context = MakeContext(PolicyA);
+        var once = EnforcedOnce(context, Raw());
         IReadOnlyList<Dictionary<string, object?>> rows =
         [
-            new() { ["id"] = 2L, ["region"] = "eu-west", ["email"] = "b@example.com" },
+            new() { ["id"] = 2L, ["region"] = "eu-west", ["p"] = EnforcedResult.For(once, context) },
         ];
 
         var output = await Wrapper().ExecuteSqlWithEnforcementAsync(
             context,
             new PreExecuteArgs("sql-query"),
-            "SELECT id, region, email FROM patients",
+            "SELECT id, region, p FROM patients",
             _ => Task.FromResult(rows));
 
         output.Should().BeEmpty();
