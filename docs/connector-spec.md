@@ -192,6 +192,8 @@ values are produced:
 | `endpoint not in allowed set` | `allowedEndpoints` specified and path did not match |
 | `method not allowed` | Method not in `allowedMethods` (or its read-only default) |
 | `method not allowed on a read-only policy` | A write method while `readOnly` is true |
+| `query references fields you do not have permission to access` | A SQL query references a hidden or non-allowed column (§5) |
+| `query uses a construct the pre-execution check cannot resolve: <construct>` | A SQL query uses a construct the pre-execution check does not resolve (§5) |
 
 **Precedence.** When a request fails more than one check, the reason is the first that
 denies, evaluated in this order: `query not permitted` → `endpoint is hidden` →
@@ -359,6 +361,19 @@ query touches; `validateFieldAccess` for every column it *references* — not me
 projects. A query naming a hidden column MUST be **refused, not filtered**: a `WHERE`,
 `ORDER BY`, `GROUP BY`, or `HAVING` over a hidden column lets its values determine which
 rows return even when the column never appears in the output.
+
+The SDKs' SQL prepare paths perform these checks over every table the query references.
+`FROM` and `JOIN` items, comma-joined tables and derived tables are resolved into an alias
+map, and each base table is checked with `validateAccess`. Every column reference, including
+one inside a function call, a join condition or a `WHERE`, `GROUP BY`, `HAVING` or `ORDER BY`,
+is resolved through that map and checked against the field rules of the table it belongs to.
+A bare column in a query over several tables is accepted only when an unqualified
+`allowedFields` entry or `*` permits it. The check reads a common subset of `SELECT` and
+refuses anything else rather than guessing (§3.3). The refused constructs include common table
+expressions, set operations, subqueries outside `FROM`, `LATERAL`, table-valued functions and
+statements other than `SELECT`. It is a lexical check, not a SQL engine. The database's own
+grants for the connection remain the outer bound on what a query can read. The shared fixture
+`fixtures/enforcement/sql-multi-table.json` pins the behaviour.
 
 **Post-execution:** the full pipeline over returned rows. Always runs; this is the boundary.
 

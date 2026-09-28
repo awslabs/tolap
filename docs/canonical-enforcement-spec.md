@@ -310,6 +310,12 @@ two modes against each other rather than by asserting each in isolation.
 `hiddenObjects` decision, and the refusal of a query naming a hidden or non-allowed field
 MUST all still apply. Declining to rewrite MUST NOT relax a denial.
 
+Those checks apply to every table a query references, not only the first. Each base table in
+`FROM`, `JOIN`, a comma join or a derived table is checked against `allowedObjects` and
+`hiddenObjects`, and each column reference is checked against the field rules of the table it
+resolves to ([connector-spec §5](connector-spec.md#read-path)). A query the check cannot
+resolve is refused, not passed through.
+
 In `postOnly` an SDK MUST report **every** row filter as unpushed, not merely the ones it
 could not express: none of them reached the database, and a caller checking whether filters
 were pushed before executing a large query would otherwise be told they were.
