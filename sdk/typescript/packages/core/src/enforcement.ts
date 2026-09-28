@@ -17,6 +17,7 @@ import {
   WriteOperation,
   maskRestrictiveness,
 } from "./types.js";
+import { unwrapEnforcedResults } from "./enforced-result.js";
 import { globToRegex } from "./resolution.js";
 
 // Re-exported so the pushdown sits next to the post-retrieval pass it complements.
@@ -910,6 +911,10 @@ export function applyResultPipeline(
   policy: EffectivePolicy,
   hashSalt?: string | Buffer,
 ): unknown {
+  // Never honours an EnforcedResult: only the context wrapper can check one against
+  // a verified signature. A marker left wrapped would hide its data from every step
+  // below, so it is unwrapped and its contents enforced in full.
+  result = unwrapEnforcedResults(result);
   const shape = classifyResultShape(result);
   if (shape === undefined) {
     throw new UnenforceableResultError(describeResultShape(result));
@@ -934,6 +939,51 @@ export function applyResultPipeline(
     // returning {} would imply the row existed but had no fields.
     return out.length > 0 ? out[0] : null;
   }
+  return out;
+}
+
+/**
+ * Re-apply only the pipeline steps that are safe to run twice.
+ *
+ * For a result a data layer already enforced under this exact policy (an
+ * `EnforcedResult` the context wrapper has verified). Runs, in pipeline order:
+ *
+ *   5. hidden fields    removing an absent field is a no-op
+ *   6. allowed fields   projecting a projection is a no-op
+ *   8. result limit     truncating a truncated list is a no-op
+ *
+ * and deliberately skips the rest:
+ *
+ *   1-4. row, tag, similarity and size filters: they would be re-evaluated over
+ *        output that was already projected and masked. A filter on a field the data
+ *        layer hid is missing on every record and fails closed, dropping all of
+ *        them; a filter on a masked field compares against the mask.
+ *   7.   masking: `hash` is not idempotent, so a second pass hashes the hash.
+ *
+ * The three steps kept are a backstop: if the data layer returned more than the
+ * policy permits, it is removed here regardless of the marker.
+ *
+ * @throws UnenforceableResultError for a shape the policy cannot be applied to.
+ */
+export function applyIdempotentResultSteps(
+  result: unknown,
+  policy: EffectivePolicy,
+): unknown {
+  const shape = classifyResultShape(result);
+  if (shape === undefined) {
+    throw new UnenforceableResultError(describeResultShape(result));
+  }
+
+  const records: Array<Record<string, unknown>> =
+    shape === "record"
+      ? [result as Record<string, unknown>]
+      : (result as Array<Record<string, unknown>>);
+
+  let out = stripHiddenFields(records, policy);
+  out = projectAllowedFields(out, policy);
+  out = applyResultLimit(out, policy);
+
+  if (shape === "record") return out.length > 0 ? out[0] : null;
   return out;
 }
 

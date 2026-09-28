@@ -271,6 +271,55 @@ returning a shape the policy could not be applied to, is the fail-open
 mid-migration only -- do not enable it in production. Return a plain object or an array of them
 and the shape is enforceable.
 
+### A result your data layer already enforced
+
+Some tools enforce at the data layer, for example an ORM adapter that runs `applyResultPipeline`
+as it materializes rows. Running the pipeline a second time in `postExecute` is not harmless:
+`hash` masking is not idempotent, so every hashed field comes back hashed twice. Such a tool
+declares the result enforced by returning `EnforcedResult`, bound to the signed context the call
+runs under:
+
+```typescript
+import { EnforcedResult } from "@aws/tolap-mcp";
+
+const rows = await wrapper.executeWithEnforcement(context, { toolName: "orm-query" }, async () => {
+  const enforced = await orm.fetchEnforced(args, context.effectivePolicy); // already ran the pipeline
+  return EnforcedResult.forContext(enforced, context);
+});
+```
+
+Only the idempotent steps run on an honoured marker: hidden fields are stripped again, the
+result is projected to `allowedFields` again, and `maxResults` still truncates it. They cost
+nothing on data that really is enforced and still stop a hidden field, an unlisted field or an
+over-long list the data layer let through. Masking is skipped because `hash` is not idempotent,
+and so are the record-dropping steps (row filters, tag filters, the relevance floor, the size
+ceiling), because re-running them over output whose filter fields the data layer already hid
+fails closed and drops every row. Pre-execution checks run as usual.
+
+A marker is honoured only if **all** of these hold. Otherwise it is logged (without the
+signatures), unwrapped, and its data runs the full pipeline, which is exactly what happened
+before this existed:
+
+- `enforceSignatures` is on and the context's signature verifies under the wrapper's signing
+  key. It is re-verified here because `postExecute` is public and can be reached without
+  `preExecute`.
+- The marker names that exact signature, compared in constant time. The signature covers the
+  whole envelope (policy, expiry, `jti`, purpose, delegation chain), so a marker from another
+  call, another user or a re-signed context does not match.
+- The marker's prototype is exactly `EnforcedResult.prototype`. A subclass, or a copy from a
+  second installed copy of the package, is treated as data.
+- No marker is nested inside the data. A marker anywhere else in a result (inside a list, in a
+  record field) is never honoured. The pipeline always unwraps it and enforces its contents, so
+  it cannot carry records past the hidden-field strip.
+
+A plain object (including anything `JSON.parse` produces) with `data` and `contextSignature`
+keys is ordinary data. Only a typed object built by your tool code counts, and nothing the model
+sends as arguments can become one. The registry wrapper (`SecureMcpToolWrapper`) never hands a
+tool a signed context, so it unwraps every marker and enforces it in full.
+
+The marker is an assertion by your code, not a proof. Return it only when the data layer really
+ran `applyResultPipeline` against this context's policy.
+
 ## Step 4: Use the Secure Tool Factory
 
 The SDK ships the factory: `SecureToolFactory` in `@aws/tolap-mcp`. It is the composition root

@@ -22,6 +22,34 @@ All notable changes to TOLAP are documented in this file. The format follows
   permission, and drop null and non-string entries.
 - Console editor for tool rules.
 
+**A tool can declare its result already enforced** ([#33](https://github.com/awslabs/tolap/issues/33)).
+A tool whose data layer already ran the result pipeline, such as an ORM adapter, used to get
+it run a second time by `execute_with_enforcement` / `executeWithEnforcement` /
+`ExecuteWithEnforcementAsync`. `hash` masking is not idempotent, so every hashed field came
+back hashed twice. Such a tool now returns a typed marker bound to the signed context:
+`EnforcedResult.for_context(data, context)` in Python, `EnforcedResult.forContext(data, context)`
+in TypeScript, and `EnforcedResult.For(data, context)` in .NET.
+
+- The marker is honoured only when signature enforcement is on, the context's signature
+  verifies, and the marker names that exact signature, compared in constant time. Any other
+  marker (from another context, tampered, empty, or nested inside the data) is logged
+  without the signatures, unwrapped, and its data runs the full pipeline, which is what
+  happened before this change.
+- An honoured marker still gets hidden-field removal, allowed-field projection and
+  `maxResults`, because those steps are idempotent. Masking and the record-dropping steps
+  are skipped. Pre-execution checks are unchanged.
+- A record with lookalike keys (`data`, `contextSignature`) is ordinary data. There is no
+  flag or argument that switches enforcement off.
+- The result pipeline (`apply_result_pipeline` / `applyResultPipeline` /
+  `ApplyResultPipeline`) and the registry wrappers never honour a marker. They unwrap
+  markers at any depth and enforce the contents, so a marker can never carry records past
+  the hidden-field strip or through `allowUnenforceableShapes` whole.
+- New helper: `apply_idempotent_result_steps` / `applyIdempotentResultSteps` /
+  `EnforcementEngine.ApplyIdempotentResultSteps`.
+- Shared fixture: [`fixtures/enforcement/already-enforced-results.json`](fixtures/enforcement/already-enforced-results.json).
+  The guides describe it under "A result your data layer already enforced", and the rules
+  are in [canonical-enforcement-spec.md §4](docs/canonical-enforcement-spec.md#already-enforced-results).
+
 ### Fixed
 
 **The SQL pre-checks validate every table a query references.** The SQL prepare paths

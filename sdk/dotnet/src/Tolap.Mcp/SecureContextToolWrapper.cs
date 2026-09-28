@@ -666,9 +666,18 @@ public sealed class SecureContextToolWrapper
     /// Applies the canonical post-execution pipeline to an arbitrary tool result.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A single record runs the identical pipeline (a get-by-id tool must not skip row
     /// or tag filters). Any other shape is denied unless the wrapper was configured with
     /// <see cref="SecureContextWrapperOptions.AllowUnenforceableShapes"/>.
+    /// </para>
+    /// <para>
+    /// A tool whose data layer already ran the pipeline returns
+    /// <see cref="EnforcedResult.For{T}"/> bound to this context. When the binding
+    /// verifies (see <see cref="HonoursEnforcedResult"/>) only the idempotent steps --
+    /// hidden fields, allowed fields, result limit -- are re-applied, so hashed fields are
+    /// not hashed twice. Any other marker is unwrapped and its data runs the full pipeline.
+    /// </para>
     /// </remarks>
     /// <exception cref="UnenforceableResultException">
     /// Thrown for a shape the policy cannot be applied to.
@@ -677,6 +686,21 @@ public sealed class SecureContextToolWrapper
     {
         var policy = context.Policies.FirstOrDefault()
                      ?? throw new InvalidOperationException("no policy in context");
+
+        if (result is EnforcedResult marker)
+        {
+            if (HonoursEnforcedResult(context, marker))
+            {
+                return PostExecuteAlreadyEnforced(marker.UntypedData, policy);
+            }
+
+            // Never names the signatures: they are credentials.
+            Trace.TraceWarning(
+                "TOLAP: the tool returned an EnforcedResult that is not bound to this call's "
+                + "verified context signature; applying the full result pipeline.");
+        }
+
+        result = EnforcedResult.Unwrap(result);
 
         if (EnforcementEngine.ClassifyResultShape(result) == ResultShape.Unenforceable
             && _options.AllowUnenforceableShapes)
@@ -689,6 +713,69 @@ public sealed class SecureContextToolWrapper
         }
 
         return EnforcementEngine.ApplyResultPipeline(result, policy, _options.HashSalt);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="marker"/> may skip the non-idempotent pipeline steps.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every condition must hold. Each failure falls back to the full pipeline, which is
+    /// always safe for data that is genuinely already enforced (at worst a hash is hashed
+    /// again), whereas honouring a bad marker would return data nothing enforced.
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><description>Signatures are enforced and the context signature verifies
+    ///   under the signing key. Without that the signature field is whatever the sender
+    ///   wrote, and matching it proves nothing. Re-verified here because
+    ///   <see cref="PostExecuteResult"/> is public and may be called without
+    ///   <see cref="PreExecute"/>.</description></item>
+    ///   <item><description>The marker names that exact signature, compared in constant
+    ///   time. The signature covers the whole envelope (policy, expiry, jti, purpose,
+    ///   delegation chain), so a marker from any other context does not
+    ///   match.</description></item>
+    ///   <item><description>No marker is nested inside. An inner marker's binding is not
+    ///   what was checked, so the whole result is enforced instead.</description></item>
+    /// </list>
+    /// <para>
+    /// No exact-type check is needed: <see cref="EnforcedResult"/> has a
+    /// <c>private protected</c> constructor and its one subclass is sealed.
+    /// </para>
+    /// </remarks>
+    private bool HonoursEnforcedResult(SecurityContext context, EnforcedResult marker)
+    {
+        if (!_options.EnforceSignatures || string.IsNullOrEmpty(context.Integrity?.Signature))
+            return false;
+        if (!SecurityContextSigner.Validate(context, _options.SigningKey))
+            return false;
+        if (!EnforcedResult.IsBoundTo(marker, context))
+            return false;
+        return !EnforcedResult.Contains(marker.UntypedData);
+    }
+
+    /// <summary>
+    /// The idempotent pipeline steps over data a verified marker carried.
+    /// </summary>
+    /// <remarks>
+    /// Null is returned as is: it is what the pipeline itself yields for a single record
+    /// it dropped, and it carries no data to enforce.
+    /// </remarks>
+    private object? PostExecuteAlreadyEnforced(object? data, EffectivePolicy policy)
+    {
+        if (data is null)
+            return null;
+
+        if (EnforcementEngine.ClassifyResultShape(data) == ResultShape.Unenforceable
+            && _options.AllowUnenforceableShapes)
+        {
+            Trace.TraceWarning(
+                "TOLAP enforcement bypassed: AllowUnenforceableShapes is enabled and the tool "
+                + $"returned {EnforcementEngine.DescribeResultShape(data)}, which is passed "
+                + "through unfiltered.");
+            return data;
+        }
+
+        return EnforcementEngine.ApplyIdempotentResultSteps(data, policy);
     }
 
     public async Task<IReadOnlyList<Dictionary<string, object?>>> ExecuteWithEnforcementAsync(
@@ -713,6 +800,11 @@ public sealed class SecureContextToolWrapper
     /// Thrown when the pre-execution check denies the call, or when the tool returns a
     /// shape the policy cannot be applied to.
     /// </exception>
+    /// <remarks>
+    /// A tool that enforces at its data layer returns
+    /// <c>EnforcedResult.For(data, context)</c>; see <see cref="PostExecuteResult"/>. The
+    /// pre-execution checks run either way.
+    /// </remarks>
     public async Task<object?> ExecuteWithEnforcementAsync(
         SecurityContext context,
         PreExecuteArgs args,

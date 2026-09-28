@@ -601,9 +601,17 @@ public static class EnforcementEngine
     /// <exception cref="UnenforceableResultException">
     /// Thrown for a shape the policy cannot be applied to.
     /// </exception>
+    /// <remarks>
+    /// Every <see cref="EnforcedResult"/> in <paramref name="result"/>, at any depth, is
+    /// replaced with the data it carries before the pipeline runs. This function never
+    /// honours a marker: deciding that one is bound to a verified context is the context
+    /// wrapper's job, and a marker left in place would carry its data past the
+    /// hidden-field strip and masking.
+    /// </remarks>
     public static object? ApplyResultPipeline(
         object? result, EffectivePolicy policy, string? hashSalt = null)
     {
+        result = EnforcedResult.Unwrap(result);
         var shape = ClassifyResultShape(result);
 
         if (shape == ResultShape.Unenforceable)
@@ -643,6 +651,12 @@ public static class EnforcementEngine
         EffectivePolicy policy,
         string? hashSalt = null)
     {
+        // A marker nested in a field is data to enforce, never a pass (see EnforcedResult).
+        if (EnforcedResult.Contains(records))
+        {
+            records = (IReadOnlyList<Dictionary<string, object?>>)EnforcedResult.Unwrap(records)!;
+        }
+
         var working = ApplyRowFilters(records, policy);
         working = FilterByTags(working, policy);
         working = ApplySimilarityFloor(working, policy);
@@ -651,6 +665,57 @@ public static class EnforcementEngine
         working = ProjectAllowedFields(working, policy);
         working = working.Select(r => ApplyFieldMasking(r, policy, hashSalt)).ToList();
         return ApplyResultLimit(working, policy);
+    }
+
+    /// <summary>
+    /// Re-applies only the idempotent pipeline steps to a result the tool's data layer
+    /// already enforced: hidden-field removal, allowed-field projection and the result
+    /// limit.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a tool returning an <see cref="EnforcedResult{T}"/> the context wrapper has
+    /// verified. The skipped steps are the ones a second pass gets wrong: <c>hash</c>
+    /// masking is not idempotent, and the record-dropping steps (row filters, tag filters,
+    /// similarity floor, size ceiling) re-evaluated over projected or masked output fail
+    /// closed on the fields the data layer already removed, dropping every row. The steps
+    /// kept are idempotent, so they cost nothing on data that is enforced and still stop
+    /// a hidden field, an unlisted field or an over-long list the data layer let through.
+    /// </para>
+    /// <para>
+    /// Not a substitute for <see cref="ApplyResultPipeline"/> on unenforced data.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="UnenforceableResultException">
+    /// Thrown for a shape the policy cannot be applied to.
+    /// </exception>
+    public static object? ApplyIdempotentResultSteps(object? result, EffectivePolicy policy)
+    {
+        var shape = ClassifyResultShape(result);
+
+        if (shape == ResultShape.Unenforceable)
+        {
+            throw new UnenforceableResultException(
+                "Access denied: tool result shape cannot be policy-enforced: "
+                + $"{DescribeResultShape(result)}. Return a Dictionary<string, object?> or an "
+                + "IReadOnlyList<Dictionary<string, object?>>, or opt out explicitly with "
+                + "AllowUnenforceableShapes = true.");
+        }
+
+        var records = shape == ResultShape.Record
+            ? new List<Dictionary<string, object?>> { ToRecord(result!) }
+            : ToRecordList(result!);
+
+        var working = StripHiddenFields(records, policy);
+        working = ProjectAllowedFields(working, policy);
+        var processed = ApplyResultLimit(working, policy);
+
+        if (shape == ResultShape.Record)
+        {
+            return processed.Count > 0 ? processed[0] : null;
+        }
+
+        return processed;
     }
 
     /// <summary>

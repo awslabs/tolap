@@ -5,9 +5,16 @@ from typing import Any, Callable
 
 from tolap_core.context import validate_context, validate_expiry
 from tolap_core.delegation import validate_delegation_chain
+from tolap_core.enforced_result import (
+    EnforcedResult,
+    contains_enforced_result,
+    is_bound_to,
+    unwrap_enforced_results,
+)
 from tolap_core.enforcement import (
     TARGET_ROW_UNKNOWN,
     AccessResult,
+    apply_idempotent_result_steps,
     apply_result_pipeline,
     classify_result_shape,
     describe_result_shape,
@@ -426,8 +433,26 @@ class SecureMcpToolWrapper:
         identical pipeline (a get-by-id tool must not skip row/tag filters).
         Any other shape is denied with PermissionError unless the wrapper was
         configured with allow_unenforceable_shapes.
+
+        A tool whose data layer already ran the pipeline returns
+        :class:`~tolap_core.enforced_result.EnforcedResult` bound to this context's
+        signature. When the binding verifies (see :meth:`_honours_enforced_result`)
+        only the idempotent steps -- hidden fields, allowed fields, result limit --
+        are re-applied, so hashed fields are not hashed twice. Any other marker is
+        unwrapped and its data runs the full pipeline.
         """
         policy = context.effective_policy
+
+        if isinstance(results, EnforcedResult):
+            if self._honours_enforced_result(context, results):
+                return self._post_execute_already_enforced(results.data, policy)
+            # Never names the signatures: they are credentials.
+            _LOG.warning(
+                "TOLAP: the tool returned an EnforcedResult that is not bound to this "
+                "call's verified context signature; applying the full result pipeline."
+            )
+
+        results = unwrap_enforced_results(results)
 
         if classify_result_shape(results) is None and self._options.allow_unenforceable_shapes:
             _LOG.warning(
@@ -438,6 +463,55 @@ class SecureMcpToolWrapper:
             return results
 
         return apply_result_pipeline(results, policy, self._options.hash_salt)
+
+    def _honours_enforced_result(self, context: SecurityContext, marker: EnforcedResult) -> bool:
+        """Whether ``marker`` may skip the non-idempotent pipeline steps.
+
+        Every condition must hold; each failure falls back to the full pipeline,
+        which is always safe for data that is genuinely already enforced -- at worst
+        a hash is hashed again -- whereas honouring a bad marker would return data
+        nothing enforced.
+
+        * exact type -- a subclass could override ``data`` or equality, so it is
+          treated as data like any other object;
+        * signatures enforced, and the context signature verifies under the
+          signing key -- without that the signature field is whatever the sender
+          wrote, and matching it proves nothing. Re-verified here because
+          ``post_execute`` is public and may be called without ``pre_execute``;
+        * the marker names that exact signature, compared in constant time. The
+          signature covers the whole envelope (policy, expiry, jti, purpose,
+          delegation chain), so a marker from any other context does not match;
+        * no marker nested inside -- an inner marker's binding is not what was
+          checked, so the whole result is enforced instead.
+        """
+        if type(marker) is not EnforcedResult:
+            return False
+        if not self._options.enforce_signatures or not context.signature:
+            return False
+        if not validate_context(context, self._options.signing_key):
+            return False
+        if not is_bound_to(marker, context):
+            return False
+        return not contains_enforced_result(marker.data)
+
+    def _post_execute_already_enforced(self, data: Any, policy: EffectivePolicy) -> Any:
+        """The idempotent pipeline steps over data a verified marker carried.
+
+        ``None`` is returned as is: it is what the pipeline itself yields for a single
+        record it dropped, and it carries no data to enforce.
+        """
+        if data is None:
+            return None
+
+        if classify_result_shape(data) is None and self._options.allow_unenforceable_shapes:
+            _LOG.warning(
+                "TOLAP enforcement bypassed: allow_unenforceable_shapes is enabled and the "
+                "tool returned %s, which is passed through unfiltered.",
+                describe_result_shape(data),
+            )
+            return data
+
+        return apply_idempotent_result_steps(data, policy)
 
     def execute_sql_with_enforcement(
         self,
@@ -519,6 +593,10 @@ class SecureMcpToolWrapper:
 
         Raises PermissionError if the pre-execution check fails or if the tool
         returns a shape the policy cannot be applied to.
+
+        A tool that enforces at its data layer returns
+        ``EnforcedResult.for_context(data, context)``; see :meth:`post_execute`.
+        Pre-execution checks, history recording and the judge run either way.
         """
         pre_result = self.pre_execute(
             context=context,

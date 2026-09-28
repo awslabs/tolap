@@ -14,6 +14,9 @@ export {
 } from "./types.js";
 
 export { SecureMcpToolWrapper } from "./wrapper.js";
+// Re-exported so a tool built against the MCP wrapper can declare its result already
+// enforced without importing @aws/tolap-core directly (issue #33).
+export { EnforcedResult } from "@aws/tolap-core";
 export {
   HeaderIdentityExtractor,
   IdentityExtractionError,

@@ -8,6 +8,7 @@
  */
 
 import {
+  unwrapEnforcedResults,
   validateAccess,
   validateToolAccess,
   validateToolAction,
@@ -256,6 +257,10 @@ export class SecureMcpToolWrapper {
     result: unknown,
     policy: EffectivePolicy,
   ): unknown {
+    // This wrapper never honours an EnforcedResult: `tool.execute` never sees a
+    // signed context, so no marker can be bound to one. Unwrapped before the shape
+    // check so `allowUnenforceableShapes` cannot pass a marker's data through whole.
+    result = unwrapEnforcedResults(result);
     if (
       classifyResultShape(result) === undefined &&
       this.options.allowUnenforceableShapes

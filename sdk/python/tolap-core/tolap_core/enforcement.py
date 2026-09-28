@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Any
 
+from tolap_core.enforced_result import unwrap_enforced_results
 from tolap_core.enums import FilterOperator, MaskType, WriteOperation, mask_restrictiveness
 from tolap_core.models import EffectivePolicy, MaskingRule, PurposeProfile, RowFilter
 
@@ -650,8 +651,14 @@ def apply_result_pipeline(
     than returned in masked form, and the limit runs last so filtering never
     yields fewer rows than maxResults when more qualifying rows exist.
 
+    An ``EnforcedResult`` anywhere in ``result`` is unwrapped first and its data
+    enforced in full: this function never honours a marker (only the context
+    wrapper can check one against a verified signature), and a marker left wrapped
+    would hide its data from every step below.
+
     Raises UnenforceableResultError for a shape the policy cannot be applied to.
     """
+    result = unwrap_enforced_results(result)
     shape = classify_result_shape(result)
     if shape is None:
         raise UnenforceableResultError(
@@ -674,6 +681,47 @@ def apply_result_pipeline(
     if shape is _RECORD_SHAPE:
         # A single record that the pipeline dropped is a denial, not an empty
         # record: returning {} would imply the row existed but had no fields.
+        return limited[0] if limited else None
+    return limited
+
+
+def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
+    """Re-apply only the pipeline steps that are safe to run twice.
+
+    For a result a data layer already enforced under this exact policy (an
+    ``EnforcedResult`` the context wrapper has verified). Runs, in pipeline order:
+
+      5. hidden fields    removing an absent field is a no-op
+      6. allowed fields   projecting a projection is a no-op
+      8. result limit     truncating a truncated list is a no-op
+
+    and deliberately skips the rest:
+
+      1-4. row, tag, similarity and size filters -- they would be re-evaluated over
+           output that was already projected and masked. A filter on a field the
+           data layer hid is missing on every record and fails closed, dropping all
+           of them; a filter on a masked field compares against the mask.
+      7.   masking -- ``hash`` is not idempotent, so a second pass hashes the hash.
+
+    The three steps kept are a backstop: if the data layer returned more than the
+    policy permits, it is removed here regardless of the marker.
+
+    Raises UnenforceableResultError for a shape the policy cannot be applied to.
+    """
+    shape = classify_result_shape(result)
+    if shape is None:
+        raise UnenforceableResultError(
+            "Access denied: tool result shape cannot be policy-enforced: "
+            f"{describe_result_shape(result)}. Return a record (dict) or a list of "
+            "records, or opt out explicitly with allow_unenforceable_shapes=True."
+        )
+
+    records = [result] if shape is _RECORD_SHAPE else list(result)
+    stripped = strip_hidden_fields(records, policy)
+    projected = project_allowed_fields(stripped, policy)
+    limited = apply_result_limit(projected, policy)
+
+    if shape is _RECORD_SHAPE:
         return limited[0] if limited else None
     return limited
 

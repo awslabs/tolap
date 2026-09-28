@@ -139,6 +139,11 @@ public sealed class SecureMcpToolWrapper
     /// </summary>
     private object? EnforceResult(object? result, EffectivePolicy policy)
     {
+        // This wrapper never hands the tool a signed context, so no marker can be bound to
+        // one: every EnforcedResult is unwrapped and enforced in full. Unwrapped before the
+        // shape check so AllowUnenforceableShapes cannot pass a marker's records through.
+        result = EnforcedResult.Unwrap(result);
+
         if (EnforcementEngine.ClassifyResultShape(result) == ResultShape.Unenforceable
             && _options.AllowUnenforceableShapes)
         {

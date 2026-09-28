@@ -273,6 +273,61 @@ returning a shape the policy could not be applied to, is the fail-open
 mid-migration only — do not enable it in production. Project to a `Dictionary<string, object?>`
 or a list of them before returning, and the shape is enforceable.
 
+### A result your data layer already enforced
+
+Some tools enforce at the data layer, for example an ORM adapter that runs
+`EnforcementEngine.ApplyResultPipeline` as it materializes rows. Running the pipeline a second
+time in `PostExecuteResult` is not harmless: `hash` masking is not idempotent, so every hashed
+field comes back hashed twice. Such a tool declares the result enforced by returning
+`EnforcedResult<T>`, bound to the signed context the call runs under:
+
+```csharp
+using Tolap.Core;
+
+var rows = await wrapper.ExecuteWithEnforcementAsync(
+    context, new PreExecuteArgs("orm-query"),
+    async () =>
+    {
+        var enforced = await orm.FetchEnforcedAsync(args, context.Policies[0]); // already ran the pipeline
+        return (object?)EnforcedResult.For(enforced, context);
+    });
+```
+
+The marker travels through the `Func<Task<object?>>` overload. The typed
+`IReadOnlyList<Dictionary<string, object?>>` overload has no room for one.
+
+Only the idempotent steps run on an honoured marker: hidden fields are stripped again, the
+result is projected to `AllowedFields` again, and `MaxResults` still truncates it. They cost
+nothing on data that really is enforced and still stop a hidden field, an unlisted field or an
+over-long list the data layer let through. Masking is skipped because `hash` is not idempotent,
+and so are the record-dropping steps (row filters, tag filters, the relevance floor, the size
+ceiling), because re-running them over output whose filter fields the data layer already hid
+fails closed and drops every row. Pre-execution checks run as usual.
+
+A marker is honoured only if **all** of these hold. Otherwise it is logged (without the
+signatures), unwrapped, and its data runs the full pipeline, which is exactly what happened
+before this existed:
+
+- `EnforceSignatures` is on and the context's signature verifies under the wrapper's signing
+  key. It is re-verified here because `PostExecuteResult` is public and can be reached without
+  `PreExecute`.
+- The marker names that exact signature, compared in constant time. The signature covers the
+  whole envelope (policy, expiry, `jti`, purpose, delegation chain), so a marker from another
+  call, another user or a re-signed context does not match.
+- The marker is an `EnforcedResult`. Its constructor is `private protected` and
+  `EnforcedResult<T>` is sealed, so no other type can pose as one.
+- No marker is nested inside the data. A marker anywhere else in a result (inside a list, in a
+  record field) is never honoured. The pipeline always unwraps it and enforces its contents, so
+  it cannot carry records past the hidden-field strip.
+
+A `Dictionary<string, object?>` with `data` and `contextSignature` keys is ordinary data. Only a
+typed object built by your tool code counts, and nothing the model sends as arguments can become
+one. The registry wrapper (`SecureMcpToolWrapper`) never hands a tool a signed context, so it
+unwraps every marker and enforces it in full.
+
+The marker is an assertion by your code, not a proof. Return it only when the data layer really
+ran `ApplyResultPipeline` against this context's policy.
+
 ## Step 4: Use the Secure Tool Factory
 
 The SDK ships the factory: `SecureToolFactory` in `Tolap.Mcp`. It is the composition root

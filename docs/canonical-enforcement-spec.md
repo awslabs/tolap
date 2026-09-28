@@ -498,6 +498,34 @@ accepted it in a write payload (issue #36). Pinned by
 `fixtures/enforcement/allowed-fields-qualified.json` and
 `fixtures/enforcement/validate-field-access-allowed-set.json`.
 
+### Already-enforced results
+
+A tool whose data layer already applied this pipeline MAY say so by returning the
+SDK's `EnforcedResult` marker (issue #33), bound to the signature of the signed
+context the call runs under. The context wrapper MUST honour the marker only when
+all of the following hold, and MUST otherwise unwrap it and apply the full pipeline
+to its data:
+
+1. signature enforcement is on, and the context's signature verifies under the
+   wrapper's signing key, re-checked at post-execution;
+2. the marker's signature equals the context's signature byte-for-byte, compared in
+   constant time;
+3. the marker is the SDK's own marker type, never a record key or a caller-supplied
+   flag;
+4. the marker's data contains no further marker.
+
+An honoured marker still gets the idempotent steps: hidden-field removal,
+allowed-field projection and the result limit. Masking is skipped, because `hash`
+is not idempotent. So are the record-dropping steps (row filters, tag filters, the
+relevance floor and the size ceiling), because re-evaluating them over output
+whose filter fields were already hidden fails closed and drops every row. The
+pipeline function itself never honours a marker. It replaces every marker, at any
+depth, with its data before step 1, so a marker cannot carry records past field
+removal. A wrapper that never hands the tool a signed context (the registry
+wrappers) has nothing to bind to, so it honours no marker.
+`fixtures/enforcement/already-enforced-results.json` is the shared conformance
+fixture.
+
 ## 5. Result shapes — fail closed
 
 | Shape                              | Behavior            |

@@ -1,0 +1,833 @@
+{
+  "description": "Already-enforced results: a tool opts out of re-enforcement by returning an EnforcedResult marker bound to the signed context's signature. Honoured only on an exact, constant-time signature match; the hidden-field strip, allowed-field projection and maxResults are still re-applied because they are idempotent.",
+  "action": "executeWithEnforcement",
+  "signingKey": "already-enforced-fixture-key-0123456789abcdef",
+  "context": {
+    "userId": "user-1",
+    "tenantId": "tenant-1"
+  },
+  "otherContext": {
+    "userId": "user-2",
+    "tenantId": "tenant-1"
+  },
+  "markers": {
+    "context": "EnforcedResult bound to the signature of the context the call runs under",
+    "otherContext": "EnforcedResult bound to the signature of a different context signed with the same key",
+    "tampered": "EnforcedResult bound to the context signature with its last character changed",
+    "empty": "EnforcedResult bound to an empty signature",
+    "null": "the tool returns the data unwrapped"
+  },
+  "substitutions": {
+    "$CONTEXT_SIGNATURE": "replace with the signature of the context the call runs under"
+  },
+  "cases": [
+    {
+      "name": "matching marker returns the enforced rows unchanged (no second hash)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ]
+    },
+    {
+      "name": "matching marker still enforces maxResults",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        },
+        {
+          "id": 3,
+          "region": "us-east",
+          "email": "898628e28890f937"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "notes": "Re-truncation is idempotent, so the limit is a backstop even when the marker is honoured."
+    },
+    {
+      "name": "matching marker still strips hidden fields the data layer left behind",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191",
+          "ssn": "000-00-0001"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ]
+    },
+    {
+      "name": "matching marker over a single record returns it unchanged",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": {
+        "id": 1,
+        "region": "us-east",
+        "email": "b36a83701f1c3191"
+      },
+      "expected": {
+        "id": 1,
+        "region": "us-east",
+        "email": "b36a83701f1c3191"
+      }
+    },
+    {
+      "name": "matching marker over null data returns null",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": null,
+      "expected": null,
+      "notes": "null is what the pipeline itself returns for a single record it dropped."
+    },
+    {
+      "name": "matching marker over an empty list returns an empty list",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "context",
+      "data": [],
+      "expected": []
+    },
+    {
+      "name": "marker bound to a different signed context re-applies the full pipeline",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "otherContext",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "765158dfef62c606"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "41a4fae4553afde1"
+        }
+      ]
+    },
+    {
+      "name": "marker with a tampered signature re-applies the full pipeline",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "tampered",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "765158dfef62c606"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "41a4fae4553afde1"
+        }
+      ]
+    },
+    {
+      "name": "marker with an empty signature re-applies the full pipeline",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "empty",
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "765158dfef62c606"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "41a4fae4553afde1"
+        }
+      ]
+    },
+    {
+      "name": "mismatched marker over a single record re-applies the full pipeline",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "tampered",
+      "data": {
+        "id": 1,
+        "region": "us-east",
+        "email": "b36a83701f1c3191"
+      },
+      "expected": {
+        "id": 1,
+        "region": "us-east",
+        "email": "765158dfef62c606"
+      }
+    },
+    {
+      "name": "mismatched marker over null data is denied as an unenforceable shape, as unmarked null is",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "tampered",
+      "data": null,
+      "expectDenied": true
+    },
+    {
+      "name": "mismatched marker over an empty list returns an empty list",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": "tampered",
+      "data": [],
+      "expected": []
+    },
+    {
+      "name": "unmarked result runs the full pipeline, as before (the double hash this feature exists to avoid)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": null,
+      "data": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "b36a83701f1c3191"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "2b3b2b9ce842ab8b"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "region": "us-east",
+          "email": "765158dfef62c606"
+        },
+        {
+          "id": 2,
+          "region": "us-east",
+          "email": "41a4fae4553afde1"
+        }
+      ]
+    },
+    {
+      "name": "a plain record with lookalike marker keys is data, not a marker",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "ssn"
+            ],
+            "maskedFields": [
+              {
+                "field": "email",
+                "maskType": "hash",
+                "parameters": {
+                  "algorithm": "sha256"
+                }
+              }
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "region",
+              "operator": "equals",
+              "value": "us-east"
+            }
+          ]
+        },
+        "limits": {
+          "maxResults": 2
+        }
+      },
+      "marker": null,
+      "data": {
+        "data": [
+          {
+            "id": 1,
+            "region": "us-east",
+            "email": "b36a83701f1c3191"
+          },
+          {
+            "id": 2,
+            "region": "us-east",
+            "email": "2b3b2b9ce842ab8b"
+          }
+        ],
+        "contextSignature": "$CONTEXT_SIGNATURE",
+        "policySignature": "$CONTEXT_SIGNATURE",
+        "__tolapEnforced": true
+      },
+      "expected": null,
+      "notes": "The record has no region field, so the region row filter fails closed and drops it: null. Were the keys honoured, the enforced rows would be returned instead."
+    },
+    {
+      "name": "matching marker keeps rows whose filter field the data layer already hid",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "status"
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "status",
+              "operator": "equals",
+              "value": "active"
+            }
+          ]
+        }
+      },
+      "marker": "context",
+      "data": [
+        {
+          "id": 1,
+          "name": "Ada"
+        },
+        {
+          "id": 2,
+          "name": "Grace"
+        }
+      ],
+      "expected": [
+        {
+          "id": 1,
+          "name": "Ada"
+        },
+        {
+          "id": 2,
+          "name": "Grace"
+        }
+      ]
+    },
+    {
+      "name": "mismatched marker re-runs the row filter over hidden output and drops every row",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "status"
+            ]
+          },
+          "rowFilters": [
+            {
+              "field": "status",
+              "operator": "equals",
+              "value": "active"
+            }
+          ]
+        }
+      },
+      "marker": "tampered",
+      "data": [
+        {
+          "id": 1,
+          "name": "Ada"
+        },
+        {
+          "id": 2,
+          "name": "Grace"
+        }
+      ],
+      "expected": [],
+      "notes": "Demonstrates why record-dropping steps are skipped for an honoured marker: a filter on a field the data layer already removed fails closed."
+    }
+  ],
+  "notes": "Hashes are unsalted sha256, first 16 hex characters. Expected values for mismatched markers are the pipeline applied a second time to already-enforced data."
+}

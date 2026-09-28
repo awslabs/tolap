@@ -11,8 +11,14 @@
  */
 
 import {
+  EnforcedResult,
+  applyIdempotentResultSteps,
   applyResultPipeline,
   classifyResultShape,
+  containsEnforcedResult,
+  isBoundTo,
+  isExactEnforcedResult,
+  unwrapEnforcedResults,
   describeResultShape,
   validateAccess,
   validateDelegationChain,
@@ -468,6 +474,12 @@ export class SecureContextToolWrapper {
    * Accepts a single record or an array of records; a single record runs the
    * identical pipeline. Any other shape is denied unless the wrapper was
    * configured with `allowUnenforceableShapes`.
+   *
+   * A tool whose data layer already ran the pipeline returns
+   * `EnforcedResult.forContext(data, context)`. When the binding verifies (see
+   * {@link honoursEnforcedResult}) only the idempotent steps (hidden fields,
+   * allowed fields, result limit) are re-applied, so hashed fields are not hashed
+   * twice. Any other marker is unwrapped and its data runs the full pipeline.
    */
   postExecute(
     context: SecurityContext,
@@ -475,6 +487,18 @@ export class SecureContextToolWrapper {
   ): Array<Record<string, unknown>>;
   postExecute(context: SecurityContext, results: unknown): unknown;
   postExecute(context: SecurityContext, results: unknown): unknown {
+    if (results instanceof EnforcedResult) {
+      if (this.honoursEnforcedResult(context, results)) {
+        return this.postExecuteAlreadyEnforced(context, results.data);
+      }
+      // Never names the signatures: they are credentials.
+      console.warn(
+        "TOLAP: the tool returned an EnforcedResult that is not bound to this " +
+          "call's verified context signature; applying the full result pipeline.",
+      );
+    }
+    results = unwrapEnforcedResults(results);
+
     if (
       classifyResultShape(results) === undefined &&
       this.options.allowUnenforceableShapes
@@ -491,6 +515,57 @@ export class SecureContextToolWrapper {
       context.effectivePolicy,
       this.options.hashSalt,
     );
+  }
+
+  /**
+   * Whether `marker` may skip the non-idempotent pipeline steps.
+   *
+   * Every condition must hold; each failure falls back to the full pipeline, which
+   * is always safe for data that is genuinely already enforced (at worst a hash is
+   * hashed again), whereas honouring a bad marker would return data nothing
+   * enforced.
+   *
+   * - exact class: a subclass could override `data` with a getter, so it is data;
+   * - signatures enforced, and the context signature verifies under the signing
+   *   key. Without that the signature field is whatever the sender wrote. Checked
+   *   again here because `postExecute` is public and reachable without
+   *   `preExecute`;
+   * - the marker names that exact signature, compared in constant time. The
+   *   signature covers the whole envelope (policy, expiry, jti, purpose,
+   *   delegation chain), so a marker from any other context does not match;
+   * - no marker nested inside: an inner marker's binding is not what was checked.
+   */
+  private honoursEnforcedResult(
+    context: SecurityContext,
+    marker: EnforcedResult,
+  ): boolean {
+    if (!isExactEnforcedResult(marker)) return false;
+    if (!this.options.enforceSignatures || !context.signature) return false;
+    if (!validateContext(context, this.options.signingKey)) return false;
+    if (!isBoundTo(marker, context)) return false;
+    return !containsEnforcedResult(marker.data);
+  }
+
+  /**
+   * The idempotent pipeline steps over data a verified marker carried.
+   *
+   * `null`/`undefined` is returned as `null`: it is what the pipeline itself
+   * yields for a single record it dropped, and it carries no data to enforce.
+   */
+  private postExecuteAlreadyEnforced(context: SecurityContext, data: unknown): unknown {
+    if (data === null || data === undefined) return null;
+    if (
+      classifyResultShape(data) === undefined &&
+      this.options.allowUnenforceableShapes
+    ) {
+      console.warn(
+        "TOLAP enforcement bypassed: allowUnenforceableShapes is enabled and " +
+          `the tool returned ${describeResultShape(data)}, which is passed ` +
+          "through unfiltered.",
+      );
+      return data;
+    }
+    return applyIdempotentResultSteps(data, context.effectivePolicy);
   }
 
   /**
@@ -607,11 +682,28 @@ export class SecureContextToolWrapper {
     return this.postExecute(context, await run(prep.query));
   }
 
+  /**
+   * Pre-execute, run the tool, post-execute.
+   *
+   * A tool that enforces at its data layer returns
+   * `EnforcedResult.forContext(data, context)`; see {@link postExecute}.
+   * Pre-execution checks run either way.
+   */
   async executeWithEnforcement(
     context: SecurityContext,
     args: PreExecuteArgs,
     toolFn: () => Promise<Array<Record<string, unknown>>> | Array<Record<string, unknown>>,
-  ): Promise<Array<Record<string, unknown>>> {
+  ): Promise<Array<Record<string, unknown>>>;
+  async executeWithEnforcement(
+    context: SecurityContext,
+    args: PreExecuteArgs,
+    toolFn: () => Promise<unknown> | unknown,
+  ): Promise<unknown>;
+  async executeWithEnforcement(
+    context: SecurityContext,
+    args: PreExecuteArgs,
+    toolFn: () => Promise<unknown> | unknown,
+  ): Promise<unknown> {
     const pre = this.preExecute(context, args);
     if (!pre.allowed) {
       /* c8 ignore next 3 -- the `?? "unknown reason"` fallback is unreachable:

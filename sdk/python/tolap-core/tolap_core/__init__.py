@@ -96,6 +96,7 @@ from tolap_core.enforcement import (
     apply_object_size_ceiling,
     apply_result_limit,
     apply_similarity_floor,
+    apply_idempotent_result_steps,
     apply_result_pipeline,
     apply_row_filters,
     classify_result_shape,
@@ -139,6 +140,7 @@ from tolap_core.judge import (
     judge_history_window,
 )
 from tolap_core.history import ToolCallHistory
+from tolap_core.enforced_result import EnforcedResult
 
 __all__ = [
     # Enums
@@ -209,11 +211,13 @@ __all__ = [
     "AccessResult",
     "FieldAccessResult",
     "UnenforceableResultError",
+    "EnforcedResult",
     "apply_field_masking",
     "apply_masking",
     "apply_object_size_ceiling",
     "apply_result_limit",
     "apply_similarity_floor",
+    "apply_idempotent_result_steps",
     "apply_result_pipeline",
     "apply_row_filters",
     "classify_result_shape",
