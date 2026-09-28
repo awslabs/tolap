@@ -137,7 +137,8 @@ public static class SqlQueryReferences
     // Words reserved on every modelled engine, so never a bare column: skipped wherever
     // they appear in an expression. Every other word is a keyword only in a position
     // (see Analysis.Bare); anywhere else it is checked as a column. TRUE and FALSE are
-    // reserved everywhere but SQL Server, where a column so named is taken for the literal.
+    // reserved everywhere but SQL Server, where they are identifiers: there each is also
+    // checked against the hidden fields, so a hidden column so named is not read unchecked.
     private static readonly HashSet<string> Reserved = Words(
         "AND CASE CROSS CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER "
         + "DISTINCT ELSE FALSE FOR FROM GROUP HAVING IN INNER IS JOIN LEFT LIKE NOT NULL "
@@ -185,6 +186,12 @@ public static class SqlQueryReferences
         + "ROWS RANGE GROUPS PRECISION VARYING INTEGER INT "
         + "SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND "
         + "HOUR_SECOND HOUR_MINUTE DAY_MICROSECOND DAY_SECOND DAY_MINUTE DAY_HOUR YEAR_MONTH");
+
+    // Words an engine reads as an operator on the operand that follows: MySQL's BINARY
+    // ssn, INTERVAL year HOUR, PostgreSQL's VARIADIC arr. Checked as a column when bare,
+    // since they are not reserved, but never taken to end an operand: the word after one
+    // is the operand, so it is checked rather than skipped or taken for an alias.
+    private static readonly HashSet<string> PrefixOperators = Words("BINARY INTERVAL VARIADIC");
 
     // Operators written as a word after NOT: a NOT LIKE b, a NOT BETWEEN b AND c.
     private static readonly HashSet<string> NegatedOperators =
@@ -1377,6 +1384,23 @@ public static class SqlQueryReferences
             }
         }
 
+        // Refuse col if it may name a hidden column of any table in scope.
+        private void CheckHidden(string col, Scope scope)
+        {
+            foreach (var r in scope.Refs)
+            {
+                var name = r.Table is null ? col : $"{r.Table}.{col}";
+                if (_hidden.Any(h => EnforcementEngine.FieldNameMatches(h, name)))
+                {
+                    throw new FieldDeniedException();
+                }
+            }
+            if (scope.Refs.Count == 0 && _hidden.Any(h => EnforcementEngine.FieldNameMatches(h, col)))
+            {
+                throw new FieldDeniedException();
+            }
+        }
+
         // t.*: hidden fields are stripped after the fetch, but an allow-list must fit. The
         // fetched keys are bare column names, so an entry qualified with another table
         // would admit this table's column of the same name. The star is allowed only when
@@ -1536,6 +1560,10 @@ public static class SqlQueryReferences
                 }
                 if (Reserved.Contains(word))
                 {
+                    if (word is "TRUE" or "FALSE")
+                    {
+                        CheckHidden(tok.Text, scope);
+                    }
                     if (ReservedValues.Contains(word))
                     {
                         ends.Add(i);
@@ -1638,7 +1666,10 @@ public static class SqlQueryReferences
                 }
             }
             CheckBare(tok.Text, scope);
-            ends.Add(i);
+            if (!(tok.Kind == TokKind.Word && PrefixOperators.Contains(tok.Upper)))
+            {
+                ends.Add(i);
+            }
             return i + 1;
         }
 
@@ -1767,6 +1798,7 @@ public static class SqlQueryReferences
                     prev.Kind is TokKind.QIdent or TokKind.String or TokKind.Number or TokKind.Param
                     || prev.IsPunct(')')
                     || (prev.Kind == TokKind.Word
+                        && !PrefixOperators.Contains(prev.Upper)
                         && (!Keywords.Contains(prev.Upper) || OperandEndKeywords.Contains(prev.Upper)));
                 if (prevEndsOperand)
                 {
@@ -1776,8 +1808,15 @@ public static class SqlQueryReferences
             return (b, null);
         }
 
+        // Whether tok may be an alias written without AS. A unit or operator word is not:
+        // in dob + INTERVAL year HOUR the HOUR is the interval's unit, and taking it for
+        // an alias would leave year unread.
         private static bool CanBeOutputAlias(Tok tok) =>
-            tok.Kind == TokKind.QIdent || (tok.Kind == TokKind.Word && !Keywords.Contains(tok.Upper));
+            tok.Kind == TokKind.QIdent
+            || (tok.Kind == TokKind.Word
+                && !Keywords.Contains(tok.Upper)
+                && !AfterOperand.Contains(tok.Upper)
+                && !DateParts.Contains(tok.Upper));
 
         private void CheckSelectList(int start, int end, Scope scope)
         {
@@ -1792,7 +1831,14 @@ public static class SqlQueryReferences
                     }
                     continue;
                 }
-                var (exprEnd, _) = EntryAlias(a, b);
+                var (exprEnd, alias) = EntryAlias(a, b);
+                if (alias is not null && exprEnd == b - 1)
+                {
+                    // An alias without AS cannot be told from an unknown prefix operator
+                    // applied to a column (MySQL's BINARY ssn), so it must not name a
+                    // hidden column. An allow-list is not applied: the alias is not read.
+                    CheckHidden(alias.Text, scope);
+                }
                 Walk(a, exprEnd, scope);
             }
         }

@@ -154,7 +154,8 @@ _OPERAND_END_KEYWORDS = frozenset(("END", "NULL", "TRUE", "FALSE", "UNKNOWN"))
 # Words reserved on every modelled engine, so never a bare column: skipped wherever
 # they appear in an expression. Every other word is a keyword only in a position
 # (see _Analysis._bare); anywhere else it is checked as a column. TRUE and FALSE are
-# reserved everywhere but SQL Server, where a column so named is taken for the literal.
+# reserved everywhere but SQL Server, where they are identifiers: there each is also
+# checked against the hidden fields, so a hidden column so named is not read unchecked.
 _RESERVED = frozenset(
     (
         "AND CASE CROSS CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER "
@@ -208,6 +209,12 @@ _AFTER_OPERAND = frozenset(
         "HOUR_SECOND HOUR_MINUTE DAY_MICROSECOND DAY_SECOND DAY_MINUTE DAY_HOUR YEAR_MONTH"
     ).split()
 )
+
+# Words an engine reads as an operator on the operand that follows: MySQL's BINARY
+# ssn, INTERVAL year HOUR, PostgreSQL's VARIADIC arr. Checked as a column when bare,
+# since they are not reserved, but never taken to end an operand: the word after one
+# is the operand, so it is checked rather than skipped or taken for an alias.
+_PREFIX_OPERATORS = frozenset(("BINARY", "INTERVAL", "VARIADIC"))
 
 # Operators written as a word after NOT: a NOT LIKE b, a NOT BETWEEN b AND c.
 _NEGATED_OPERATORS = frozenset(
@@ -898,6 +905,15 @@ class _Analysis:
         else:
             self._check_unresolved(col)
 
+    def _check_hidden(self, col: str, scope: _Scope) -> None:
+        """Refuse ``col`` if it may name a hidden column of any table in scope."""
+        for ref in scope.refs:
+            name = col if ref.table is None else f"{ref.table}.{col}"
+            if any(_field_name_matches(h, name) for h in self.hidden):
+                raise _FieldDenied()
+        if not scope.refs and any(_field_name_matches(h, col) for h in self.hidden):
+            raise _FieldDenied()
+
     def _check_star(self, ref: _Ref) -> None:
         """``t.*``: hidden fields are stripped after the fetch, but an allow-list must fit.
 
@@ -1024,6 +1040,8 @@ class _Analysis:
                     return i + 2
                 return i + 1
             if word in _RESERVED:
+                if word in ("TRUE", "FALSE"):
+                    self._check_hidden(tok.text, scope)
                 if word in _RESERVED_VALUES:
                     ends.add(i)
                 return i + 1
@@ -1099,7 +1117,8 @@ class _Analysis:
             if word == "GROUPING" and following is not None and following.is_word("SETS"):
                 return i + 1
         self._check_bare(tok.text, scope)
-        ends.add(i)
+        if not (tok.kind == "word" and tok.upper in _PREFIX_OPERATORS):
+            ends.add(i)
         return i + 1
 
     def _frame_word(self, i: int, following: _Tok | None, prev: _Tok | None) -> bool:
@@ -1196,6 +1215,7 @@ class _Analysis:
                 or prev.is_punct(")")
                 or (
                     prev.kind == "word"
+                    and prev.upper not in _PREFIX_OPERATORS
                     and (prev.upper not in _KEYWORDS or prev.upper in _OPERAND_END_KEYWORDS)
                 )
             )
@@ -1205,7 +1225,19 @@ class _Analysis:
 
     @staticmethod
     def _can_be_output_alias(tok: _Tok) -> bool:
-        return tok.kind == "qident" or (tok.kind == "word" and tok.upper not in _KEYWORDS)
+        """Whether ``tok`` may be an alias written without AS.
+
+        A unit or operator word is not: in ``dob + INTERVAL year HOUR`` the HOUR is
+        the interval's unit, and taking it for an alias would leave ``year`` unread.
+        """
+        if tok.kind == "qident":
+            return True
+        return (
+            tok.kind == "word"
+            and tok.upper not in _KEYWORDS
+            and tok.upper not in _AFTER_OPERAND
+            and tok.upper not in _DATE_PARTS
+        )
 
     def _check_select_list(self, start: int, end: int, scope: _Scope) -> None:
         body = self._skip_modifiers(start, end, scope)
@@ -1214,7 +1246,12 @@ class _Analysis:
                 for ref in scope.refs:
                     self._check_star(ref)
                 continue
-            expr_end, _alias = self._entry_alias(a, b)
+            expr_end, alias = self._entry_alias(a, b)
+            if alias is not None and expr_end == b - 1:
+                # An alias without AS cannot be told from an unknown prefix operator
+                # applied to a column (MySQL's BINARY ssn), so it must not name a
+                # hidden column. An allow-list is not applied: the alias is not read.
+                self._check_hidden(alias.text, scope)
             self._walk(a, expr_end, scope)
 
     def _select_aliases(self, start: int, end: int) -> set[str]:

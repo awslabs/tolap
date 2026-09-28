@@ -21,7 +21,7 @@ public class SqlMultiTableTests
     private const string SigningKey = "sql-multi-table-signing-key";
 
     /// <summary>Asserted so that a dropped case fails the suite rather than shrinking it quietly.</summary>
-    private const int ExpectedCaseCount = 322;
+    private const int ExpectedCaseCount = 343;
 
     private static readonly Lazy<IReadOnlyList<JsonElement>> s_cases = new(LoadCases);
 

@@ -9243,6 +9243,513 @@
       "expected": {
         "allowed": true
       }
+    },
+    {
+      "name": "hidden-column-after-binary-select-item",
+      "query": "SELECT id, BINARY ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-after-binary-sole-select-item",
+      "query": "SELECT BINARY ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-after-variadic-select-item",
+      "query": "SELECT id, VARIADIC ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-after-unlisted-prefix-word",
+      "query": "SELECT id, PRIOR ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-interval-mysql-unit-alias",
+      "query": "SELECT dob + INTERVAL year HOUR FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.year"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-interval-mysql-compound-unit-alias",
+      "query": "SELECT dob + INTERVAL year DAY_HOUR FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.year"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-interval-where-form",
+      "query": "SELECT id FROM patients WHERE dob + INTERVAL year HOUR > dob",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.year"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-binary-cast-escape",
+      "query": "SELECT id FROM patients WHERE BINARY escape = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.escape"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-binary-cast-filter",
+      "query": "SELECT id FROM patients WHERE BINARY filter = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.filter"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-binary-cast-following",
+      "query": "SELECT id FROM patients WHERE BINARY following = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.following"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-binary-cast-varying",
+      "query": "SELECT id FROM patients WHERE BINARY varying = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.varying"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-binary-cast-year",
+      "query": "SELECT id FROM patients WHERE BINARY year = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.year"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "implicit-alias-naming-hidden-column",
+      "query": "SELECT name ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-true",
+      "query": "SELECT TRUE FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.true"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-false-in-where",
+      "query": "SELECT id FROM patients WHERE false = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.false"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "implicit-alias-allowed",
+      "query": "SELECT name n FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "binary-cast-on-visible-column-allowed",
+      "query": "SELECT id FROM patients WHERE BINARY name = 'x'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "interval-literal-select-item-allowed",
+      "query": "SELECT dob + INTERVAL 1 HOUR FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "true-literal-allowed",
+      "query": "SELECT id FROM patients WHERE (id > 1) = TRUE",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "interval-unit-not-taken-for-alias",
+      "query": "SELECT dob + INTERVAL 1 HOUR FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.hour"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "allowlist-column-after-binary-checked",
+      "query": "SELECT BINARY ssn FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.binary"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
     }
   ]
 }

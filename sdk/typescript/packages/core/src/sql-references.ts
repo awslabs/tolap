@@ -138,7 +138,8 @@ const OPERAND_END_KEYWORDS = words("END NULL TRUE FALSE UNKNOWN");
 // Words reserved on every modelled engine, so never a bare column: skipped wherever
 // they appear in an expression. Every other word is a keyword only in a position
 // (see Analysis.bare); anywhere else it is checked as a column. TRUE and FALSE are
-// reserved everywhere but SQL Server, where a column so named is taken for the literal.
+// reserved everywhere but SQL Server, where they are identifiers: there each is also
+// checked against the hidden fields, so a hidden column so named is not read unchecked.
 const RESERVED = words(
   "AND CASE CROSS CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER " +
     "DISTINCT ELSE FALSE FOR FROM GROUP HAVING IN INNER IS JOIN LEFT LIKE NOT NULL " +
@@ -188,6 +189,12 @@ const AFTER_OPERAND = words(
     "SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND " +
     "HOUR_SECOND HOUR_MINUTE DAY_MICROSECOND DAY_SECOND DAY_MINUTE DAY_HOUR YEAR_MONTH",
 );
+
+// Words an engine reads as an operator on the operand that follows: MySQL's BINARY
+// ssn, INTERVAL year HOUR, PostgreSQL's VARIADIC arr. Checked as a column when bare,
+// since they are not reserved, but never taken to end an operand: the word after one
+// is the operand, so it is checked rather than skipped or taken for an alias.
+const PREFIX_OPERATORS = words("BINARY INTERVAL VARIADIC");
 
 // Operators written as a word after NOT: a NOT LIKE b, a NOT BETWEEN b AND c.
 const NEGATED_OPERATORS = words("LIKE ILIKE REGEXP RLIKE GLOB SIMILAR BETWEEN IN");
@@ -941,6 +948,17 @@ class Analysis {
     else this.checkUnresolved(col);
   }
 
+  /** Refuse `col` if it may name a hidden column of any table in scope. */
+  private checkHidden(col: string, scope: Scope): void {
+    for (const ref of scope.refs) {
+      const name = ref.table === null ? col : `${ref.table}.${col}`;
+      if (this.hidden.some((h) => fieldNameMatches(h, name))) throw new FieldDenied();
+    }
+    if (scope.refs.length === 0 && this.hidden.some((h) => fieldNameMatches(h, col))) {
+      throw new FieldDenied();
+    }
+  }
+
   /**
    * `t.*`: hidden fields are stripped after the fetch, but an allow-list must fit.
    *
@@ -1086,6 +1104,7 @@ class Analysis {
         return i + 1;
       }
       if (RESERVED.has(word)) {
+        if (word === "TRUE" || word === "FALSE") this.checkHidden(tok.text, scope);
         if (RESERVED_VALUES.has(word)) ends.add(i);
         return i + 1;
       }
@@ -1180,7 +1199,7 @@ class Analysis {
       }
     }
     this.checkBare(tok.text, scope);
-    ends.add(i);
+    if (!(tok.kind === "word" && PREFIX_OPERATORS.has(tok.upper))) ends.add(i);
     return i + 1;
   }
 
@@ -1302,14 +1321,28 @@ class Analysis {
         prev.kind === "number" ||
         prev.kind === "param" ||
         prev.isPunct(")") ||
-        (prev.kind === "word" && (!KEYWORDS.has(prev.upper) || OPERAND_END_KEYWORDS.has(prev.upper)));
+        (prev.kind === "word" &&
+          !PREFIX_OPERATORS.has(prev.upper) &&
+          (!KEYWORDS.has(prev.upper) || OPERAND_END_KEYWORDS.has(prev.upper)));
       if (prevEndsOperand) return [b - 1, toks[b - 1]!];
     }
     return [b, undefined];
   }
 
+  /**
+   * Whether `tok` may be an alias written without AS.
+   *
+   * A unit or operator word is not: in `dob + INTERVAL year HOUR` the HOUR is the
+   * interval's unit, and taking it for an alias would leave `year` unread.
+   */
   private static canBeOutputAlias(tok: Tok): boolean {
-    return tok.kind === "qident" || (tok.kind === "word" && !KEYWORDS.has(tok.upper));
+    if (tok.kind === "qident") return true;
+    return (
+      tok.kind === "word" &&
+      !KEYWORDS.has(tok.upper) &&
+      !AFTER_OPERAND.has(tok.upper) &&
+      !DATE_PARTS.has(tok.upper)
+    );
   }
 
   private checkSelectList(start: number, end: number, scope: Scope): void {
@@ -1319,7 +1352,13 @@ class Analysis {
         for (const ref of scope.refs) this.checkStar(ref);
         continue;
       }
-      const [exprEnd] = this.entryAlias(a, b);
+      const [exprEnd, alias] = this.entryAlias(a, b);
+      if (alias !== undefined && exprEnd === b - 1) {
+        // An alias without AS cannot be told from an unknown prefix operator
+        // applied to a column (MySQL's BINARY ssn), so it must not name a
+        // hidden column. An allow-list is not applied: the alias is not read.
+        this.checkHidden(alias.text, scope);
+      }
       this.walk(a, exprEnd, scope);
     }
   }
