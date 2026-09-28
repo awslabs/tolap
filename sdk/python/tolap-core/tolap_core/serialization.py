@@ -33,6 +33,7 @@ from tolap_core.models import (
     PurposeProfile,
     RowFilter,
     TagRules,
+    ToolRules,
 )
 
 
@@ -198,6 +199,31 @@ def _deser_endpoint_rules(data: dict | None) -> EndpointRules | None:
     )
 
 
+def _deser_tool_name_list(value: Any, key: str) -> list[str] | None:
+    # A bare string must not be iterated into characters, and a non-string entry must not
+    # reach the matcher. JSON null is absent (section 3).
+    if value is None:
+        return None
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ValueError(f"toolRules.{key} must be an array of strings")
+    return list(value)
+
+
+def _deser_tool_rules(data: Any) -> ToolRules | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ValueError("toolRules must be an object")
+    # _convert_keys_to_snake recurses, so when this is reached through _deser_object_rules
+    # the keys are already snake_case; converting again is a no-op, exactly as for
+    # _deser_endpoint_rules.
+    d = _convert_keys_to_snake(data)
+    return ToolRules(
+        allowed_tools=_deser_tool_name_list(d.get("allowed_tools"), "allowedTools"),
+        hidden_tools=_deser_tool_name_list(d.get("hidden_tools"), "hiddenTools"),
+    )
+
+
 def _deser_object_rules(data: dict | None) -> ObjectRules | None:
     if data is None:
         return None
@@ -209,6 +235,7 @@ def _deser_object_rules(data: dict | None) -> ObjectRules | None:
         row_filters=[_deser_row_filter(r) for r in d["row_filters"]] if d.get("row_filters") else None,
         tag_rules=_deser_tag_rules(d.get("tag_rules")),
         endpoint_rules=_deser_endpoint_rules(d.get("endpoint_rules")),
+        tool_rules=_deser_tool_rules(d.get("tool_rules")),
     )
 
 

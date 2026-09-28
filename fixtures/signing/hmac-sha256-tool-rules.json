@@ -1,0 +1,36 @@
+{
+  "description": "HMAC-SHA256 over a context whose policy carries objectRules.toolRules, with a non-empty allowedTools and an EMPTY hiddenTools. Pins that toolRules sits inside the signed policies[] bytes, that its keys sort like every other object, and that hiddenTools [] is signed as [] -- not dropped, not null. All languages must produce identical bytes and signatures.",
+  "algorithm": "hmac-sha256",
+  "secretKey": "tolap-test-signing-key-2026",
+  "payload": {
+    "version": "1.0",
+    "userId": "user-001",
+    "tenantId": "tenant-midwest-health",
+    "sourceConnectionId": "ds-postgres-healthcare",
+    "resolvedAt": "2026-01-15T10:00:00Z",
+    "expiresAt": "2026-01-15T11:00:00Z",
+    "sourceProfiles": [
+      "healthcare-analyst-db"
+    ],
+    "permissions": {
+      "canQuery": true,
+      "readOnly": true
+    },
+    "objectRules": {
+      "allowedObjects": [
+        "patients"
+      ],
+      "toolRules": {
+        "allowedTools": [
+          "query_patients",
+          "count_patients"
+        ],
+        "hiddenTools": []
+      }
+    }
+  },
+  "canonicalPayload": "{\"expiresAt\":\"2026-01-15T11:00:00Z\",\"issuedAt\":\"2026-01-15T10:00:00Z\",\"policies\":[{\"expiresAt\":\"2026-01-15T11:00:00Z\",\"objectRules\":{\"allowedObjects\":[\"patients\"],\"toolRules\":{\"allowedTools\":[\"query_patients\",\"count_patients\"],\"hiddenTools\":[]}},\"permissions\":{\"canQuery\":true,\"readOnly\":true},\"resolvedAt\":\"2026-01-15T10:00:00Z\",\"sourceConnectionId\":\"ds-postgres-healthcare\",\"sourceProfiles\":[\"healthcare-analyst-db\"],\"tenantId\":\"tenant-midwest-health\",\"userId\":\"user-001\",\"version\":\"1.0\"}],\"tenantId\":\"tenant-midwest-health\",\"userId\":\"user-001\",\"version\":\"1.0\"}",
+  "expectedSignature": "5e03btrOvmw9B7bh4EyMcWPW37kHOFbU83akZnKtJy4=",
+  "expectedSignatureSha512": "3VFZJTH0d/jO1toQAosmZNoNjMsqRqFYHl+j2LzapRg5vmc2XiFiESh3SjxM9DnhGFl6TnXnr5bTlFbfS8EhGw==",
+  "notes": "Generated from hmac-sha256-known-answer.json by adding objectRules to the policy; every other byte is identical, so a diff against that fixture's canonicalPayload shows only the objectRules member. The expected values were computed with a sorted-key compact JSON encoder and HMAC outside every SDK, so they are an independent oracle, not a recording of one SDK's output. allowedTools order is preserved (arrays are never sorted)."
+}

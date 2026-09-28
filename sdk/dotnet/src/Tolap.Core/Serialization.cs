@@ -388,3 +388,44 @@ public sealed class MaskingParametersJsonConverter : JsonConverter<MaskingParame
         writer.WriteEndObject();
     }
 }
+
+/// <summary>
+/// Strict reader for tool-name lists (<see cref="ToolRules"/>). A JSON <c>null</c> for the whole
+/// list stays absent (the serializer never calls this converter for it), but a <c>null</c>
+/// element or any non-string element throws <see cref="JsonException"/>, matching the Python
+/// and TypeScript SDKs. Writing is unchanged: a plain array of strings, so canonical bytes and
+/// signatures are identical to the default <c>string[]</c> serialization.
+/// </summary>
+internal sealed class StrictStringArrayJsonConverter : JsonConverter<string[]>
+{
+    public override string[] Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartArray)
+            throw new JsonException("Expected an array of strings");
+
+        var items = new List<string>();
+        while (reader.Read())
+        {
+            switch (reader.TokenType)
+            {
+                case JsonTokenType.EndArray:
+                    return items.ToArray();
+                case JsonTokenType.String:
+                    items.Add(reader.GetString()!);
+                    break;
+                default:
+                    throw new JsonException("Expected only string elements");
+            }
+        }
+
+        throw new JsonException("Unexpected end of JSON for string array");
+    }
+
+    public override void Write(Utf8JsonWriter writer, string[] value, JsonSerializerOptions options)
+    {
+        writer.WriteStartArray();
+        foreach (var item in value)
+            writer.WriteStringValue(item);
+        writer.WriteEndArray();
+    }
+}

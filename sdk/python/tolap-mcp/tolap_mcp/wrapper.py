@@ -14,6 +14,7 @@ from tolap_core.enforcement import (
     validate_access,
     validate_endpoint,
     validate_field_access,
+    validate_tool_access,
     validate_write,
 )
 from tolap_core.enums import WriteOperation
@@ -69,6 +70,17 @@ def warn_if_enforcement_disabled(options: SecureMcpServerOptions) -> None:
         "TOLAP enforcement is NOT fully enforcing: %s. This is intended for "
         "migration only and MUST NOT be used in production.",
         "; ".join(disabled),
+    )
+
+
+def _grants_any_operation(policy: EffectivePolicy) -> bool:
+    """Whether the policy grants at least one of can_query, can_insert, can_update, can_delete."""
+    perms = policy.permissions
+    return (
+        perms.can_query is True
+        or perms.can_insert is True
+        or perms.can_update is True
+        or perms.can_delete is True
     )
 
 
@@ -158,6 +170,46 @@ class SecureMcpToolWrapper:
 
         return self._apply_judge(context, rendered)
 
+    def filter_tools(self, context: SecurityContext, tool_names: list[str]) -> list[str]:
+        """The names from ``tool_names``, in order, that ``pre_execute`` would not refuse by name.
+
+        For a ``tools/list`` handler: an agent that never sees a tool is not steered into
+        trying it. Applies the static ``allowed_tools`` list, the policy's ``toolRules`` and
+        the purpose action check -- the checks that depend on the tool name alone. It does not
+        apply ``can_query`` or object, field or endpoint rules (they depend on call arguments),
+        record history or consult the judge: listing is not a call, and listing a tool is not
+        permission to call it -- ``pre_execute`` re-checks every call.
+
+        Returns a new list; ``tool_names`` is not modified. Duplicates are kept. An invalid
+        context lists nothing, and so does a policy that grants none of ``can_query``,
+        ``can_insert``, ``can_update`` and ``can_delete``. Null and non-string entries are
+        dropped.
+        """
+        if not self.validate_security_context(context).allowed:
+            return []
+        policy = context.effective_policy
+        # A policy that grants no operation at all makes every tool uncallable, so it lists
+        # nothing. Any one grant is enough to list: can_query is not required, so a
+        # write-only policy still lists its write tools (subject to toolRules).
+        if not _grants_any_operation(policy):
+            return []
+        allowed: list[str] = []
+        for name in tool_names:
+            # A null or non-string entry is never a tool name, whether or not the policy
+            # carries toolRules (whose grammar would reject it anyway).
+            if not isinstance(name, str):
+                continue
+            if self._options.allowed_tools and name not in self._options.allowed_tools:
+                continue
+            if not validate_tool_access(name, policy).allowed:
+                continue
+            if not validate_tool_action(
+                policy, name, self._options.tool_action_categories
+            ).allowed:
+                continue
+            allowed.append(name)
+        return allowed
+
     def _apply_judge(self, context: SecurityContext, rendered: str) -> AccessResult:
         """Consult the judge for a call the deterministic checks already allowed."""
         assert self._options.judge is not None  # guarded by the caller
@@ -200,9 +252,12 @@ class SecureMcpToolWrapper:
 
         policy = context.effective_policy
 
-        # Check if tool is in allowed list
-        if self._options.allowed_tools and tool_name not in self._options.allowed_tools:
-            return AccessResult(allowed=False, reason="tool not in allowed list")
+        # The static list, then per-identity tool gating (section 16). Before can_query:
+        # "you may not call this tool" is the more specific answer when both would deny, and
+        # a gate after the read gate would never be reached under a write-only policy.
+        tool_result = self._tool_gate(policy, tool_name)
+        if not tool_result.allowed:
+            return tool_result
 
         # Check query permission
         if not policy.permissions.can_query:
@@ -242,6 +297,17 @@ class SecureMcpToolWrapper:
 
         return AccessResult(allowed=True)
 
+    def _tool_gate(self, policy: EffectivePolicy, tool_name: str) -> AccessResult:
+        """The checks that depend on the tool name alone: the static list, then toolRules.
+
+        Shared by :meth:`pre_execute` and :meth:`pre_write` so the two paths give the same
+        denial reasons. Consults no permission flag -- in particular not ``can_query``, so a
+        write-only policy can pass it.
+        """
+        if self._options.allowed_tools and tool_name not in self._options.allowed_tools:
+            return AccessResult(allowed=False, reason="tool not in allowed list")
+        return validate_tool_access(tool_name, policy)
+
     def pre_write(
         self,
         context: SecurityContext,
@@ -252,6 +318,7 @@ class SecureMcpToolWrapper:
         target_row: Any = TARGET_ROW_UNKNOWN,
         resource_fields: list[str] | None = None,
         full_replace: bool = False,
+        tool_name: str | None = None,
     ) -> AccessResult:
         """Validate a write before it is issued (connector spec section 4).
 
@@ -269,10 +336,23 @@ class SecureMcpToolWrapper:
 
         A permitted write that returns data is a *read* of that data: pass the
         response through :meth:`post_execute` (section 4.5).
+
+        ``tool_name`` is the MCP tool the write is made for. When it is given, the tool gate
+        :meth:`pre_execute` uses runs first, after the context check and before any write
+        check: the static ``allowed_tools`` list, then the policy's ``toolRules``
+        (section 16), with the same denial reasons. It does not require ``can_query``, so it
+        works under a write-only policy. When it is omitted, no tool-name check runs and the
+        behaviour is unchanged -- which also means a ``hiddenTools`` entry is not enforced on
+        that call, so pass it for every write tool.
         """
         ctx_result = self.validate_security_context(context)
         if not ctx_result.allowed:
             return ctx_result
+
+        if tool_name is not None:
+            tool_result = self._tool_gate(context.effective_policy, tool_name)
+            if not tool_result.allowed:
+                return tool_result
 
         return validate_write(
             operation,
@@ -296,6 +376,7 @@ class SecureMcpToolWrapper:
         target_row: Any = TARGET_ROW_UNKNOWN,
         resource_fields: list[str] | None = None,
         full_replace: bool = False,
+        tool_name: str | None = None,
     ) -> Any:
         """Validate a write, issue it, and enforce the policy on anything it returns.
 
@@ -308,6 +389,8 @@ class SecureMcpToolWrapper:
         does not appear at all. A write that returns nothing (``None``) is passed
         through as-is rather than being denied as an unenforceable shape: there is
         no data to enforce a policy over.
+
+        ``tool_name``, when given, runs the tool gate first; see :meth:`pre_write`.
         """
         pre_result = self.pre_write(
             context,
@@ -317,6 +400,7 @@ class SecureMcpToolWrapper:
             target_row=target_row,
             resource_fields=resource_fields,
             full_replace=full_replace,
+            tool_name=tool_name,
         )
         if not pre_result.allowed:
             raise PermissionError(f"Access denied: {pre_result.reason}")

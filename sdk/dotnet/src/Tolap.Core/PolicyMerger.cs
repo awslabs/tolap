@@ -16,6 +16,8 @@ public static class PolicyMerger
     ///   three write permissions false, readOnly true).
     /// - AllowedObjects/AllowedFields/AllowedEndpoints/AllowedMethods/AllowedTags: Intersection (null = unrestricted)
     /// - HiddenObjects/HiddenFields/HiddenEndpoints/DeniedTags/ReadOnlyFields: Union
+    /// - ToolRules: allowedTools Intersection (null = unrestricted, disjoint lists give []),
+    ///   hiddenTools Union (retaining []); a toolRules with neither list is dropped
     /// - RowFilters: Concatenate all
     /// - MaskedFields: Group by field name, pick the most restrictive by disclosure
     ///   ranking (null &gt; redact &gt; full &gt; hash &gt; partial); an unknown mask type
@@ -189,10 +191,12 @@ public static class PolicyMerger
         var rowFilters = ConcatenateRowFilters(policies);
         var tagRules = MergeTagRules(policies);
         var endpointRules = MergeEndpointRules(policies);
+        var toolRules = MergeToolRules(policies);
 
         // Only return ObjectRules if there is at least one non-null property
         if (allowedObjects is null && hiddenObjects is null && fieldRules is null
-            && rowFilters is null && tagRules is null && endpointRules is null)
+            && rowFilters is null && tagRules is null && endpointRules is null
+            && toolRules is null)
             return null;
 
         return new ObjectRules(
@@ -201,7 +205,8 @@ public static class PolicyMerger
             FieldRules: fieldRules,
             RowFilters: rowFilters,
             TagRules: tagRules,
-            EndpointRules: endpointRules);
+            EndpointRules: endpointRules,
+            ToolRules: toolRules);
     }
 
     private static FieldRules? MergeFieldRules(IReadOnlyList<PolicyDefinition> policies)
@@ -305,6 +310,24 @@ public static class PolicyMerger
             AllowedEndpoints: allowedEndpoints,
             HiddenEndpoints: hiddenEndpoints,
             AllowedMethods: allowedMethods);
+    }
+
+    private static ToolRules? MergeToolRules(IReadOnlyList<PolicyDefinition> policies)
+    {
+        var hasAnyToolRules = policies.Any(p => p.ObjectRules?.ToolRules is not null);
+        if (!hasAnyToolRules)
+            return null;
+
+        var allowedTools = IntersectNullable(policies
+            .Select(p => p.ObjectRules?.ToolRules?.AllowedTools));
+
+        var hiddenTools = UnionNullable(policies
+            .Select(p => p.ObjectRules?.ToolRules?.HiddenTools));
+
+        if (allowedTools is null && hiddenTools is null)
+            return null;
+
+        return new ToolRules(AllowedTools: allowedTools, HiddenTools: hiddenTools);
     }
 
     private static PolicyLimits? MergeLimits(IReadOnlyList<PolicyDefinition> policies)

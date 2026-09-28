@@ -29,6 +29,7 @@ import userEvent from "@testing-library/user-event";
 import {
   api as realApi,
   ApiError,
+  SOURCE_CATEGORIES,
   type PolicyDefinition,
   type PolicyVersion,
   type SourceManifest,
@@ -1019,6 +1020,311 @@ describe("category gating", () => {
     expect(hint.textContent).toMatch(/1 object\(s\)/);
     expect(hint.textContent).toMatch(/3 field\(s\)/);
     expect(hint.textContent).toMatch(/filtered to this category/);
+  });
+});
+
+// -- Tool rules (objectRules.toolRules) -------------------------------------
+
+/**
+ * The Tool rules editor (matrix rows G3-G6).
+ *
+ * Two hazards specific to this rule group. First, a *present* `toolRules` -- even `{}` --
+ * switches on the tool-name grammar in every MCP wrapper, so clearing both lists has to
+ * remove the key, not leave an empty object. Second, `allowedTools: []` denies every tool,
+ * so editing the hidden list must never drop a sibling `[]`.
+ */
+describe("tool rules", () => {
+  const withTools = (
+    toolRules: NonNullable<PolicyDefinition["objectRules"]>["toolRules"],
+  ): PolicyDefinition => ({
+    ...ANALYST,
+    objectRules: { ...ANALYST.objectRules, toolRules },
+  });
+
+  it("G3: removes the toolRules key once the last allowed tool is removed and nothing is hidden", async () => {
+    await renderPage({ policy: withTools({ allowedTools: ["query_patients"] }) });
+    await openPolicy();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove query_patients from Allowed tools" }),
+    );
+    await save();
+
+    const rules = savedPolicy().objectRules!;
+    // Not `{}`: an empty toolRules object would still turn the grammar check on.
+    expect(Object.keys(rules)).not.toContain("toolRules");
+    // And the rest of objectRules is untouched.
+    expect(rules).toEqual(ANALYST.objectRules);
+  });
+
+  it("G3: removes the toolRules key once the last hidden tool is removed and nothing is allowed", async () => {
+    await renderPage({ policy: withTools({ hiddenTools: ["export_segment_csv"] }) });
+    await openPolicy();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove export_segment_csv from Hidden tools" }),
+    );
+    await save();
+
+    expect(Object.keys(savedPolicy().objectRules!)).not.toContain("toolRules");
+  });
+
+  it("G3: keeps toolRules, minus the cleared key, while the other list still has names", async () => {
+    await renderPage({
+      policy: withTools({
+        allowedTools: ["query_patients"],
+        hiddenTools: ["export_segment_csv"],
+      }),
+    });
+    await openPolicy();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove query_patients from Allowed tools" }),
+    );
+    await save();
+
+    const toolRules = savedPolicy().objectRules?.toolRules;
+    expect(toolRules).toEqual({ hiddenTools: ["export_segment_csv"] });
+    expect(Object.keys(toolRules!)).toEqual(["hiddenTools"]);
+  });
+
+  it("G4: editing hiddenTools keeps allowedTools", async () => {
+    await renderPage({ policy: withTools({ allowedTools: ["query_patients", "list_cohorts"] }) });
+    await openPolicy();
+
+    await userEvent.type(
+      screen.getByLabelText("Add to Hidden tools"),
+      "export_segment_csv{Enter}",
+    );
+    await save();
+
+    expect(savedPolicy().objectRules?.toolRules).toEqual({
+      allowedTools: ["query_patients", "list_cohorts"],
+      hiddenTools: ["export_segment_csv"],
+    });
+  });
+
+  it("G4: editing hiddenTools keeps an allowedTools of [], which denies every tool", async () => {
+    // The section 3 case: turning `[]` into absent here would change deny-all into
+    // unrestricted without the author touching the allowed list.
+    await renderPage({ policy: withTools({ allowedTools: [] }) });
+    await openPolicy();
+
+    await userEvent.type(
+      screen.getByLabelText("Add to Hidden tools"),
+      "export_segment_csv{Enter}",
+    );
+    await save();
+
+    const toolRules = savedPolicy().objectRules?.toolRules;
+    expect(toolRules?.allowedTools).toEqual([]);
+    expect(Object.keys(toolRules!)).toContain("allowedTools");
+    expect(toolRules?.hiddenTools).toEqual(["export_segment_csv"]);
+  });
+
+  it("G4: editing allowedTools keeps hiddenTools", async () => {
+    await renderPage({ policy: withTools({ hiddenTools: ["export_segment_csv"] }) });
+    await openPolicy();
+
+    await userEvent.type(screen.getByLabelText("Add to Allowed tools"), "query_patients{Enter}");
+    await save();
+
+    expect(savedPolicy().objectRules?.toolRules).toEqual({
+      allowedTools: ["query_patients"],
+      hiddenTools: ["export_segment_csv"],
+    });
+  });
+
+  it("does not disturb the other object rules when a tool rule changes", async () => {
+    const policy: PolicyDefinition = {
+      ...ANALYST,
+      objectRules: {
+        allowedObjects: [],
+        fieldRules: { allowedFields: [], hiddenFields: ["ssn_number"] },
+        endpointRules: { allowedEndpoints: [] },
+        tagRules: { allowedTags: [] },
+        rowFilters: [{ field: "region", operator: "equals", value: "us-east" }],
+      },
+    };
+    await renderPage({ policy });
+    await openPolicy();
+
+    await userEvent.type(screen.getByLabelText("Add to Hidden tools"), "kill_switch{Enter}");
+    await save();
+
+    const { toolRules, ...rest } = savedPolicy().objectRules!;
+    expect(toolRules).toEqual({ hiddenTools: ["kill_switch"] });
+    expect(rest).toEqual(policy.objectRules);
+  });
+
+  it("G5: saves a policy without toolRules, opened and saved unchanged, with no toolRules key", async () => {
+    // The fieldset is always rendered, so this is the check that rendering it does not
+    // write anything. Asserted with a source of every category selected in turn, because
+    // the section is shown for all of them.
+    for (const manifest of ALL_SOURCES) {
+      vi.clearAllMocks();
+      cleanup();
+      await renderPage();
+      await openPolicy();
+      await selectSource(manifest);
+      await save();
+
+      const sent = savedPolicy();
+      expect(Object.keys(sent.objectRules!), manifest.category).not.toContain("toolRules");
+      expect(sent, manifest.category).toEqual(ANALYST);
+    }
+  });
+
+  it("G5: saves a policy with no objectRules at all without adding objectRules", async () => {
+    await renderPage({
+      policy: { version: "1.0", name: "reader", permissions: { canQuery: true } },
+    });
+    await openPolicy("reader");
+    await save();
+
+    expect(savedPolicy()).toEqual({
+      version: "1.0",
+      name: "reader",
+      permissions: { canQuery: true },
+    });
+  });
+
+  it("G6: renders the Tool rules fieldset for every source category", async () => {
+    // Iterates SOURCE_CATEGORIES, the constant `SourceManifest.category` is typed from, so a
+    // new category added there without a fixture here fails rather than going untested.
+    // The fieldset itself reads no category: it is rendered unconditionally.
+    expect(SOURCE_CATEGORIES.length).toBeGreaterThan(0);
+    for (const category of SOURCE_CATEGORIES) {
+      const manifest = ALL_SOURCES.find((source) => source.category === category);
+      expect(manifest, `no fixture source for category ${category}`).toBeDefined();
+
+      cleanup();
+      vi.clearAllMocks();
+      await renderPage();
+      await openPolicy();
+      await selectSource(manifest!);
+
+      const legend = screen.getByText("Tool rules", { selector: "legend" });
+      const fieldset = legend.closest("fieldset")!;
+      expect(within(fieldset).getByLabelText("Add to Allowed tools"), category).toBeDefined();
+      expect(within(fieldset).getByLabelText("Add to Hidden tools"), category).toBeDefined();
+    }
+  });
+
+  it("G6: renders the Tool rules fieldset before any source is chosen", async () => {
+    await renderPage({ sources: [] });
+    await openPolicy();
+
+    expect(screen.getByText("Tool rules", { selector: "legend" })).toBeDefined();
+    expect(screen.getByLabelText("Add to Allowed tools")).toBeDefined();
+    expect(screen.getByLabelText("Add to Hidden tools")).toBeDefined();
+  });
+
+  it("does not flag tool names as missing from the source catalog", async () => {
+    // Tool names are not catalog entries; a warning on every name would teach the author
+    // to ignore the warning where it matters.
+    await renderPage({ policy: withTools({ hiddenTools: ["export_segment_csv"] }) });
+    await openPolicy();
+    await selectSource(DB_SOURCE);
+
+    const fieldset = screen.getByText("Tool rules", { selector: "legend" }).closest("fieldset")!;
+    expect(within(fieldset).queryByText(/not in catalog/)).toBeNull();
+    expect(within(fieldset).getByText("export_segment_csv")).toBeDefined();
+  });
+
+  it("says an absent allow-list restricts nothing, and a stored [] denies every tool", async () => {
+    await renderPage();
+    await openPolicy();
+    let fieldset = screen.getByText("Tool rules", { selector: "legend" }).closest("fieldset")!;
+    const absentNotes = within(fieldset).getAllByRole("note").map((note) => note.textContent);
+    expect(absentNotes).toHaveLength(2);
+    for (const note of absentNotes) expect(note).toMatch(/restricts nothing/);
+
+    cleanup();
+    vi.clearAllMocks();
+    await renderPage({ policy: withTools({ allowedTools: [] }) });
+    await openPolicy();
+    fieldset = screen.getByText("Tool rules", { selector: "legend" }).closest("fieldset")!;
+    const [allowedNote, hiddenNote] = within(fieldset)
+      .getAllByRole("note")
+      .map((note) => note.textContent);
+    expect(allowedNote).toMatch(/denies everything/);
+    expect(hiddenNote).toMatch(/restricts nothing/);
+  });
+
+  it("keeps a stored allowedTools [] when the last hidden tool is removed, so deny-all stays deny-all", async () => {
+    // Removing `x` leaves both boxes visually empty, but allowedTools is `[]`, not absent.
+    // Treating an empty list like an absent one here would save no toolRules at all and
+    // turn "deny every tool" into "unrestricted".
+    await renderPage({ policy: withTools({ allowedTools: [], hiddenTools: ["x"] }) });
+    await openPolicy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove x from Hidden tools" }));
+    await save();
+
+    // savedPolicy() reads the request body after JSON serialisation.
+    const toolRules = savedPolicy().objectRules?.toolRules;
+    expect(toolRules).toEqual({ allowedTools: [] });
+    expect(Object.keys(toolRules!)).toEqual(["allowedTools"]);
+  });
+
+  it("does not advise 'leave empty for no restriction' when allowedTools is stored as []", async () => {
+    await renderPage({ policy: withTools({ allowedTools: [] }) });
+    await openPolicy();
+
+    const hint = screen.getByTestId("tool-rules-hint").textContent!;
+    expect(hint).not.toMatch(/no restriction/);
+    expect(hint).toMatch(/denies every tool/);
+    // And the note under the box agrees with it.
+    const fieldset = screen.getByText("Tool rules", { selector: "legend" }).closest("fieldset")!;
+    expect(within(fieldset).getAllByRole("note")[0]!.textContent).toMatch(/denies everything/);
+  });
+
+  it("says the rules apply to tool-name calls from the next context, not the moment they are saved", async () => {
+    for (const toolRules of [undefined, { allowedTools: [] }, { hiddenTools: ["x"] }]) {
+      cleanup();
+      vi.clearAllMocks();
+      await renderPage({ policy: withTools(toolRules) });
+      await openPolicy();
+
+      const hint = screen.getByTestId("tool-rules-hint").textContent!;
+      expect(hint, JSON.stringify(toolRules)).toContain(
+        "Enforced by MCP wrappers on calls that pass a tool name, from the next context issued. Listing honours it where the tools/list handler uses filterTools.",
+      );
+      // The earlier wording overstated both reach and timing.
+      expect(hint, JSON.stringify(toolRules)).not.toMatch(/as soon as it's saved/);
+      expect(hint, JSON.stringify(toolRules)).not.toMatch(/every MCP wrapper/);
+    }
+  });
+
+  it("keeps the 'leave empty for no restriction' hint while allowedTools is absent or has names", async () => {
+    for (const toolRules of [undefined, { allowedTools: ["query_patients"] }]) {
+      cleanup();
+      vi.clearAllMocks();
+      await renderPage({ policy: withTools(toolRules) });
+      await openPolicy();
+
+      const hint = screen.getByTestId("tool-rules-hint").textContent!;
+      expect(hint, JSON.stringify(toolRules)).toMatch(
+        /Leave "Allowed tools" empty for no restriction/,
+      );
+      expect(hint, JSON.stringify(toolRules)).not.toMatch(/denies every tool/);
+    }
+  });
+
+  it("does not let an auditor add or remove a tool rule", async () => {
+    await renderPage({
+      readOnly: true,
+      policy: withTools({ hiddenTools: ["export_segment_csv"] }),
+    });
+    await openPolicy();
+
+    const fieldset = screen.getByText("Tool rules", { selector: "legend" }).closest("fieldset")!;
+    expect((fieldset as HTMLFieldSetElement).disabled).toBe(true);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove export_segment_csv from Hidden tools" }),
+    );
+    expect(screen.getByText("export_segment_csv")).toBeDefined();
   });
 });
 

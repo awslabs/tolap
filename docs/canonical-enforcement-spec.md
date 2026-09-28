@@ -214,6 +214,13 @@ The asymmetry is worth stating once: emitting `[]` for a field **no** policy men
 would be the opposite error, and a much broader one, since it would change the bytes of
 every policy that never mentioned the field. Absent in, absent out; empty in, empty out.
 
+Tool rules (§16) follow the same two rules. `toolRules.allowedTools` is an allow-list:
+it intersects, and disjoint lists yield `[]`, which denies every tool.
+`toolRules.hiddenTools` is a deny-list: it unions and retains `[]`, exactly like
+`hiddenObjects` and `hiddenEndpoints`.
+`fixtures/merge-scenarios/tool-rules-absent-and-empty.json` pins the retained `[]` for
+`allowedTools`, and `tool-rules-intersect-and-union.json` the disjoint intersection.
+
 ## 4. Enforcement pipeline (post-execution)
 
 Every wrapper, in every language, applies these steps in exactly this order:
@@ -1357,3 +1364,153 @@ Every `judge` field is optional with no default value materialized at merge time
 Concrete defaults would serialize unconditionally — .NET's canonical writer does no
 default-value elision — and so would change the signed bytes of every purpose-bound
 policy.
+
+## 16. Tool rules
+
+`objectRules.toolRules` gates which MCP tools an identity may call.
+
+```json
+"toolRules": { "allowedTools": ["query_patients"], "hiddenTools": ["export_segment_csv"] }
+```
+
+**The policy alone decides.** Every MCP wrapper entry point that takes a tool name evaluates
+`toolRules` whenever the policy carries it; there is no constructor option. A policy without `toolRules`
+is decided exactly as before, so tool gating stays with the MCP host or gateway until a policy
+author adds it. It is an additional layer on top of that control and only narrows.
+
+| SDK | Wrappers that enforce `toolRules` |
+|---|---|
+| Python | `SecureMcpToolWrapper` (and so `SecureToolFactory` for `db`, `kb`, `storage`) |
+| TypeScript | `SecureContextToolWrapper` (and so `SecureToolFactory`), `SecureMcpToolWrapper` (store-resolving) |
+| .NET | `SecureContextToolWrapper` (and so `SecureToolFactory`), `SecureMcpToolWrapper` (store-resolving) |
+
+The HTTP wrapper does not evaluate `toolRules`: an HTTP request has a method and a path but
+no tool name, and `endpointRules` already gates it.
+
+**The write path.** The write pre-check takes an optional tool name. When it is supplied, the
+wrapper runs the same tool gate as the read path, in the same order and before any write
+check: context validation, then the static tool list (where the wrapper has one), then
+`toolRules`. The denial reasons are the read path's. The gate does not consult `canQuery`, so
+it works under a write-only policy (`canQuery: false`, `canInsert: true`). When the name is
+omitted, the write path is unchanged and applies no tool rules.
+
+| SDK | Write entry point | Tool-name argument |
+|---|---|---|
+| Python | `SecureMcpToolWrapper.pre_write`, `execute_write_with_enforcement` | keyword-only `tool_name=` |
+| TypeScript | `SecureContextToolWrapper.preWrite`, `executeWriteWithEnforcement` | `toolName` in the trailing options object (`PreWriteOptions`) |
+| .NET | `SecureContextToolWrapper.PreWrite`, `ExecuteWriteWithEnforcementAsync` | optional last parameter `toolName`; the earlier signatures remain as overloads |
+
+Some entry points on these wrappers still take no tool name, so they apply neither the static
+tool list (where the wrapper has one) nor `toolRules`:
+
+| SDK | Entry points without a tool name |
+|---|---|
+| Python | `SecureMcpToolWrapper.execute_sql_with_enforcement` |
+| TypeScript | none on the signed-context wrapper |
+| .NET | store-resolving `SecureMcpToolWrapper.PrepareSqlQueryAsync`, `ValidateFieldsAsync` and `ValidateEndpointAsync` |
+
+A deployment that relies on `toolRules` must pass the tool name on every call: route read tools
+through an entry point that takes it (for example `pre_execute` / `preExecute` / `PreExecute`,
+or the store-resolving `executeTool` / `ExecuteWithEnforcementAsync`), and pass it to the write
+pre-check for every write tool. A write made without the name is not tool-gated, so a
+`hiddenTools` entry does not stop it.
+
+| Field | Absent | `[]` | Match |
+|---|---|---|---|
+| `allowedTools` | unrestricted | deny every tool | exact, case-sensitive |
+| `hiddenTools` | nothing hidden | nothing hidden (retained by merge) | case-insensitive |
+
+JSON `null` for `toolRules` or either list means absent in every SDK.
+
+**Tool-name grammar:** when a policy carries `toolRules`, the tool name must match
+`^[A-Za-z0-9_.-]{1,128}$` (end of string, no trailing newline), or the call is denied with
+`invalid tool name`. A policy without `toolRules` applies no grammar. With the name restricted
+to ASCII, the `hiddenTools` fold is ASCII-only and identical in every SDK. A Unicode fold is
+not: U+212A KELVIN SIGN folds to `k` in Python and JavaScript but not under .NET
+`OrdinalIgnoreCase`. Without the grammar, whitespace would also slip past a hide.
+
+An effective policy carrying `toolRules: {}` applies the grammar and nothing else. The merger
+never produces one: a `toolRules` block with neither list contributes nothing and is dropped at
+merge, like an empty `endpointRules`.
+
+Hidden is checked before allowed. Reasons: `invalid tool name`, `tool is hidden`,
+`tool not in allowed set`. The TypeScript SDK, which has no deserializer, also denies
+structurally malformed `toolRules` with `invalid tool rules`, and its merger throws on one
+rather than merging it. Python and .NET reject them when deserializing (`ValueError`,
+`JsonException`). No reason echoes the name.
+
+**Order in the signed-context wrapper:**
+
+1. context validation (signature, expiry, delegation chain)
+2. static `allowed_tools` (`tool not in allowed list`)
+3. tool-name grammar (only when `toolRules` is present)
+4. `hiddenTools`
+5. `allowedTools`
+6. `canQuery`
+7. purpose action (§15.2)
+8. object, fields, endpoint
+9. judge (never reached after a tool denial)
+
+On the write path with a tool name, steps 1 to 5 run in the same order, followed by the write
+checks (connector spec §4) in place of steps 6 to 9.
+
+A tool denial is still recorded in the tool-call history wherever the wrapper records one
+(Python `pre_execute`; TypeScript `preExecuteAsync`; .NET `PreExecuteAsync`), so the judge
+sees refused attempts on later calls.
+
+The store-resolving wrappers check tool rules first among the policy checks: before `canQuery`
+in .NET and before the purpose action in TypeScript, which keeps the same relative order. In
+.NET the denial goes through `HandleDenial`, so `Permissive` mode applies to it as it does to
+every other denial there.
+
+**Merge:** `allowedTools` intersects and `hiddenTools` unions (§3). Disjoint allow-lists give
+`[]`. Names are compared exactly at merge; the case fold for `hiddenTools` happens only when
+matching.
+
+**The static list:** the wrapper's static `allowed_tools` predates §3. There, empty means
+*unrestricted*. The policy field follows §3, where empty means *deny every tool*. Both apply,
+and the effective set is their intersection.
+
+**Listing:** `filter_tools` / `filterTools` / `FilterTools` on the signed-context wrappers
+returns the names a `tools/list` handler should expose, in input order (duplicates kept, input
+not modified). It applies:
+
+- the static list
+- tool rules
+- the purpose action check
+
+It does not apply `canQuery` on its own, so a write-only policy still lists its write tools
+(subject to `toolRules`). But a policy that grants none of `canQuery`, `canInsert`,
+`canUpdate` and `canDelete` lists nothing, since every call it could make is denied. It does
+not apply object, field or endpoint rules, does not record into the tool-call history and does
+not consult the judge. Null and non-string entries in the input are dropped, whether or not the
+policy carries `toolRules`. An invalid context (signature, expiry or delegation chain) lists
+nothing. Listing is not permission to call: every call is re-checked.
+The store-resolving TypeScript `SecureMcpToolWrapper.listTools()` takes no request, so it has
+no identity to filter by and is unchanged.
+
+**Policy server:** a malformed `toolRules` is rejected at write time with `422`. That includes
+`toolRules: null`, an unknown key such as `allowedTool`, a name outside the grammar, and a
+duplicate name (`additionalProperties: false`, `pattern`, `uniqueItems`).
+
+**Version skew:** Released SDK versions up to and including 1.1.0 do not enforce
+`toolRules`; enforcement ships in the next release. How that shows depends on where the older
+SDK sits:
+
+- An older SDK that resolves or merges the policy itself drops `toolRules` from the policy
+  definition, then signs a policy without it. The rules are silently not enforced.
+- An older TypeScript wrapper verifies the signature over the policy object as received, so a
+  context carrying `toolRules` verifies, and no check reads the field. The rules are silently
+  not enforced.
+- An older Python or .NET wrapper drops the field when deserializing a signed context, so the
+  signature it recomputes no longer matches. Every call is denied with an invalid-signature
+  reason: this fails closed, but as an outage.
+
+Upgrade the wrappers before authoring `toolRules` (threat model R-9).
+
+Pinned by:
+
+- `fixtures/enforcement/validate-tool-access.json`
+- `fixtures/enforcement/tool-gate-wrapper.json`
+- `fixtures/merge-scenarios/tool-rules-intersect-and-union.json`
+- `fixtures/signing/hmac-sha256-tool-rules.json`

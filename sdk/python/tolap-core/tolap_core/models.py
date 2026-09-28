@@ -61,6 +61,19 @@ class EndpointRules:
 
 
 @dataclass
+class ToolRules:
+    """Per-identity MCP tool gating (canonical-enforcement-spec.md section 16).
+
+    Evaluated by every MCP wrapper whenever present.
+    ``allowed_tools`` absent is unrestricted; ``[]`` denies every tool. Allowed names match
+    exactly; hidden names match case-insensitively, so a mis-cased name is denied either way.
+    """
+
+    allowed_tools: list[str] | None = None
+    hidden_tools: list[str] | None = None
+
+
+@dataclass
 class PolicyLimits:
     max_results: int | None = None
     min_similarity_score: float | None = None
@@ -160,6 +173,7 @@ class ObjectRules:
     row_filters: list[RowFilter] | None = None
     tag_rules: TagRules | None = None
     endpoint_rules: EndpointRules | None = None
+    tool_rules: ToolRules | None = None
 
 
 @dataclass

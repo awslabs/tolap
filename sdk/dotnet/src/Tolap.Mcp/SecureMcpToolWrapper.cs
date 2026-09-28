@@ -92,6 +92,15 @@ public sealed class SecureMcpToolWrapper
             _ => roles,
             _options.DeclaredPurpose);
 
+        // Pre-execution: per-identity tool gating (section 16). The first policy check, before
+        // the read gate as in SecureContextToolWrapper, and through HandleDenial so Permissive
+        // mode applies to it exactly as to every other denial here.
+        var toolResult = EnforcementEngine.ValidateToolAccess(toolName, policy);
+        if (!toolResult.Allowed)
+        {
+            return HandleDenial(toolResult.Reason ?? "tool denied");
+        }
+
         // Pre-execution: validate query permission
         if (!policy.Permissions.CanQuery)
         {

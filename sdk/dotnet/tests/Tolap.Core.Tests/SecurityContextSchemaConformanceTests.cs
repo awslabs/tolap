@@ -124,7 +124,8 @@ public class SecurityContextSchemaConformanceTests
     {
         "hmac-sha256-known-answer",
         "hmac-sha256-subsecond",
-        "hmac-sha256-purpose-bound"
+        "hmac-sha256-purpose-bound",
+        "hmac-sha256-tool-rules"
     };
 
     [Theory]

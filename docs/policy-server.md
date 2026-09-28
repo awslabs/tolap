@@ -650,6 +650,24 @@ would notice.
   request** — two opposite policies that both render as "nothing ticked" in a checkbox
   grid, so the two states are distinguished explicitly.
 
+- **Tool rules** (`objectRules.toolRules`: `allowedTools`, `hiddenTools`). Enforced by every
+  MCP wrapper entry point that takes a tool name whenever present
+  ([canonical spec §16](canonical-enforcement-spec.md#16-tool-rules), which also lists the
+  entry points that take none and so apply no tool rules), so adding them to a policy changes
+  which tools its callers may call, with no code change on the wrappers. The fieldset is shown
+  for every source category, and with no source selected, because an MCP wrapper can be given
+  a tool name whatever it fronts. Names are free text: tool
+  names are not in the imported catalog, so nothing here is flagged against it.
+
+  `allowedTools` absent means unrestricted while `[]` **denies every tool**, the opposite of
+  the wrapper's static `allowed_tools` option. The editor cannot author `[]`: removing the last
+  allowed name removes the list. A stored `[]` written through the API or as JSON is kept on
+  save, and the hint changes to say that it denies every tool. Clearing both lists removes the
+  `toolRules` key rather than saving `{}`, because a present `toolRules`, even an empty one,
+  switches on the tool-name grammar in every wrapper. The server rejects a malformed
+  `toolRules` (`null`, an unknown key, a name outside `^[A-Za-z0-9_.-]{1,128}$`, a duplicate
+  name) with `422`.
+
 - **Tags** (`kb` sources). The asymmetry is stated inline because getting it backwards
   produces a policy that reads as restrictive and returns everything: `deniedTags` takes
   precedence over `allowedTags`, and a document needs only **one** allowed tag to pass. An

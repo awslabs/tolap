@@ -1,5 +1,8 @@
 # TOLAP SDK — Threat Model
 
+> **Revision 2026-09-28.** This revision adds **R-9** (version skew on `objectRules.toolRules`:
+> upgrade the wrappers before authoring tool rules), which is operational and stays open.
+>
 > **Revision 2026-09-01.** Five of the eight remediations in §4 are closed in code. **Three
 > remain open: R-4** (regression fixtures for the dotted-vs-bare masking bypass and
 > empty-policy defaults — **P1, the highest remaining priority**, and T4's "Mitigated" status
@@ -188,6 +191,7 @@ Severity uses the qualitative scale L / M / H / Critical. "Status" is one of: **
 | R-6 | ~~P2~~ **CLOSED** | ~~Add a startup warning when `Permissive` is active.~~ **Done**: every enforcement opt-out warns at construction and at the point of impact.                                                                                | MCP wrappers                       |
 | R-7 | ~~P2~~ **CLOSED** | ~~Consider regex complexity/timeout guard on `matches` filters.~~ **Done**: .NET uses a match timeout; Python and TypeScript bound pattern and input length.                                                                | Enforcement engine                 |
 | R-8 | **P2**   | Asymmetric (`ed25519`) signing, so a verifier cannot also sign. Blocked on the zero-runtime-dependency rule for `core` — Python's stdlib has no Ed25519. Selecting it fails loudly meanwhile.                                     | Signer (all langs)                 |
+| R-9 | **P2**   | Version skew on `objectRules.toolRules`. **Risk:** a policy author writes `toolRules`, but some wrappers run a released SDK version up to and including 1.1.0 (enforcement ships in the next release). An older TypeScript wrapper, and an older resolver or merger in any SDK, drops or ignores the field, so the rules are silently not enforced there; an older Python or .NET wrapper recomputes the signature without the field, so it rejects the context and denies every call (fails closed, but as an outage; for .NET this is inferred from the code, not tested). **Mitigation:** an older policy server rejects `toolRules` at write time (`additionalProperties: false` on `objectRules`), and the docs state that released SDK versions up to and including 1.1.0 do not enforce `toolRules` and that enforcement ships in the next release (canonical spec §16). **Residual:** a new policy server in front of an older wrapper fleet, a deployment-ordering problem: upgrade the wrappers before authoring `toolRules`. **Tests:** the `no-tool-rules-unchanged` row of `fixtures/enforcement/tool-gate-wrapper.json` pins the other direction (no rules, unchanged decisions); skew itself is operational and has no test. | Deployment order; MCP wrappers (all langs) |
 
 ## 5. Scanner coverage
 

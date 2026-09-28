@@ -7,7 +7,7 @@
  *   - Permissions: AND for canQuery/canInsert/canUpdate/canDelete,
  *     OR for readOnly. Absent booleans take their schema default first
  *     (canQuery true, the write permissions false, readOnly true).
- *   - Allowed sets (objects, fields, endpoints, tags, methods): intersection
+ *   - Allowed sets (objects, fields, endpoints, tags, methods, tools): intersection
  *   - Hidden/denied sets: union
  *   - Row filters: concatenation (AND logic)
  *   - Masked fields: group by field, pick most restrictive mask type
@@ -21,6 +21,7 @@ import {
   type FieldRules,
   type TagRules,
   type EndpointRules,
+  type ToolRules,
   type PolicyLimits,
   type PolicyPermissions,
   type MaskingRule,
@@ -29,6 +30,7 @@ import {
   type JudgeConfig,
   maskRestrictiveness,
   createDenyAllPolicy,
+  isToolRulesShape,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -224,6 +226,44 @@ function mergeEndpointRules(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+/**
+ * `allowedTools` intersects and `hiddenTools` unions, both retaining `[]` (spec §3, §16).
+ *
+ * Names are compared exactly here; the ASCII case fold for `hiddenTools` happens at
+ * matching time, so the signed bytes carry every spelling an author wrote. A `toolRules`
+ * or list of JSON `null` is absent, as in the other SDKs' deserializers: TS has none, so
+ * the null is normalized here rather than reaching `intersectOptional` as a "defined"
+ * list. `{}` contributes nothing and is dropped, like an empty `endpointRules`.
+ *
+ * A malformed block throws rather than merging. Merged as-is, a string `allowedTools`
+ * would spread into single characters and an array or string `toolRules` would drop out
+ * as "no rules": both restrict less than the author wrote, and `resolve` would sign the
+ * result. This is the TS counterpart of Python's `ValueError` at deserialization.
+ */
+function mergeToolRules(
+  allToolRules: Array<ToolRules | null | undefined>,
+): ToolRules | undefined {
+  const defined = allToolRules.filter(
+    (tr): tr is ToolRules => tr !== undefined && tr !== null,
+  );
+  if (!defined.every(isToolRulesShape)) {
+    throw new Error("invalid tool rules: toolRules must be an object whose allowedTools and hiddenTools are arrays of strings");
+  }
+  if (defined.length === 0) return undefined;
+
+  const result: ToolRules = {};
+
+  const allowedTools = intersectOptional(
+    defined.map((tr) => tr.allowedTools ?? undefined),
+  );
+  if (allowedTools !== undefined) result.allowedTools = allowedTools;
+
+  const hiddenTools = unionArrays(defined.map((tr) => tr.hiddenTools ?? undefined));
+  if (hiddenTools !== undefined) result.hiddenTools = hiddenTools;
+
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function mergeRowFilters(
   allFilters: Array<RowFilter[] | undefined>,
 ): RowFilter[] | undefined {
@@ -279,6 +319,9 @@ function mergeObjectRules(
     defined.map((or) => or.endpointRules),
   );
   if (endpointRules !== undefined) result.endpointRules = endpointRules;
+
+  const toolRules = mergeToolRules(defined.map((or) => or.toolRules));
+  if (toolRules !== undefined) result.toolRules = toolRules;
 
   return Object.keys(result).length > 0 ? result : undefined;
 }

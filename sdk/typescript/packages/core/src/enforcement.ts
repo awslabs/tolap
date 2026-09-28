@@ -13,6 +13,7 @@ import {
   type PurposeProfile,
   type RowFilter,
   FilterOperator,
+  isToolRulesShape,
   WriteOperation,
   maskRestrictiveness,
 } from "./types.js";
@@ -1579,6 +1580,45 @@ export function validateEndpoint(
     return { allowed: false, reason: "method not allowed on a read-only policy" };
   }
 
+  return { allowed: true };
+}
+
+// ---------------------------------------------------------------------------
+// Tool gating (canonical spec §16)
+// ---------------------------------------------------------------------------
+
+/** MCP's recommended tool-name characters, 1-128 long; enforced only when toolRules is present. */
+const TOOL_NAME = /^[A-Za-z0-9_.-]{1,128}$/;
+
+/**
+ * Tool gating by `objectRules.toolRules` (canonical-enforcement-spec.md §16).
+ *
+ * Hidden before allowed. The hide is case-insensitive and the allow exact, so both deny a
+ * mis-cased name. `canQuery` is deliberately not consulted — the wrapper checks it after.
+ * Reasons do not echo the name.
+ *
+ * `toolRules` absent or `null` is unrestricted and applies no grammar, so a policy
+ * without it is decided exactly as before.
+ */
+export function validateToolAccess(toolName: string, policy: EffectivePolicy): AccessResult {
+  const rules: unknown = policy.objectRules?.toolRules;
+  if (rules === undefined || rules === null) return { allowed: true };
+  // TS has no deserializer, so malformed rules are refused here rather than half-applied: a
+  // bare string would otherwise be searched by substring via `includes`.
+  if (!isToolRulesShape(rules)) return { allowed: false, reason: "invalid tool rules" };
+  // Grammar first: with only [A-Za-z0-9_.-] left, an ASCII fold is exact in all three SDKs.
+  // The typeof check comes first because `RegExp.test` coerces: `undefined` would test as
+  // "undefined" and `["x"]` as "x".
+  if (typeof toolName !== "string" || !TOOL_NAME.test(toolName)) {
+    return { allowed: false, reason: "invalid tool name" };
+  }
+  const folded = asciiLower(toolName);
+  if (rules.hiddenTools != null && rules.hiddenTools.some((h) => asciiLower(h) === folded)) {
+    return { allowed: false, reason: "tool is hidden" };
+  }
+  if (rules.allowedTools != null && !rules.allowedTools.includes(toolName)) {
+    return { allowed: false, reason: "tool not in allowed set" };
+  }
   return { allowed: true };
 }
 

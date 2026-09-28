@@ -356,6 +356,52 @@ Scoped rather than singleton only because a request-scoped `HttpClient` is the c
 the factory itself holds no per-request state, so a singleton is equally correct when the
 client is too.
 
+### Tool rules
+
+No code change is needed to enforce `objectRules.toolRules`: the `SecureContextToolWrapper`
+you already construct (directly or as `SecureTool.RecordTool` from the factory), and the
+store-resolving `SecureMcpToolWrapper`, enforce them on every entry point that takes a tool
+name (`PreExecute`, `PreExecuteAsync`, `PrepareSqlQuery`, `ExecuteSqlWithEnforcementAsync` and
+`ExecuteWithEnforcementAsync` on the context wrapper; `ExecuteWithEnforcementAsync` on the
+store-resolving one) whenever the policy carries them. `PreWrite` and
+`ExecuteWriteWithEnforcementAsync` take an optional last parameter `toolName`, for example
+`wrapper.PreWrite(context, WriteOperation.Insert, "notes", payload, toolName: "write_note")`;
+the earlier signatures remain as overloads. When it is set, the same tool gate runs before the
+write checks, with the same denial reasons, and it does not need `CanQuery`, so a write-only
+policy works. Without it, the write path applies no tool rules.
+
+Three entry points take no tool name, so they apply neither the static tool list nor `toolRules`: on the
+store-resolving `SecureMcpToolWrapper`, `PrepareSqlQueryAsync`, `ValidateFieldsAsync` and
+`ValidateEndpointAsync`. If you rely on `toolRules`, route read tools through a tool-name entry
+point and pass `toolName` on every write.
+
+To hide the tools an identity may not call from the agent as well, filter your
+`tools/list` response with `FilterTools`. It returns the permitted names in input order, skips
+null entries, and returns an empty list when the context fails validation or the policy grants
+none of `CanQuery`, `CanInsert`, `CanUpdate` and `CanDelete`:
+
+```csharp
+using Tolap.Core;
+using Tolap.Mcp;
+
+// No new option: the wrapper enforces the caller's toolRules on every tool-name entry point.
+var wrapper = new SecureContextToolWrapper(new SecureContextWrapperOptions(SigningKey: signingKey));
+
+// Call this from your tools/list handler with the caller's signed context.
+IReadOnlyList<Tool> VisibleTools(SecurityContext context)
+{
+    var visible = wrapper.FilterTools(context, AllTools.Select(t => t.Name)).ToHashSet();
+    return AllTools.Where(t => visible.Contains(t.Name)).ToList();
+}
+```
+
+Listing is not permission: `PreExecute` re-checks every call. Empty means the opposite in the
+two places a tool list appears: the wrapper's static `AllowedTools` option treats a null or
+empty array as unrestricted, while the policy's `ToolRules.AllowedTools` of `[]` denies every
+tool (canonical spec section 16). Upgrade every wrapper before authoring `toolRules`: released
+SDK versions up to and including 1.1.0 do not enforce `toolRules`; enforcement ships in the
+next release (threat model R-9).
+
 
 ## Step 5: Wire It Together
 

@@ -1,0 +1,21 @@
+{
+  "description": "Matrix D6: three allow-lists [a,b,c], [b,c] and [c,d] intersect to [c]. Pins that the intersection runs over every contributing policy rather than stopping after the first pair. No input carries hiddenTools, so the merged toolRules carries no hiddenTools key.",
+  "inputs": [
+    { "version": "1.0", "name": "tools-abc", "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "toolRules": { "allowedTools": ["a", "b", "c"] } } },
+    { "version": "1.0", "name": "tools-bc", "priority": 20,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "toolRules": { "allowedTools": ["b", "c"] } } },
+    { "version": "1.0", "name": "tools-cd", "priority": 30,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "toolRules": { "allowedTools": ["c", "d"] } } }
+  ],
+  "expected": {
+    "sourceProfiles": ["tools-abc", "tools-bc", "tools-cd"],
+    "permissions": { "canQuery": true, "readOnly": true },
+    "objectRules": {
+      "toolRules": { "allowedTools": ["c"] }
+    }
+  }
+}

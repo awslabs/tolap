@@ -25,6 +25,7 @@ import {
   validateEndpoint,
   validateExpiry,
   validateFieldAccess,
+  validateToolAccess,
   validateToolAction,
   validateWrite,
   validateQueryReferences,
@@ -43,6 +44,11 @@ export interface SecureContextWrapperOptions {
   signingKey: string;
   enforceSignatures?: boolean;
   enforceExpiry?: boolean;
+  /**
+   * Static tool allowlist for this wrapper instance. Empty or absent means unrestricted —
+   * the opposite of a policy's `toolRules.allowedTools: []`, which denies every tool. Both
+   * apply; the effective set is their intersection.
+   */
   allowedTools?: string[];
   /**
    * Pass through tool results the policy cannot be applied to.
@@ -122,6 +128,23 @@ export interface PreExecuteArgs {
   fields?: string[];
   endpointPath?: string;
   endpointMethod?: string;
+}
+
+/**
+ * Optional arguments to {@link SecureContextToolWrapper.preWrite} and
+ * {@link SecureContextToolWrapper.executeWriteWithEnforcement}: the write options, plus the
+ * MCP tool the write is made for.
+ */
+export interface PreWriteOptions extends ValidateWriteOptions {
+  /**
+   * The MCP tool the write is made for. When given, the tool gate `preExecute` uses runs
+   * first, after the context check and before any write check: the static `allowedTools`
+   * list, then the policy's `toolRules` (§16), with the same denial reasons. It does not
+   * require `canQuery`, so it works under a write-only policy. When omitted, no tool-name
+   * check runs and the behaviour is unchanged — which also means a `hiddenTools` entry is
+   * not enforced on that call, so pass it for every write tool.
+   */
+  toolName?: string;
 }
 
 /**
@@ -220,10 +243,10 @@ export class SecureContextToolWrapper {
     if (!ctxResult.allowed) return ctxResult;
 
     const policy = context.effectivePolicy;
-    const allowedTools = this.options.allowedTools;
-    if (allowedTools && allowedTools.length > 0 && !allowedTools.includes(args.toolName)) {
-      return { allowed: false, reason: "tool not in allowed list" };
-    }
+    // The static list, then per-identity tool gating (§16). Before canQuery: the more
+    // specific answer when both would deny, and reachable under a write-only policy.
+    const toolResult = this.toolGate(policy, args.toolName);
+    if (!toolResult.allowed) return toolResult;
     if (!policy.permissions.canQuery) {
       return { allowed: false, reason: "query not permitted" };
     }
@@ -257,6 +280,52 @@ export class SecureContextToolWrapper {
       if (!r.allowed) return r;
     }
     return { allowed: true };
+  }
+
+  /**
+   * The checks that depend on the tool name alone: the static list, then `toolRules`. Shared by
+   * `preExecute` and `preWrite` so both give the same denial reasons. Consults no permission
+   * flag — in particular not `canQuery`, so a write-only policy can pass it.
+   */
+  private toolGate(policy: SecurityContext["effectivePolicy"], toolName: string): AccessResult {
+    const allowedTools = this.options.allowedTools;
+    if (allowedTools && allowedTools.length > 0 && !allowedTools.includes(toolName)) {
+      return { allowed: false, reason: "tool not in allowed list" };
+    }
+    return validateToolAccess(toolName, policy);
+  }
+
+  /**
+   * The names from `toolNames`, in order, that `preExecute` would not refuse by name — for a
+   * `tools/list` handler. Applies the static list, the policy's `toolRules` and the purpose
+   * action check; not `canQuery`, object/field/endpoint rules, history or the judge. Listing
+   * is not permission: `preExecute` re-checks every call. An invalid context lists nothing, and
+   * so does a policy that grants none of `canQuery`, `canInsert`, `canUpdate` and `canDelete`.
+   * Null and non-string entries are dropped. The input is not modified; the result is always a
+   * new array.
+   */
+  filterTools(context: SecurityContext, toolNames: string[]): string[] {
+    if (!this.validateSecurityContext(context).allowed) return [];
+    const policy = context.effectivePolicy;
+    // A policy that grants no operation makes every tool uncallable, so it lists nothing. Any
+    // one grant is enough: canQuery is not required, so a write-only policy lists its tools.
+    const p = policy.permissions;
+    if (
+      p?.canQuery !== true &&
+      p?.canInsert !== true &&
+      p?.canUpdate !== true &&
+      p?.canDelete !== true
+    ) {
+      return [];
+    }
+    const allowedTools = this.options.allowedTools;
+    return toolNames.filter((name) => {
+      // Never a tool name, whether or not the policy carries toolRules.
+      if (typeof name !== "string") return false;
+      if (allowedTools && allowedTools.length > 0 && !allowedTools.includes(name)) return false;
+      if (!validateToolAccess(name, policy).allowed) return false;
+      return validateToolAction(policy, name, this.options.toolActionCategories).allowed;
+    });
   }
 
   /**
@@ -331,23 +400,32 @@ export class SecureContextToolWrapper {
    *
    * A permitted write that returns data is a *read* of that data: pass the response
    * through {@link postExecute} (§4.5).
+   *
+   * `options.toolName`, when given, runs the tool gate {@link preExecute} uses first; see
+   * {@link PreWriteOptions.toolName}.
    */
   preWrite(
     context: SecurityContext,
     operation: WriteOperation | string,
     objectName?: string,
     payload?: unknown,
-    options: ValidateWriteOptions = {},
+    options: PreWriteOptions = {},
   ): AccessResult {
     const ctxResult = this.validateSecurityContext(context);
     if (!ctxResult.allowed) return ctxResult;
+
+    const { toolName, ...writeOptions } = options;
+    if (toolName !== undefined) {
+      const toolResult = this.toolGate(context.effectivePolicy, toolName);
+      if (!toolResult.allowed) return toolResult;
+    }
 
     return validateWrite(
       operation,
       objectName,
       payload,
       context.effectivePolicy,
-      options,
+      writeOptions,
     );
   }
 
@@ -369,7 +447,7 @@ export class SecureContextToolWrapper {
     writeFn: () => Promise<unknown> | unknown,
     objectName?: string,
     payload?: unknown,
-    options: ValidateWriteOptions = {},
+    options: PreWriteOptions = {},
   ): Promise<unknown> {
     const pre = this.preWrite(context, operation, objectName, payload, options);
     if (!pre.allowed) {

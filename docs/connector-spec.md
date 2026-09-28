@@ -67,6 +67,7 @@ is not an error, and it is not protection.
 | `objectRules.rowFilters` | ✅ rows | ✅ collection items | ✅ chunk metadata | ✅ listing entries |
 | `objectRules.tagRules` | ➖ | ➖ | ✅ classifications | ⚠️ object tags |
 | `objectRules.endpointRules` | ➖ | ✅ paths + methods | ➖ | ➖ |
+| `objectRules.toolRules` | ⚠️ MCP wrappers¹ | ➖ | ⚠️ MCP wrappers¹ | ⚠️ MCP wrappers¹ |
 | `limits.maxResults` | ✅ | ✅ | ✅ | ✅ |
 | `limits.minSimilarityScore` | ➖ | ➖ | ✅ | ➖ |
 | `limits.maxObjectSizeBytes` | ➖ | ➖ | ➖ | ✅ |
@@ -77,6 +78,10 @@ is not an error, and it is not protection.
 
 ✅ enforced · ⚠️ enforced only under a condition named in the category's section · ➖ not
 applicable
+
+¹ Enforced by the MCP wrappers, not the connector; see canonical-enforcement-spec.md §16. The
+condition is that the call goes through an MCP wrapper, which knows the tool name. `api` is ➖
+because the HTTP wrapper has no tool name; `endpointRules` gates it instead.
 
 `purposeProfile` is category-independent, which is why every cell reads the same.
 `purposeId` filters at **resolution** (canonical-enforcement-spec.md §15.1), before any
@@ -90,7 +95,7 @@ fails closed; see §15.2.
 
 No cell means "parsed but ignored" — see §9. A ⚠️ is a *conditional*, not an advisory: the
 field is enforced when the condition holds, and the condition is stated in the category's own
-section (`api` object rules, §6; `storage` tag rules, §8).
+section (`api` object rules, §6; `storage` tag rules, §8), or, for `toolRules`, in footnote ¹.
 
 ## 3. Shared semantics
 
@@ -196,14 +201,26 @@ values are produced:
 | `query uses a construct the pre-execution check cannot resolve: <construct>` | A SQL query uses a construct the pre-execution check does not resolve (§5) |
 | `object name does not match the table the query reads` | A caller-supplied object name and the single table a SQL query reads differ (§5) |
 
+| `invalid tool name` | The policy carries `toolRules` and the tool name does not match `^[A-Za-z0-9_.-]{1,128}$` |
+| `tool is hidden` | Tool name matched `hiddenTools` (ASCII case-insensitive) |
+| `tool not in allowed set` | `allowedTools` specified and the tool name is not in it (exact match) |
+| `invalid tool rules` | TypeScript only: `toolRules` is structurally malformed (Python and .NET reject it when deserializing) |
+
 **Precedence.** When a request fails more than one check, the reason is the first that
-denies, evaluated in this order: `query not permitted` → `endpoint is hidden` →
-`endpoint not in allowed set` → `method not allowed` → `method not allowed on a read-only
-policy`. The order is contract, not just the set of strings: an integrator branching on the
-reason sees exactly one, and which one is fixed. In particular, because endpoint matching is
-case-insensitive (§3.1), a path that differs from an `allowedEndpoints` entry only by case
-*matches* the allow-list and is then judged on its method — so a denied method yields
-`method not allowed`, not `endpoint not in allowed set`.
+denies. For a call through a signed-context MCP wrapper, the tool checks come after the
+wrapper's static allowlist (`tool not in allowed list`) and before `canQuery`: `invalid tool
+rules` (TypeScript) → `invalid tool name` → `tool is hidden` → `tool not in allowed set` →
+`query not permitted` → the purpose action check → the object, field and endpoint checks
+(canonical-enforcement-spec.md §16; the store-resolving wrappers keep the same relative
+order, except that the TypeScript store-resolving `SecureMcpToolWrapper` does not check
+`canQuery` at all, so there only the tool-rule checks are ordered ahead of the purpose action
+and the object, field and endpoint checks). For an HTTP request, the order is: `query not
+permitted` → `endpoint is hidden` → `endpoint not in allowed set` → `method not allowed` →
+`method not allowed on a read-only policy`. The order is contract, not just the set of
+strings: an integrator branching on the reason sees exactly one, and which one is fixed. In
+particular, because endpoint matching is case-insensitive (§3.1), a path that differs from an
+`allowedEndpoints` entry only by case *matches* the allow-list and is then judged on its
+method — so a denied method yields `method not allowed`, not `endpoint not in allowed set`.
 
 Write denials add the reasons in §4.4. Reasons are deliberately coarse: they name the rule
 that denied, not the data. A reason MUST NOT disclose a value, a row count, or whether a

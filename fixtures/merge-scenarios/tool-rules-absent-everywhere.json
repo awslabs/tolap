@@ -1,0 +1,18 @@
+{
+  "description": "Matrix D3: no input carries toolRules, so the merged objectRules carries NO toolRules key -- not {}, and not allowedTools/hiddenTools set to null. An emitted empty block would change the canonical bytes of every existing policy and break their signatures (toolRules is omitted when absent), exactly as an absent endpointRules is omitted today.",
+  "inputs": [
+    { "version": "1.0", "name": "objects-a", "priority": 10,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "allowedObjects": ["patients"] } },
+    { "version": "1.0", "name": "objects-b", "priority": 20,
+      "permissions": { "canQuery": true, "readOnly": true },
+      "objectRules": { "allowedObjects": ["patients"] } }
+  ],
+  "expected": {
+    "sourceProfiles": ["objects-a", "objects-b"],
+    "permissions": { "canQuery": true, "readOnly": true },
+    "objectRules": {
+      "allowedObjects": ["patients"]
+    }
+  }
+}

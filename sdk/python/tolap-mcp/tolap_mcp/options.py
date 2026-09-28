@@ -20,6 +20,11 @@ class SecureMcpServerOptions:
     enforce_signatures: bool = True
     enforce_expiry: bool = True
     allowed_tools: list[str] = field(default_factory=list)
+    """Static tool allowlist for this wrapper, matched exactly.
+
+    Empty means *unrestricted* -- the opposite of a policy's ``toolRules.allowedTools: []``,
+    which denies every tool. Both apply; the effective set is their intersection.
+    """
     hash_salt: str | bytes | None = None
     """Secret salt for ``hash`` masking, turning the digest into a keyed HMAC.
 

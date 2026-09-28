@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 690" role="img" aria-label="Tool access and data access. Every call first clears the host or gateway check, which gives the same answer for every user. Inside the TOLAP wrapper, layer 1, tool access, applies when the signed policy carries objectRules.toolRules and decides whether this identity may call this tool at all. Layer 2, data access, decides what the call may return. The policy alone picks the combination, with no code change: data only, tools and data, or tools only.">
+<rect width="720" height="690" fill="#FFFFFF"/>
+<defs><marker id="ar-tl" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#64748B"/></marker></defs>
+<rect x="60" y="28" width="410" height="72" rx="12" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="2"/>
+<text x="265" y="56" fill="#0F172A" font-size="15" font-weight="600" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">IAM · OAuth · gateway · MCP host</text>
+<text x="265" y="80" fill="#64748B" font-size="12" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">may this agent reach this server? — the same answer for every user</text>
+<line x1="265" y1="100" x2="265" y2="158" stroke="#64748B" stroke-width="2.5" marker-end="url(#ar-tl)"/>
+<text x="281" y="134" fill="#64748B" font-size="11" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="start">signed security context + tool call</text>
+<rect x="60" y="158" width="410" height="92" rx="12" fill="#FFFBEB" stroke="#F59E0B" stroke-width="2" stroke-dasharray="7 5"/>
+<text x="265" y="184" fill="#92400E" font-size="14.5" font-weight="700" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">1 · Tool access   ·   when the policy sets it</text>
+<text x="265" y="205" fill="#92400E" font-size="12.5" font-weight="400" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" text-anchor="middle">objectRules.toolRules</text>
+<text x="265" y="226" fill="#92400E" font-size="12" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">may this identity call this tool at all?</text>
+<text x="265" y="242" fill="#92400E" font-size="11.5" font-weight="600" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">hiddenTools · allowedTools</text>
+<line x1="470" y1="204" x2="520" y2="204" stroke="#64748B" stroke-width="2.5" marker-end="url(#ar-tl)"/>
+<rect x="520" y="174" width="160" height="60" rx="12" fill="#DC2626" stroke="#DC2626" stroke-width="0"/>
+<text x="600" y="199" fill="#FFFFFF" font-size="14.5" font-weight="700" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">DENY</text>
+<text x="600" y="218" fill="#FFFFFF" font-size="10.5" font-weight="600" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">tool is hidden / not allowed</text>
+<line x1="265" y1="250" x2="265" y2="300" stroke="#64748B" stroke-width="2.5" marker-end="url(#ar-tl)"/>
+<text x="281" y="272" fill="#64748B" font-size="11" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="start">pass</text>
+<text x="281" y="288" fill="#64748B" font-size="11" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="start">no toolRules: nothing to check</text>
+<rect x="60" y="300" width="410" height="92" rx="12" fill="#F59E0B" stroke="#F59E0B" stroke-width="0"/>
+<text x="265" y="326" fill="#0B1220" font-size="14.5" font-weight="700" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">2 · Data access   ·   always evaluated</text>
+<text x="265" y="348" fill="#0B1220" font-size="12.5" font-weight="600" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">what may this call return?</text>
+<text x="265" y="368" fill="#0B1220" font-size="12" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">objects · columns · rows · masks</text>
+<text x="265" y="384" fill="#0B1220" font-size="12" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">endpoints · tags · prefixes · limits</text>
+<line x1="470" y1="346" x2="520" y2="346" stroke="#64748B" stroke-width="2.5" marker-end="url(#ar-tl)"/>
+<rect x="520" y="316" width="160" height="60" rx="12" fill="#DC2626" stroke="#DC2626" stroke-width="0"/>
+<text x="600" y="341" fill="#FFFFFF" font-size="14.5" font-weight="700" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">DENY</text>
+<text x="600" y="360" fill="#FFFFFF" font-size="10.5" font-weight="600" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">object or query not allowed</text>
+<line x1="265" y1="392" x2="265" y2="440" stroke="#64748B" stroke-width="2.5" marker-end="url(#ar-tl)"/>
+<text x="281" y="420" fill="#64748B" font-size="11" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="start">pass</text>
+<rect x="60" y="440" width="410" height="62" rx="12" fill="#0F766E" stroke="#0F766E" stroke-width="0"/>
+<text x="265" y="466" fill="#FFFFFF" font-size="15" font-weight="700" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">RESULT</text>
+<text x="265" y="486" fill="#FFFFFF" font-size="12" font-weight="600" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">only what both layers allow reaches the agent</text>
+<text x="360" y="546" fill="#64748B" font-size="12.5" font-weight="700" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">One policy, any combination — no code change to switch</text>
+<rect x="40" y="562" width="200" height="96" rx="12" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="2"/>
+<text x="140" y="590" fill="#0F172A" font-size="13.5" font-weight="700" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">Data only</text>
+<text x="140" y="612" fill="#64748B" font-size="12" font-weight="400" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" text-anchor="middle">no toolRules</text>
+<text x="140" y="636" fill="#64748B" font-size="11" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">tool gating stays at the host</text>
+<rect x="260" y="562" width="200" height="96" rx="12" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="2"/>
+<text x="360" y="590" fill="#0F172A" font-size="13.5" font-weight="700" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">Tools + data</text>
+<text x="360" y="612" fill="#64748B" font-size="12" font-weight="400" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" text-anchor="middle">toolRules + data rules</text>
+<text x="360" y="636" fill="#64748B" font-size="11" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">both layers narrow</text>
+<rect x="480" y="562" width="200" height="96" rx="12" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="2"/>
+<text x="580" y="590" fill="#0F172A" font-size="13.5" font-weight="700" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">Tools only</text>
+<text x="580" y="612" fill="#64748B" font-size="12" font-weight="400" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" text-anchor="middle">toolRules only</text>
+<text x="580" y="636" fill="#64748B" font-size="11" font-weight="400" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif" text-anchor="middle">no data rules: data unrestricted</text>
+</svg>

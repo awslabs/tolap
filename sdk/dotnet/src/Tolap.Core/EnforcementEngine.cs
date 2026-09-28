@@ -1236,6 +1236,42 @@ public static class EnforcementEngine
         return new AccessResult(true);
     }
 
+    // MCP's recommended tool-name characters, 1-128 long; enforced only when toolRules is
+    // present. \z, not $, so a trailing newline cannot match: .NET's $ also matches before a
+    // final "\n". No IgnoreCase: the class already names both cases, and a culture-aware or
+    // Unicode fold is exactly what the grammar exists to keep out. No match timeout: the
+    // pattern is anchored and bounded, so it gives up after at most 129 characters.
+    private static readonly Regex ToolNamePattern =
+        new(@"^[A-Za-z0-9_.\-]{1,128}\z", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// Tool gating by <c>objectRules.toolRules</c> (spec section 16). Hidden before allowed; the
+    /// hide is case-insensitive and the allow exact, so both deny a mis-cased name.
+    /// <c>CanQuery</c> is deliberately not consulted -- the wrapper checks it after. Reasons do
+    /// not echo the name.
+    /// </summary>
+    public static AccessResult ValidateToolAccess(string toolName, EffectivePolicy policy)
+    {
+        var rules = policy.ObjectRules?.ToolRules;
+        if (rules is null)
+            return new AccessResult(true);
+
+        // Grammar first: with only [A-Za-z0-9_.-] left, OrdinalIgnoreCase is an exact ASCII
+        // fold and agrees with Python and TS. Unicode folds do not (U+212A KELVIN SIGN).
+        if (toolName is null || !ToolNamePattern.IsMatch(toolName))
+            return new AccessResult(false, "invalid tool name");
+
+        if (rules.HiddenTools is not null
+            && rules.HiddenTools.Contains(toolName, StringComparer.OrdinalIgnoreCase))
+            return new AccessResult(false, "tool is hidden");
+
+        if (rules.AllowedTools is not null
+            && !rules.AllowedTools.Contains(toolName, StringComparer.Ordinal))
+            return new AccessResult(false, "tool not in allowed set");
+
+        return new AccessResult(true);
+    }
+
     /// <summary>
     /// Validates a tool call's action category against the purpose it is running under
     /// (canonical-enforcement-spec.md section 15.2).

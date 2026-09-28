@@ -278,4 +278,41 @@ describe("what an empty selection means", () => {
     expect(note.textContent).toMatch(/every source/i);
     expect(note.textContent).not.toMatch(/denies everything/i);
   });
+
+  it("gives the restricts-nothing reading for a deny-list or an absent allow-list", () => {
+    // hiddenTools, and an allowedTools that is absent: the deny-all message would be
+    // false here and contradict the Tool rules hint directly above.
+    render(
+      <FieldPicker
+        label="Hidden tools"
+        selected={[]}
+        emptyMeans="unrestricted"
+        onChange={vi.fn()}
+      />,
+    );
+    const note = screen.getByRole("note");
+    expect(note.textContent).toMatch(/restricts nothing/i);
+    expect(note.textContent).not.toMatch(/denies everything/i);
+  });
+});
+
+describe("placeholder", () => {
+  it("uses the caller's placeholder over the catalog wording", () => {
+    render(
+      <FieldPicker
+        label="Allowed tools"
+        selected={[]}
+        placeholder="Type a tool name"
+        onChange={vi.fn()}
+      />,
+    );
+    const input = screen.getByLabelText("Add to Allowed tools") as HTMLInputElement;
+    expect(input.placeholder).toBe("Type a tool name");
+  });
+
+  it("keeps the catalog wording when no placeholder is given", () => {
+    render(<FieldPicker label="Allowed fields" selected={[]} onChange={vi.fn()} />);
+    const input = screen.getByLabelText("Add to Allowed fields") as HTMLInputElement;
+    expect(input.placeholder).toBe("Select a source above to see suggestions");
+  });
 });

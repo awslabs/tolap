@@ -51,6 +51,19 @@ public sealed record EndpointRules(
     string[]? AllowedMethods = null);
 
 /// <summary>
+/// Per-identity MCP tool gating (canonical-enforcement-spec.md section 16). Evaluated by every
+/// MCP wrapper whenever present. <c>AllowedTools</c> null is
+/// unrestricted; empty denies every tool. Allowed names match exactly (ordinal); hidden names
+/// match <see cref="System.StringComparer.OrdinalIgnoreCase"/>. A null or non-string list
+/// element is rejected at deserialization (<see cref="System.Text.Json.JsonException"/>).
+/// </summary>
+public sealed record ToolRules(
+    [property: System.Text.Json.Serialization.JsonConverter(typeof(StrictStringArrayJsonConverter))]
+    string[]? AllowedTools = null,
+    [property: System.Text.Json.Serialization.JsonConverter(typeof(StrictStringArrayJsonConverter))]
+    string[]? HiddenTools = null);
+
+/// <summary>
 /// Operational limits applied to queries and results.
 /// </summary>
 public sealed record PolicyLimits(
@@ -67,7 +80,8 @@ public sealed record ObjectRules(
     FieldRules? FieldRules = null,
     RowFilter[]? RowFilters = null,
     TagRules? TagRules = null,
-    EndpointRules? EndpointRules = null);
+    EndpointRules? EndpointRules = null,
+    ToolRules? ToolRules = null);
 
 /// <summary>
 /// Top-level permission flags for a policy.

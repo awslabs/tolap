@@ -513,4 +513,107 @@ public class SigningConformanceTests
         IssuedAt: issuedAt,
         ExpiresAt: issuedAt.AddHours(1),
         Policies: Array.Empty<EffectivePolicy>());
+
+    // -- objectRules.toolRules (matrix rows F5 and F6) --
+
+    private const string ToolRulesFixturePath = "signing/hmac-sha256-tool-rules.json";
+
+    [Fact]
+    public void F5_ToolRules_CanonicalPayloadMatchesTheFixtureBytes()
+    {
+        var root = FixtureHelper.ReadFixtureAsJson(ToolRulesFixturePath);
+        root.TryGetProperty("canonicalPayload", out var expected).Should().BeTrue(
+            "the tool-rules signing fixture must carry a canonicalPayload");
+
+        var (context, _) = LoadFixtureContext(ToolRulesFixturePath);
+
+        SecurityContextSigner.BuildCanonicalPayload(context).Should().Be(expected.GetString());
+    }
+
+    [Fact]
+    public void F5_ToolRules_HmacSha256MatchesTheKnownAnswer()
+    {
+        var root = FixtureHelper.ReadFixtureAsJson(ToolRulesFixturePath);
+        root.TryGetProperty("expectedSignature", out var expected).Should().BeTrue();
+        expected.ValueKind.Should().Be(JsonValueKind.String);
+
+        var (context, secretKey) = LoadFixtureContext(ToolRulesFixturePath);
+
+        SecurityContextSigner.Sign(context, secretKey, SigningAlgorithm.HmacSha256)
+            .Integrity!.Signature.Should().Be(expected.GetString());
+    }
+
+    [Fact]
+    public void F5_ToolRules_HmacSha512MatchesTheKnownAnswer()
+    {
+        var root = FixtureHelper.ReadFixtureAsJson(ToolRulesFixturePath);
+        root.TryGetProperty("expectedSignatureSha512", out var expected).Should().BeTrue();
+        expected.ValueKind.Should().Be(JsonValueKind.String);
+
+        var (context, secretKey) = LoadFixtureContext(ToolRulesFixturePath);
+
+        SecurityContextSigner.Sign(context, secretKey, SigningAlgorithm.HmacSha512)
+            .Integrity!.Signature.Should().Be(expected.GetString());
+    }
+
+    [Fact]
+    public void F5_ToolRules_TheSignedContextVerifies()
+    {
+        var (context, secretKey) = LoadFixtureContext(ToolRulesFixturePath);
+
+        var signed = SecurityContextSigner.Sign(context, secretKey);
+
+        SecurityContextSigner.Validate(signed, secretKey).Should().BeTrue();
+    }
+
+    [Fact]
+    public void F5_ToolRules_TheEmptyHiddenToolsIsSignedAsEmpty()
+    {
+        // hiddenTools [] must be signed as [], not dropped and not null, and allowedTools keeps
+        // its authored order (arrays are never sorted).
+        var (context, _) = LoadFixtureContext(ToolRulesFixturePath);
+
+        context.Policies[0].ObjectRules!.ToolRules!.HiddenTools.Should().NotBeNull().And.BeEmpty();
+
+        var payload = SecurityContextSigner.BuildCanonicalPayload(context);
+        payload.Should().Contain(
+            "\"toolRules\":{\"allowedTools\":[\"query_patients\",\"count_patients\"],\"hiddenTools\":[]}");
+    }
+
+    public static TheoryData<string> PreToolRulesSigningFixtures() => new()
+    {
+        "signing/hmac-sha256-known-answer.json",
+        "signing/hmac-sha256-subsecond.json",
+        "signing/hmac-sha256-purpose-bound.json"
+    };
+
+    [Theory]
+    [MemberData(nameof(PreToolRulesSigningFixtures))]
+    public void F6_ThePreExistingSigningFixturesCarryNoToolRules(string fixturePath)
+    {
+        var root = FixtureHelper.ReadFixtureAsJson(fixturePath);
+        var policy = TolapJsonOptions.Deserialize<EffectivePolicy>(root.GetProperty("payload").GetRawText());
+
+        policy.ObjectRules?.ToolRules.Should().BeNull();
+        root.GetProperty("canonicalPayload").GetString().Should().NotContain("toolRules");
+        CanonicalJson.Serialize(policy).Should().NotContain("toolRules");
+    }
+
+    [Theory]
+    [InlineData("signing/hmac-sha256-known-answer.json")]
+    [InlineData("signing/hmac-sha256-subsecond.json")]
+    public void F6_ThePreExistingSigningFixturesStillSignToTheirKnownAnswers(string fixturePath)
+    {
+        // hmac-sha256-purpose-bound's envelope carries declaredPurpose and is asserted
+        // byte-for-byte by PurposeSigningConformanceTests, which this change leaves untouched.
+        var root = FixtureHelper.ReadFixtureAsJson(fixturePath);
+        var (context, secretKey) = LoadFixtureContext(fixturePath);
+
+        SecurityContextSigner.BuildCanonicalPayload(context)
+            .Should().Be(root.GetProperty("canonicalPayload").GetString());
+        SecurityContextSigner.Sign(context, secretKey, SigningAlgorithm.HmacSha256)
+            .Integrity!.Signature.Should().Be(root.GetProperty("expectedSignature").GetString());
+        SecurityContextSigner.Sign(context, secretKey, SigningAlgorithm.HmacSha512)
+            .Integrity!.Signature.Should().Be(root.GetProperty("expectedSignatureSha512").GetString());
+    }
 }

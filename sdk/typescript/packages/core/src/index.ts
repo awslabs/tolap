@@ -20,6 +20,7 @@ export {
   type FieldRules,
   type TagRules,
   type EndpointRules,
+  type ToolRules,
   type PolicyLimits,
   type ObjectRules,
   type PolicyPermissions,
@@ -152,6 +153,7 @@ export {
   UnenforceableResultError,
   type ResultShape,
   validateEndpoint,
+  validateToolAccess,
   fieldNameMatches,
 } from "./enforcement.js";
 
