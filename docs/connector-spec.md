@@ -194,6 +194,7 @@ values are produced:
 | `method not allowed on a read-only policy` | A write method while `readOnly` is true |
 | `query references fields you do not have permission to access` | A SQL query references a hidden or non-allowed column (§5) |
 | `query uses a construct the pre-execution check cannot resolve: <construct>` | A SQL query uses a construct the pre-execution check does not resolve (§5) |
+| `object name does not match the table the query reads` | A caller-supplied object name and the single table a SQL query reads differ (§5) |
 
 **Precedence.** When a request fails more than one check, the reason is the first that
 denies, evaluated in this order: `query not permitted` → `endpoint is hidden` →
@@ -371,7 +372,15 @@ A bare column in a query over several tables is accepted only when an unqualifie
 `allowedFields` entry or `*` permits it. The check reads a common subset of `SELECT` and
 refuses anything else rather than guessing (§3.3). The refused constructs include common table
 expressions, set operations, subqueries outside `FROM`, `LATERAL`, table-valued functions and
-statements other than `SELECT`. It is a lexical check, not a SQL engine. The database's own
+statements other than `SELECT`. Identifier and literal forms the check does not model are
+refused too: Unicode-escape forms (`U&"..."`, `U&'...'`), string literal prefixes other than
+`N`, `E`, `X`, `B`, `R`, typed literals and character set introducers, triple-quoted literals,
+identifiers containing a non-ASCII character, and identifiers that start with a digit. When the
+caller supplies an object name, it is checked with `validateAccess` in addition to every table
+the query reads, never instead of them; a single-table query whose table is not that object is
+refused. Names are compared part by part from the right, ASCII case-insensitively, so
+`patients` matches `public.patients` but `db1.patients` does not match `db2.patients`. It is a
+lexical check, not a SQL engine. The database's own
 grants for the connection remain the outer bound on what a query can read. The shared fixture
 `fixtures/enforcement/sql-multi-table.json` pins the behaviour.
 

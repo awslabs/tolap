@@ -997,6 +997,11 @@ export class SqlQueryRewriter {
    * Refusing beats silently narrowing: an agent that asked for a field it cannot
    * read should be told, not handed a result that quietly omits the column. Returns
    * false for an empty query.
+   *
+   * **Warning:** this is a single-table field check. It does not check which
+   * tables the query reads, and on a query over several tables it cannot say which
+   * table a field belongs to. Call {@link validateQueryReferences} as well (or use
+   * `prepareSqlQuery`, which runs both) before executing a query.
    */
   validateQuery(query: string, policy: EffectivePolicy): boolean {
     if (typeof query !== "string" || query.trim() === "") return false;
@@ -1052,6 +1057,11 @@ export class SqlQueryRewriter {
    * Handles `table`, `schema.table`, `"schema"."table"`, and the `"schema.table"`
    * form where the whole dotted name sits inside one pair of quotes. Returns the
    * leaf name, which is what an `allowedObjects` rule is written against.
+   *
+   * **Warning:** only the first `FROM` table is returned. Checking that one table
+   * does not check the query: joined tables, derived tables and subqueries are not
+   * reported. Call {@link validateQueryReferences} (or use `prepareSqlQuery`) to
+   * check every table a query reads.
    */
   extractTableName(query: string): string | undefined {
     if (typeof query !== "string" || query.trim() === "") return undefined;

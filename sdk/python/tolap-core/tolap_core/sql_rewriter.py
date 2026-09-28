@@ -1558,6 +1558,13 @@ def validate_query(query: str, policy: EffectivePolicy) -> bool:
     Because field extraction is regex-based, **a False result is authoritative but
     a True result is not a guarantee**: the post-fetch pass, not this function, is
     what makes hidden fields unreachable.
+
+    .. warning::
+       This is a single-table field check. It does not check which tables the
+       query reads, and on a query over several tables it cannot say which table
+       a field belongs to. Call
+       :func:`tolap_core.sql_references.validate_query_references` as well (or
+       use :func:`prepare_sql_query`, which runs both) before executing a query.
     """
     if not query or not query.strip():
         return False
@@ -1597,6 +1604,12 @@ def extract_table_name(query: str) -> str | None:
     Handles bare (``patients``), qualified (``public.patients``), and quoted
     (``"schema"."table"``) forms, returning the unqualified table name so it can
     be passed to :func:`tolap_core.enforcement.validate_access`.
+
+    .. warning::
+       Only the first ``FROM`` table is returned. Checking that one table does not
+       check the query: joined tables, derived tables and subqueries are not
+       reported. Call :func:`tolap_core.sql_references.validate_query_references`
+       (or use :func:`prepare_sql_query`) to check every table a query reads.
     """
     if not query or not query.strip():
         return None

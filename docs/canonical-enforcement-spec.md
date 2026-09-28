@@ -313,8 +313,10 @@ MUST all still apply. Declining to rewrite MUST NOT relax a denial.
 Those checks apply to every table a query references, not only the first. Each base table in
 `FROM`, `JOIN`, a comma join or a derived table is checked against `allowedObjects` and
 `hiddenObjects`, and each column reference is checked against the field rules of the table it
-resolves to ([connector-spec §5](connector-spec.md#read-path)). A query the check cannot
-resolve is refused, not passed through.
+resolves to ([connector-spec §5](connector-spec.md#read-path)). A caller-supplied object
+name is checked in addition to those tables, not in place of them, and a single-table query
+must read the object it names. A query the check cannot resolve, including one using an
+identifier or literal form the check does not model, is refused, not passed through.
 
 In `postOnly` an SDK MUST report **every** row filter as unpushed, not merely the ones it
 could not express: none of them reached the database, and a caller checking whether filters

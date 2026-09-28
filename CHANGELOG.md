@@ -22,7 +22,13 @@ These constructs are common table expressions, set operations, subqueries outsid
 other than `SELECT`. Queries over a single table are decided as before, except that one using
 such a construct, or a table modifier such as a hint or `TABLESAMPLE`, is now refused. The check
 is exported as `validate_query_references` (Python), `validateQueryReferences` (TypeScript)
-and `SqlQueryReferences.Validate` (.NET). The shared fixture
+and `SqlQueryReferences.Validate` (.NET). When the caller supplies an object name, both it and
+the table the query reads are checked, and a single-table query whose table is not the named
+object is refused with `object name does not match the table the query reads`. Identifier and
+literal forms the check does not model are refused rather than read: Unicode-escape forms
+(`U&"..."`, `U&'...'`), string literal prefixes other than `N`, `E`, `X`, `B`, `R`, typed
+literals and character set introducers, triple-quoted literals, identifiers containing a
+non-ASCII character, and identifiers that start with a digit. The shared fixture
 [`fixtures/enforcement/sql-multi-table.json`](fixtures/enforcement/sql-multi-table.json)
 pins the behaviour in all three SDKs.
 
