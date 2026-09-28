@@ -197,3 +197,12 @@ export {
   type RewriteDiagnostics,
   type SqlRewriterOptions,
 } from "./sql-rewriter.js";
+
+// The pre-execution check that every table a query references, and every column
+// through the table it belongs to, is permitted. prepareSqlQuery runs it.
+export {
+  validateQueryReferences,
+  FIELD_DENIAL_REASON,
+  UNSUPPORTED_REASON_PREFIX,
+  OBJECT_MISMATCH_REASON,
+} from "./sql-references.js";

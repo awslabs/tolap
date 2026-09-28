@@ -211,6 +211,13 @@ public sealed class SecureMcpToolWrapper
             }
         }
 
+        // Every table the query reads, and every column through the table it belongs to.
+        var references = SqlQueryReferences.Validate(sql, policy, objectName);
+        if (!references.Allowed)
+        {
+            return Refuse(references.Reason ?? "access denied", sql);
+        }
+
         if (!rewriter.ValidateQuery(sql, policy))
         {
             return Refuse("query references fields you do not have permission to access", sql);

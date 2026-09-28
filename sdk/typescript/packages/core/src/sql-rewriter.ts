@@ -60,6 +60,7 @@ import type {
 } from "./types.js";
 import { FilterOperator } from "./types.js";
 import { fieldNameMatches, validateAccess } from "./enforcement.js";
+import { validateQueryReferences } from "./sql-references.js";
 
 // ---------------------------------------------------------------------------
 // Public surface
@@ -397,8 +398,26 @@ const POST_FROM_CLAUSES: RegExp[] = [
   /\bEXCEPT\b/gi,
 ];
 
-/** The table reference immediately after `FROM`: a bare, dotted, or quoted name. */
-const FROM_TABLE_PATTERN = /\bFROM\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))*)/i;
+/**
+ * The table reference immediately after `FROM`: a bare, dotted, or quoted name. All
+ * three SDKs build it from the same text, so each captures the same name. A name
+ * character is an ASCII letter, digit or underscore, or any non-ASCII character except
+ * the non-ASCII spaces the reference check refuses; a regex's own `\w` and `\s` differ
+ * between engines, and the capture decides which refusal a query gets.
+ */
+const NON_ASCII_SPACES =
+  String.raw`\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006` +
+  String.raw`\u2007\u2008\u2009\u200a\u200b\u2028\u2029\u202f\u205f\u3000\ufeff`;
+const NAME_CHAR = String.raw`[^\x00-\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f` + NON_ASCII_SPACES + "]";
+const NAME_PART = `(?:"[^"]+"|${NAME_CHAR}+)`;
+const FROM_TABLE_PATTERN = new RegExp(
+  `(?<!${NAME_CHAR})FROM` +
+    String.raw`[\t\n\v\f\r ` +
+    NON_ASCII_SPACES +
+    "]+" +
+    `(${NAME_PART}(?:\\.${NAME_PART})*)`,
+  "i",
+);
 
 // -- Clause-body patterns, used only by validateQuery's field extraction --
 
@@ -996,6 +1015,11 @@ export class SqlQueryRewriter {
    * Refusing beats silently narrowing: an agent that asked for a field it cannot
    * read should be told, not handed a result that quietly omits the column. Returns
    * false for an empty query.
+   *
+   * **Warning:** this is a single-table field check. It does not check which
+   * tables the query reads, and on a query over several tables it cannot say which
+   * table a field belongs to. Call {@link validateQueryReferences} as well (or use
+   * `prepareSqlQuery`, which runs both) before executing a query.
    */
   validateQuery(query: string, policy: EffectivePolicy): boolean {
     if (typeof query !== "string" || query.trim() === "") return false;
@@ -1051,6 +1075,11 @@ export class SqlQueryRewriter {
    * Handles `table`, `schema.table`, `"schema"."table"`, and the `"schema.table"`
    * form where the whole dotted name sits inside one pair of quotes. Returns the
    * leaf name, which is what an `allowedObjects` rule is written against.
+   *
+   * **Warning:** only the first `FROM` table is returned. Checking that one table
+   * does not check the query: joined tables, derived tables and subqueries are not
+   * reported. Call {@link validateQueryReferences} (or use `prepareSqlQuery`) to
+   * check every table a query reads.
    */
   extractTableName(query: string): string | undefined {
     if (typeof query !== "string" || query.trim() === "") return undefined;
@@ -1634,6 +1663,12 @@ export function prepareSqlQuery(
     const access = validateAccess(target, policy);
     if (!access.allowed) return denied(access.reason ?? "access denied");
   }
+
+  // Every table the query reads, and every column through the table it belongs to.
+  const references = validateQueryReferences(query, policy, {
+    objectName: options.objectName,
+  });
+  if (!references.allowed) return denied(references.reason ?? "access denied");
 
   if (!rewriter.validateQuery(query, policy)) {
     return denied("query references fields you do not have permission to access");

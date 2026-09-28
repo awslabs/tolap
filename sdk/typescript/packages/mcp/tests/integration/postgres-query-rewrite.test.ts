@@ -32,6 +32,7 @@ import {
   buildSecurityContext,
   signContext,
   FilterOperator,
+  OBJECT_MISMATCH_REASON,
   SqlDialect,
   type EffectivePolicy,
   type ObjectRules,
@@ -856,21 +857,41 @@ describe("prepareSqlQuery / executeSqlWithEnforcement", () => {
     expect(invoked).toBe(false);
   });
 
-  it("honours an explicitly supplied objectName over the query's table", async () => {
-    // The caller may be wrapping a tool whose "object" is not the SQL table -- a
-    // view name, a logical dataset. An explicit objectName is authoritative and the
-    // query is not consulted for it.
+  it("checks the query's own table alongside an explicitly supplied objectName", async () => {
+    // An explicit objectName is checked, and so is the table the query reads: the
+    // object the caller names cannot stand in for a different table the query
+    // reads, or a table the policy does not list would be read unchecked.
     const policy = policyOf({});
     policy.objectRules = { ...policy.objectRules, allowedObjects: ["patients"] };
     const ctx = contextFor(policy);
 
-    // Explicit name is in the allow-list, so this passes even though the query reads
-    // a table that is not.
+    // The explicit name is in the allow-list but the query reads a table that is
+    // not, so the query is refused.
+    const unlisted = wrapper.prepareSqlQuery(
+      ctx,
+      { toolName: "pg-query", objectName: "patients" },
+      "SELECT id FROM encounters",
+    );
+    expect(unlisted.allowed).toBe(false);
+    expect(unlisted.denialReason).toContain("not in allowed set");
+
+    // Both listed, but the name and the table differ: refused as a mismatch.
+    const both = policyOf({});
+    both.objectRules = { ...both.objectRules, allowedObjects: ["patients", "encounters"] };
+    const mismatch = wrapper.prepareSqlQuery(
+      contextFor(both),
+      { toolName: "pg-query", objectName: "patients" },
+      "SELECT id FROM encounters",
+    );
+    expect(mismatch.allowed).toBe(false);
+    expect(mismatch.denialReason).toBe(OBJECT_MISMATCH_REASON);
+
+    // The name and the table agree: allowed.
     expect(
       wrapper.prepareSqlQuery(
         ctx,
         { toolName: "pg-query", objectName: "patients" },
-        "SELECT id FROM encounters",
+        "SELECT id FROM public.patients",
       ).allowed,
     ).toBe(true);
 

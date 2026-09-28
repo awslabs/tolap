@@ -84,6 +84,7 @@ from tolap_core.sql_rewriter import (
     unpushable_filters,
     validate_query,
 )
+from tolap_core.sql_references import validate_query_references
 from tolap_core.enforcement import (
     TARGET_ROW_UNKNOWN,
     AccessResult,
@@ -267,4 +268,5 @@ __all__ = [
     "rewrite_query",
     "unpushable_filters",
     "validate_query",
+    "validate_query_references",
 ]

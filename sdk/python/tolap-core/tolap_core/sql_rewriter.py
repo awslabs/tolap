@@ -348,9 +348,22 @@ _POST_FROM_CLAUSES = [
     re.compile(r"\bEXCEPT\b", re.IGNORECASE),
 ]
 
-# The table reference immediately after FROM: a bare, dotted, or quoted name.
+# The table reference immediately after FROM: a bare, dotted, or quoted name. All
+# three SDKs build it from the same text, so each captures the same name. A name
+# character is an ASCII letter, digit or underscore, or any non-ASCII character except
+# the non-ASCII spaces the reference check refuses; a regex's own \w and \s differ
+# between engines, and the capture decides which refusal a query gets.
+_NON_ASCII_SPACES = (
+    r"\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006"
+    r"\u2007\u2008\u2009\u200a\u200b\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+_NAME_CHAR = r"[^\x00-\x2f\x3a-\x40\x5b-\x5e\x60\x7b-\x7f" + _NON_ASCII_SPACES + "]"
+_NAME_PART = r'(?:"[^"]+"|' + _NAME_CHAR + "+)"
 _FROM_TABLE_PATTERN = re.compile(
-    r'\bFROM\s+((?:"[^"]+"|\w+)(?:\.(?:"[^"]+"|\w+))*)', re.IGNORECASE
+    "(?<!" + _NAME_CHAR + ")FROM"
+    + r"[\t\n\v\f\r " + _NON_ASCII_SPACES + "]+"
+    + "(" + _NAME_PART + r"(?:\." + _NAME_PART + ")*)",
+    re.IGNORECASE,
 )
 
 # -- Clause-body patterns, used only by validate_query's field extraction --
@@ -1558,6 +1571,13 @@ def validate_query(query: str, policy: EffectivePolicy) -> bool:
     Because field extraction is regex-based, **a False result is authoritative but
     a True result is not a guarantee**: the post-fetch pass, not this function, is
     what makes hidden fields unreachable.
+
+    .. warning::
+       This is a single-table field check. It does not check which tables the
+       query reads, and on a query over several tables it cannot say which table
+       a field belongs to. Call
+       :func:`tolap_core.sql_references.validate_query_references` as well (or
+       use :func:`prepare_sql_query`, which runs both) before executing a query.
     """
     if not query or not query.strip():
         return False
@@ -1597,6 +1617,12 @@ def extract_table_name(query: str) -> str | None:
     Handles bare (``patients``), qualified (``public.patients``), and quoted
     (``"schema"."table"``) forms, returning the unqualified table name so it can
     be passed to :func:`tolap_core.enforcement.validate_access`.
+
+    .. warning::
+       Only the first ``FROM`` table is returned. Checking that one table does not
+       check the query: joined tables, derived tables and subqueries are not
+       reported. Call :func:`tolap_core.sql_references.validate_query_references`
+       (or use :func:`prepare_sql_query`) to check every table a query reads.
     """
     if not query or not query.strip():
         return None
@@ -1706,6 +1732,7 @@ def prepare_sql_query(
     # this module, and keeping the dependency one-directional at import time avoids
     # a cycle if that ever changes.
     from tolap_core.enforcement import validate_access
+    from tolap_core.sql_references import validate_query_references
 
     # Resolved before anything else so an unrecognized mode raises rather than
     # silently rewriting a query the caller asked not to be touched.
@@ -1722,6 +1749,11 @@ def prepare_sql_query(
         access = validate_access(target, policy)
         if not access.allowed:
             return SqlQueryPreparation.denied(access.reason or "access denied", query)
+
+    # Every table the query reads, and every column through the table it belongs to.
+    references = validate_query_references(query, policy, object_name=object_name)
+    if not references.allowed:
+        return SqlQueryPreparation.denied(references.reason or "access denied", query)
 
     if not validate_query(query, policy):
         return SqlQueryPreparation.denied(

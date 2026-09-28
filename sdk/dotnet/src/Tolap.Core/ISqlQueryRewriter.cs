@@ -78,6 +78,12 @@ public interface ISqlQueryRewriter
     /// specified — for any reference outside it. Because field extraction is regular-expression
     /// based, a false result is authoritative but a true result is not a guarantee: the
     /// post-fetch pass, not this method, is what makes hidden fields unreachable.
+    /// <para>
+    /// <b>Warning:</b> this is a single-table field check. It does not check which tables
+    /// the query reads, and on a query over several tables it cannot say which table a
+    /// field belongs to. Call <see cref="SqlQueryReferences.Validate"/> as well before
+    /// executing a query.
+    /// </para>
     /// </remarks>
     bool ValidateQuery(string query, EffectivePolicy policy);
 
@@ -89,6 +95,12 @@ public interface ISqlQueryRewriter
     /// (<c>"schema"."table"</c>) forms, returning the unqualified table name so it can be
     /// passed to <see cref="EnforcementEngine.ValidateAccess"/>. Returns null when the
     /// query has no <c>FROM</c> clause.
+    /// <para>
+    /// <b>Warning:</b> only the first <c>FROM</c> table is returned. Checking that one table
+    /// does not check the query: joined tables, derived tables and subqueries are not
+    /// reported. Call <see cref="SqlQueryReferences.Validate"/> to check every table a
+    /// query reads.
+    /// </para>
     /// </remarks>
     string? ExtractTableName(string query);
 

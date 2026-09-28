@@ -8,6 +8,30 @@ All notable changes to TOLAP are documented in this file. The format follows
 
 ### Fixed
 
+**The SQL pre-checks validate every table a query references.** The SQL prepare paths
+(`prepare_sql_query` in Python, `prepareSqlQuery` in TypeScript core and in the TypeScript and
+.NET wrappers) now resolve every table a query reads, including joined, comma-joined and derived
+tables, and check each one with `validateAccess`. Column references are resolved through the
+alias map to the table they belong to, and the field rules are applied to that table
+([connector-spec §5](docs/connector-spec.md#read-path)). A bare column in a query over several
+tables is accepted only when an unqualified `allowedFields` entry or `*` permits it, because the
+table it belongs to cannot be known without the schema. A construct the check does not resolve
+is refused with `query uses a construct the pre-execution check cannot resolve: <construct>`.
+These constructs are common table expressions, set operations, subqueries outside `FROM`,
+`LATERAL`, table-valued functions, `APPLY`, `NATURAL JOIN` when field rules apply, and statements
+other than `SELECT`. Queries over a single table are decided as before, except that one using
+such a construct, or a table modifier such as a hint or `TABLESAMPLE`, is now refused. The check
+is exported as `validate_query_references` (Python), `validateQueryReferences` (TypeScript)
+and `SqlQueryReferences.Validate` (.NET). When the caller supplies an object name, both it and
+the table the query reads are checked, and a single-table query whose table is not the named
+object is refused with `object name does not match the table the query reads`. Identifier and
+literal forms the check does not model are refused rather than read: Unicode-escape forms
+(`U&"..."`, `U&'...'`), string literal prefixes other than `N`, `E`, `X`, `B`, `R`, typed
+literals and character set introducers, triple-quoted literals, identifiers containing a
+non-ASCII character, and identifiers that start with a digit. The shared fixture
+[`fixtures/enforcement/sql-multi-table.json`](fixtures/enforcement/sql-multi-table.json)
+pins the behaviour in all three SDKs.
+
 **A row filter could read another object's column.** When a row had no exact key for a filter's
 field, the lookup fell back to the field-name matcher. That matcher drops qualifiers, so a filter
 on `patients.region` was evaluated against `encounters.region` whenever the leaf names matched.
