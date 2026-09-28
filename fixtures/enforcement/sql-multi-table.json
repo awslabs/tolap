@@ -4486,7 +4486,7 @@
       },
       "expected": {
         "allowed": false,
-        "reason": "object is hidden"
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
       }
     },
     {
@@ -7089,7 +7089,7 @@
       },
       "expected": {
         "allowed": false,
-        "reason": "object is hidden"
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
       }
     },
     {
@@ -7120,7 +7120,7 @@
       },
       "expected": {
         "allowed": false,
-        "reason": "object not in allowed set"
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
       }
     },
     {
@@ -7213,7 +7213,7 @@
       },
       "expected": {
         "allowed": false,
-        "reason": "query references fields you do not have permission to access"
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
       }
     },
     {
@@ -7272,7 +7272,7 @@
       },
       "expected": {
         "allowed": false,
-        "reason": "query references fields you do not have permission to access"
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
       }
     },
     {
@@ -7717,6 +7717,1531 @@
       "expected": {
         "allowed": false,
         "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-comments-cr-nested-block-trino",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id -- x\r/* /* */ WHERE (e.pid, e.diagnosis) IN ((1, 2)) -- */\n",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
+      }
+    },
+    {
+      "name": "probe-comments-cr-nested-block-single-table",
+      "query": "SELECT name FROM patients -- x\r/* /* */ WHERE (id, ssn) IN ((1, 2)) -- */\n",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
+      }
+    },
+    {
+      "name": "probe-comments-cr-nested-block-table",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id -- x\r/* /* */ , e.diagnosis -- */\n",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
+      }
+    },
+    {
+      "name": "probe-comments-lone-cr-in-comment",
+      "query": "SELECT name FROM patients -- x\r WHERE id = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
+      }
+    },
+    {
+      "name": "probe-comments-trailing-cr-in-comment",
+      "query": "SELECT name FROM patients -- x\r",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: carriage return in comment"
+      }
+    },
+    {
+      "name": "probe-comments-crlf-comment-allowed",
+      "query": "SELECT name FROM patients -- x\r\nWHERE id = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "probe-comments-mysql-dash-control-char",
+      "query": "SELECT p.name FROM patients p JOIN encounters e ON e.pid = p.id --\u0001 '\n/*! WHERE (e.pid, e.diagnosis) IN ((1, 9)) */ -- '\n",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients",
+            "encounters"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name",
+              "patients.id",
+              "encounters.pid",
+              "encounters.visit_date"
+            ],
+            "hiddenFields": [
+              "encounters.diagnosis"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "probe-comments-mysql-dash-control-char-union",
+      "query": "SELECT name FROM patients WHERE id = 1 --\u0001 '\n/*! UNION ALL SELECT secret FROM secrets */ -- '\n",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: set operation"
+      }
+    },
+    {
+      "name": "probe-comments-mysql-dash-del",
+      "query": "SELECT name FROM patients WHERE id = 1 -- '\n/*! UNION ALL SELECT secret FROM secrets */ -- '\n",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: set operation"
+      }
+    },
+    {
+      "name": "probe-comments-mysql-dash-end-of-input",
+      "query": "SELECT name FROM patients WHERE id = 1 --",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "hidden-column-named-zone-in-where",
+      "query": "SELECT id FROM patients WHERE zone = 7",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-zone-in-function",
+      "query": "SELECT id, COALESCE(zone, 0) AS z FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-zone-select-item",
+      "query": "SELECT id, zone FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-first-row-value",
+      "query": "SELECT id FROM patients WHERE (id, first) IN ((1, 1))",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.first"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-precision",
+      "query": "SELECT id, COALESCE(precision, 0) AS z FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.precision"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "allowlist-keyword-named-column",
+      "query": "SELECT id FROM patients WHERE last = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "cast-timestamptz-with-hidden-zone",
+      "query": "SELECT CAST(created_at AS TIMESTAMP WITH TIME ZONE) FROM patients WHERE zone = 7",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-year-in-substring",
+      "query": "SELECT id FROM patients WHERE SUBSTRING(year FROM 1 FOR 2) = '19'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.year"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-year-in-order-by-function",
+      "query": "SELECT id FROM patients ORDER BY COALESCE(year, 0)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.year"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-year-parenthesised",
+      "query": "SELECT id FROM patients WHERE 1 = (year)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.year"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-leading-parenthesised",
+      "query": "SELECT id FROM patients WHERE 1 = (leading)",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.leading"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-after-at-sign",
+      "query": "SELECT id FROM patients WHERE @zone = 7",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-in-array-slice",
+      "query": "SELECT id FROM patients WHERE (ARRAY[1, 2])[1:zone] IS NOT NULL",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-between-after-not",
+      "query": "SELECT id FROM patients WHERE NOT between = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.between"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-in-interval-compound-unit",
+      "query": "SELECT id FROM patients WHERE DATE_ADD(created_at, INTERVAL zone HOUR_MINUTE) > NOW()",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-in-interval-expression",
+      "query": "SELECT id FROM patients WHERE DATE_ADD(created_at, INTERVAL zone + 1 WEEK) > NOW()",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-after-binary-operator",
+      "query": "SELECT id FROM patients WHERE BINARY zone = 'x'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-after-variadic",
+      "query": "SELECT id FROM patients WHERE concat_ws(',', VARIADIC zone) = 'x'",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "single-table-interval-compound-unit-legacy-refusal",
+      "query": "SELECT name FROM patients WHERE DATE_ADD(dob, INTERVAL 1 DAY_HOUR) > NOW()",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "single-table-at-time-zone-legacy-refusal",
+      "query": "SELECT created_at AT TIME ZONE 'UTC' AS t FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "single-table-window-frame-legacy-refusal",
+      "query": "SELECT SUM(id) OVER (PARTITION BY dept ORDER BY dob ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS s FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "single-table-separator-legacy-refusal",
+      "query": "SELECT GROUP_CONCAT(name ORDER BY name DESC SEPARATOR ',') AS n FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-rows-in-partition",
+      "query": "SELECT id, ROW_NUMBER() OVER (PARTITION BY rows ORDER BY id) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.rows"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-mod",
+      "query": "SELECT id FROM patients WHERE mod = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.mod"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-div",
+      "query": "SELECT id FROM patients WHERE div = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.div"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-xor",
+      "query": "SELECT id FROM patients WHERE xor = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.xor"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-ilike",
+      "query": "SELECT id FROM patients WHERE ilike = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ilike"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-by",
+      "query": "SELECT id FROM patients WHERE by = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.by"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-at",
+      "query": "SELECT id FROM patients WHERE at = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.at"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-end",
+      "query": "SELECT id FROM patients WHERE end = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.end"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-current-role",
+      "query": "SELECT id FROM patients WHERE current_role = 1",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.current_role"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-after-distinct-on",
+      "query": "SELECT DISTINCT ON (id) zone FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "hidden-column-named-offset-in-where",
+      "query": "SELECT id FROM patients WHERE offset = 7",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.offset"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: empty WHERE clause"
+      }
+    },
+    {
+      "name": "hidden-column-named-offset-in-order-by",
+      "query": "SELECT id FROM patients ORDER BY offset",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.offset"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: empty ORDER clause"
+      }
+    },
+    {
+      "name": "hidden-column-named-limit-in-where",
+      "query": "SELECT id FROM patients WHERE limit = 7",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.limit"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: empty WHERE clause"
+      }
+    },
+    {
+      "name": "hidden-column-in-offset-clause",
+      "query": "SELECT id FROM patients LIMIT 1 OFFSET zone",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: OFFSET clause"
+      }
+    },
+    {
+      "name": "hidden-column-in-fetch-clause",
+      "query": "SELECT id FROM patients FETCH FIRST zone ROWS ONLY",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.zone"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query uses a construct the pre-execution check cannot resolve: FETCH clause"
+      }
+    },
+    {
+      "name": "single-table-limit-offset-allowed",
+      "query": "SELECT name FROM patients LIMIT 10 OFFSET 5",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-fetch-first-allowed",
+      "query": "SELECT name FROM patients ORDER BY id OFFSET 5 ROWS FETCH FIRST 10 ROWS ONLY",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-for-update-allowed",
+      "query": "SELECT name FROM patients WHERE id = 1 FOR UPDATE OF patients SKIP LOCKED",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-limit-placeholder-allowed",
+      "query": "SELECT name FROM patients LIMIT ?",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-double-precision-allowed",
+      "query": "SELECT CAST(id AS DOUBLE PRECISION) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-unsigned-integer-allowed",
+      "query": "SELECT CAST(id AS UNSIGNED INTEGER) FROM patients",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-nulls-last-legacy-refusal",
+      "query": "SELECT name FROM patients ORDER BY dob NULLS LAST",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": false,
+        "reason": "query references fields you do not have permission to access"
+      }
+    },
+    {
+      "name": "single-table-interval-literal-allowed",
+      "query": "SELECT name FROM patients WHERE created_at > NOW() - INTERVAL '7' DAY",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-not-between-allowed",
+      "query": "SELECT name FROM patients WHERE id NOT BETWEEN 1 AND 5",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
+      }
+    },
+    {
+      "name": "single-table-is-not-null-allowed",
+      "query": "SELECT name FROM patients WHERE dob IS NOT NULL",
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "allowedObjects": [
+            "patients"
+          ],
+          "fieldRules": {
+            "allowedFields": [
+              "patients.id",
+              "patients.name",
+              "patients.dob",
+              "patients.created_at",
+              "patients.dept"
+            ],
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": true
       }
     }
   ]

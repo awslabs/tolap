@@ -102,6 +102,14 @@ public static class SqlQueryReferences
     private static readonly HashSet<string> CheckedTail = Words("WHERE GROUP HAVING ORDER");
     private static readonly HashSet<string> SkippedTail = Words("LIMIT OFFSET FETCH FOR");
 
+    // The words a skipped tail clause may hold: LIMIT ALL, OFFSET 5 ROWS, FETCH FIRST 5
+    // ROWS WITH TIES, FOR NO KEY UPDATE SKIP LOCKED, LOCK IN SHARE MODE. Anything else
+    // means a column was taken for the clause keyword (MySQL's WHERE offset = 7), so the
+    // clause is refused rather than left unread.
+    private static readonly HashSet<string> SkippedTailWords = Words(
+        "ALL FIRST NEXT ROW ROWS ONLY WITH TIES PERCENT UPDATE SHARE NO KEY NOWAIT "
+        + "SKIP LOCKED LOCK IN MODE");
+
     private static readonly HashSet<string> JoinWords =
         Words("JOIN INNER LEFT RIGHT FULL CROSS NATURAL OUTER STRAIGHT_JOIN");
 
@@ -125,6 +133,62 @@ public static class SqlQueryReferences
 
     // The value an operand can end with, before a bare alias.
     private static readonly HashSet<string> OperandEndKeywords = Words("END NULL TRUE FALSE UNKNOWN");
+
+    // Words reserved on every modelled engine, so never a bare column: skipped wherever
+    // they appear in an expression. Every other word is a keyword only in a position
+    // (see Analysis.Bare); anywhere else it is checked as a column. TRUE and FALSE are
+    // reserved everywhere but SQL Server, where a column so named is taken for the literal.
+    private static readonly HashSet<string> Reserved = Words(
+        "AND CASE CROSS CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER "
+        + "DISTINCT ELSE FALSE FOR FROM GROUP HAVING IN INNER IS JOIN LEFT LIKE NOT NULL "
+        + "ON OR ORDER OUTER THEN TRUE WHEN WHERE WITH");
+
+    // Reserved words that are themselves a value, so a word after one is not an operand.
+    private static readonly HashSet<string> ReservedValues = Words(
+        "CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER NULL TRUE FALSE");
+
+    // Keywords that follow another keyword: ORDER BY, NULLS LAST, SIMILAR TO, WITH ROLLUP,
+    // AT TIME ZONE, a window frame's UNBOUNDED PRECEDING and CURRENT ROW. None of the
+    // first words is ever followed by an expression, so the second is never a column.
+    private static readonly Dictionary<string, HashSet<string>> KeywordPairs = new(StringComparer.Ordinal)
+    {
+        ["ORDER"] = Words("BY"),
+        ["GROUP"] = Words("BY"),
+        ["PARTITION"] = Words("BY"),
+        ["ASC"] = Words("NULLS SEPARATOR ROWS RANGE GROUPS"),
+        ["DESC"] = Words("NULLS SEPARATOR ROWS RANGE GROUPS"),
+        ["FIRST"] = Words("SEPARATOR ROWS RANGE GROUPS"),
+        ["LAST"] = Words("SEPARATOR ROWS RANGE GROUPS"),
+        ["IGNORE"] = Words("NULLS"),
+        ["RESPECT"] = Words("NULLS"),
+        ["NULLS"] = Words("FIRST LAST"),
+        ["SIMILAR"] = Words("TO"),
+        ["WITH"] = Words("ROLLUP CUBE TIME"),
+        ["WITHOUT"] = Words("TIME"),
+        ["AT"] = Words("TIME LOCAL"),
+        ["ROWS"] = Words("BETWEEN UNBOUNDED CURRENT"),
+        ["RANGE"] = Words("BETWEEN UNBOUNDED CURRENT"),
+        ["GROUPS"] = Words("BETWEEN UNBOUNDED CURRENT"),
+        ["UNBOUNDED"] = Words("PRECEDING FOLLOWING"),
+        ["CURRENT"] = Words("ROW"),
+        ["EXCLUDE"] = Words("CURRENT TIES NO"),
+        ["NO"] = Words("OTHERS"),
+    };
+
+    // The words that may follow an operand: infix and postfix operators, a sort order, a
+    // unit after a number (MySQL's INTERVAL 7 DAY_HOUR), and the rest of a cast's type
+    // name. A select item's alias is removed before its expression is walked, so any other
+    // word after an operand is read as a column: MySQL's INTERVAL zone HOUR reads zone.
+    private static readonly HashSet<string> AfterOperand = Words(
+        "ILIKE REGEXP RLIKE GLOB SIMILAR BETWEEN ESCAPE DIV MOD XOR SOUNDS OVERLAPS "
+        + "ASC DESC NULLS AT FILTER WITHIN RESPECT IGNORE SEPARATOR PRECEDING FOLLOWING "
+        + "ROWS RANGE GROUPS PRECISION VARYING INTEGER INT "
+        + "SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND "
+        + "HOUR_SECOND HOUR_MINUTE DAY_MICROSECOND DAY_SECOND DAY_MINUTE DAY_HOUR YEAR_MONTH");
+
+    // Operators written as a word after NOT: a NOT LIKE b, a NOT BETWEEN b AND c.
+    private static readonly HashSet<string> NegatedOperators =
+        Words("LIKE ILIKE REGEXP RLIKE GLOB SIMILAR BETWEEN IN");
 
     // The words recognised directly before a string literal: national (N), escape (E),
     // hex (X), bit or bytes (B), raw (R, RB, BR) and typed literals. A MySQL character
@@ -409,16 +473,15 @@ public static class SqlQueryReferences
             // Comments.
             if (ch == '-' && hasNext && nxt == '-')
             {
-                var afterEnd = i + 2 >= n;
-                if (mode != Mode.MySql || afterEnd || Whitespace.Contains(sql[i + 2]))
+                if (mode != Mode.MySql || i + 2 >= n || MySqlDashCommentFollower(sql[i + 2]))
                 {
-                    i = LineCommentEnd(sql, i, mode);
+                    i = LineCommentEnd(sql, i);
                     continue;
                 }
             }
             if (ch == '#' && mode == Mode.MySql)
             {
-                i = LineCommentEnd(sql, i, mode);
+                i = LineCommentEnd(sql, i);
                 continue;
             }
             if (ch == '/' && hasNext && nxt == '*')
@@ -586,15 +649,25 @@ public static class SqlQueryReferences
     private static string Body(string sql, int start, int end) =>
         sql.Substring(start + 1, Math.Min(end - 1, sql.Length) - (start + 1));
 
-    // Index just past a line comment. PostgreSQL also ends one at a carriage return;
-    // MySQL and SQLite end one only at a line feed. Each mode models its own engine,
-    // because ending a comment too early can open a string literal that hides the rest
-    // of the query from the check.
-    private static int LineCommentEnd(string sql, int start, Mode mode)
+    // Whether MySQL starts a `--` comment given the next character: a space or any
+    // control character (U+0000-U+0020 and U+007F). End of input is checked by the caller.
+    private static bool MySqlDashCommentFollower(char after) => after <= '\u0020' || after == '\u007f';
+
+    // Index just past a line comment, which ends at a line feed. Engines disagree on a
+    // carriage return: PostgreSQL and Trino end the comment there, MySQL does not.
+    // Either reading can hide SQL that the other executes, so a carriage return inside
+    // a line comment is refused unless it is part of a CRLF.
+    private static int LineCommentEnd(string sql, int start)
     {
-        var end = mode == Mode.Postgres
-            ? sql.IndexOfAny(new[] { '\n', '\r' }, start)
-            : sql.IndexOf('\n', start);
+        var end = sql.IndexOf('\n', start);
+        var stop = end < 0 ? sql.Length : end;
+        for (var k = start; k < stop; k++)
+        {
+            if (sql[k] == '\r' && k + 1 != end)
+            {
+                throw new UnsupportedException("carriage return in comment");
+            }
+        }
         return end < 0 ? sql.Length : end + 1;
     }
 
@@ -893,15 +966,13 @@ public static class SqlQueryReferences
             var aliases = SelectAliases(start + 1, selectEnd);
             foreach (var (word, a, b) in tails)
             {
+                if (a >= b)
+                {
+                    throw new UnsupportedException($"empty {word} clause");
+                }
                 if (SkippedTail.Contains(word))
                 {
-                    for (var idx = a; idx < b; idx++)
-                    {
-                        if (_toks[idx].IsWord("SELECT", "TABLE"))
-                        {
-                            throw new UnsupportedException("subquery");
-                        }
-                    }
+                    CheckSkippedTail(word, a, b);
                 }
                 else if (word == "ORDER")
                 {
@@ -913,6 +984,40 @@ public static class SqlQueryReferences
                 }
             }
             return new AccessResult(true);
+        }
+
+        // Refuse a LIMIT, OFFSET, FETCH or FOR clause holding anything but its own words,
+        // numbers and parameters (and, after FOR ... OF, table names).
+        private void CheckSkippedTail(string word, int start, int end)
+        {
+            var names = false;
+            for (var idx = start; idx < end; idx++)
+            {
+                var tok = _toks[idx];
+                if (tok.IsWord("SELECT", "TABLE"))
+                {
+                    throw new UnsupportedException("subquery");
+                }
+                if (word == "FOR" && tok.IsWord("OF"))
+                {
+                    names = true;
+                    continue;
+                }
+                if (tok.Kind is TokKind.Number or TokKind.Param
+                    || (tok.Kind == TokKind.Punct && tok.Text is "," or "(" or ")"))
+                {
+                    continue;
+                }
+                if (tok.Kind == TokKind.Word && SkippedTailWords.Contains(tok.Upper))
+                {
+                    continue;
+                }
+                if (names && (tok.IsIdent || tok.IsPunct('.')))
+                {
+                    continue;
+                }
+                throw new UnsupportedException($"{word} clause");
+            }
         }
 
         // The SELECT's own FROM keyword, refusing set operations and SELECT INTO.
@@ -1298,20 +1403,40 @@ public static class SqlQueryReferences
         // Check every column reference in the expression tokens [start, end).
         private void Walk(int start, int end, Scope scope)
         {
+            var ends = new HashSet<int>(); // words that end an operand
+            var windows = new HashSet<int>(); // the "(" opening each OVER (...) window
+            var brackets = new List<int>();
             var i = start;
             while (i < end)
             {
                 var tok = _toks[i];
                 if (tok.Kind == TokKind.Punct)
                 {
-                    if (tok.Text is ":" or "@" && i + 1 < end && _toks[i + 1].IsIdent)
+                    if (tok.Text is "(" or "[")
                     {
-                        i += 2; // a cast's target type, a bind parameter, or a variable
+                        brackets.Add(i);
                     }
-                    else
+                    else if (tok.Text is ")" or "]" && brackets.Count > 0)
                     {
-                        i++;
+                        brackets.RemoveAt(brackets.Count - 1);
                     }
+                    else if (tok.Text == ":" && i + 2 < end && _toks[i + 1].IsPunct(':'))
+                    {
+                        if (_toks[i + 2].IsIdent)
+                        {
+                            ends.Add(i + 2);
+                            i += 3; // a cast's target type
+                            continue;
+                        }
+                    }
+                    else if (tok.Text == ":" && i + 1 < end && _toks[i + 1].IsIdent
+                             && !(brackets.Count > 0 && _toks[brackets[^1]].IsPunct('[')))
+                    {
+                        ends.Add(i + 1);
+                        i += 2; // a named bind parameter; inside [...] it is a slice bound
+                        continue;
+                    }
+                    i++;
                     continue;
                 }
                 if (!tok.IsIdent)
@@ -1335,12 +1460,17 @@ public static class SqlQueryReferences
                 var lastPart = parts[^1];
                 if (j + 1 < end && _toks[j + 1].IsPunct('(') && !lastPart.IsPunct('*'))
                 {
+                    if (j == i && tok.IsWord("OVER") && i > start && _toks[i - 1].IsPunct(')'))
+                    {
+                        windows.Add(i + 1);
+                    }
                     i = j + 1; // a function name; its arguments are walked
                     continue;
                 }
                 if (parts.Count == 1)
                 {
-                    i = Bare(i, end, scope);
+                    var inWindow = brackets.Count > 0 && windows.Contains(brackets[^1]);
+                    i = Bare(i, start, end, scope, ends, inWindow);
                     continue;
                 }
                 var qualifier = string.Join(".", parts.Take(parts.Count - 1).Select(p => p.Fold));
@@ -1355,16 +1485,38 @@ public static class SqlQueryReferences
                 else
                 {
                     CheckColumn(r, lastPart.Text);
+                    ends.Add(j);
                 }
                 i = j + 1;
             }
         }
 
+        // Whether token k of the walk that began at start ends an operand.
+        private bool EndsOperand(int k, int start, HashSet<int> ends)
+        {
+            if (k < start)
+            {
+                return false;
+            }
+            var tok = _toks[k];
+            return tok.Kind is TokKind.QIdent or TokKind.String or TokKind.Number or TokKind.Param
+                || tok.IsPunct(')')
+                || tok.IsPunct(']')
+                || ends.Contains(k);
+        }
+
         // Handle a lone identifier at i; return the index to continue from.
-        private int Bare(int i, int end, Scope scope)
+        //
+        // A word is skipped only where it cannot be a column: a reserved word, a word
+        // directly after an operand (an operator, ASC, an alias), the second word of a
+        // keyword pair, or a window's frame words. Anywhere else it is checked, so a
+        // column named like a keyword (zone, first) is still read as one.
+        private int Bare(int i, int start, int end, Scope scope, HashSet<int> ends, bool inWindow)
         {
             var tok = _toks[i];
             var following = i + 1 < end ? _toks[i + 1] : null;
+            var prev = i - 1 >= start ? _toks[i - 1] : null;
+            var prev2 = i - 2 >= start ? _toks[i - 2] : null;
             if (tok.Kind == TokKind.Word)
             {
                 var word = tok.Upper;
@@ -1372,54 +1524,166 @@ public static class SqlQueryReferences
                 {
                     throw new UnsupportedException("subquery");
                 }
-                if (word is "AS" or "COLLATE" or "OVER")
+                if (word is "AS" or "COLLATE")
                 {
-                    // An alias or cast type, a collation, a named window.
-                    return following is not null && following.IsIdent ? i + 2 : i + 1;
+                    // An alias or cast type, or a collation.
+                    if (following is not null && following.IsIdent)
+                    {
+                        ends.Add(i + 1);
+                        return i + 2;
+                    }
+                    return i + 1;
+                }
+                if (Reserved.Contains(word))
+                {
+                    if (ReservedValues.Contains(word))
+                    {
+                        ends.Add(i);
+                    }
+                    return i + 1;
+                }
+                if (word == "OVER" && prev is not null && prev.IsPunct(')'))
+                {
+                    if (following is not null && following.IsIdent)
+                    {
+                        ends.Add(i + 1);
+                        return i + 2; // a named window
+                    }
+                    return i + 1;
+                }
+                if (EndsOperand(i - 1, start, ends))
+                {
+                    if (OperandEndKeywords.Contains(word) || word is "ISNULL" or "NOTNULL")
+                    {
+                        ends.Add(i);
+                        return i + 1;
+                    }
+                    if (AfterOperand.Contains(word) || DateParts.Contains(word))
+                    {
+                        return i + 1; // an operator or modifier: DIV, ASC, BETWEEN, AT
+                    }
+                }
+                if (prev is { Kind: TokKind.Word })
+                {
+                    var before = prev.Upper;
+                    if (KeywordPairs.TryGetValue(before, out var seconds) && seconds.Contains(word)
+                        // WITH TIME is only a keyword pair ahead of ZONE
+                        && !(word == "TIME" && !(following is not null && following.IsWord("ZONE"))))
+                    {
+                        return i + 1;
+                    }
+                    if (word == "ZONE" && before == "TIME" && prev2 is not null
+                        && prev2.IsWord("WITH", "WITHOUT", "AT"))
+                    {
+                        return i + 1;
+                    }
+                    if (before == "IS" || (before == "NOT" && prev2 is not null && prev2.IsWord("IS")))
+                    {
+                        ends.Add(i);
+                        return i + 1; // IS [NOT] UNKNOWN, IS JSON, IS DISTINCT FROM
+                    }
+                    if (before == "NOT" && NegatedOperators.Contains(word) && EndsOperand(i - 2, start, ends))
+                    {
+                        return i + 1; // a NOT BETWEEN b; a prefix NOT is followed by a value
+                    }
+                }
+                if (inWindow && FrameWord(i, following, prev))
+                {
+                    return i + 1;
+                }
+                if (prev is not null && prev.IsPunct('(') && prev2 is not null)
+                {
+                    if (DateParts.Contains(word) && prev2.IsWord("EXTRACT"))
+                    {
+                        return i + 1; // EXTRACT(YEAR FROM ...)
+                    }
+                    if (word is "BOTH" or "LEADING" or "TRAILING" && prev2.IsWord("TRIM"))
+                    {
+                        return i + 1; // TRIM(LEADING 'x' FROM ...)
+                    }
                 }
                 if (word == "INTERVAL")
                 {
-                    var k = i + 1;
-                    if (k < end && _toks[k].Kind is TokKind.String or TokKind.Number)
+                    var k = IntervalLiteralEnd(i, end);
+                    if (k is int past)
                     {
-                        k++;
+                        ends.Add(past - 1);
+                        return past;
                     }
-                    if (k < end && _toks[k].Kind == TokKind.Word && DateParts.Contains(_toks[k].Upper))
+                    if (following is not null && following.IsIdent && i + 2 < end
+                        && _toks[i + 2].Kind == TokKind.Word && DateParts.Contains(_toks[i + 2].Upper))
                     {
-                        k++;
+                        return i + 1; // MySQL's INTERVAL n DAY
                     }
-                    return k;
                 }
-                if (Keywords.Contains(word))
+                if (word is "DATE" or "TIME" or "TIMESTAMP")
+                {
+                    if (following is { Kind: TokKind.String })
+                    {
+                        return i + 1; // a typed literal: DATE '2024-01-01'
+                    }
+                    if (following is not null && following.IsWord("WITH", "WITHOUT") && i + 3 < end
+                        && _toks[i + 2].IsWord("TIME") && _toks[i + 3].IsWord("ZONE"))
+                    {
+                        return i + 4; // TIMESTAMP WITH TIME ZONE '...'
+                    }
+                }
+                if (word == "ARRAY" && following is not null && following.IsPunct('['))
+                {
+                    return i + 1; // an array constructor: ARRAY[1, 2]
+                }
+                if (word == "GROUPING" && following is not null && following.IsWord("SETS"))
                 {
                     return i + 1;
-                }
-                if (following is { Kind: TokKind.String })
-                {
-                    return i + 1; // a typed literal: DATE '2024-01-01'
-                }
-                if (word is "TIME" or "TIMESTAMP" && following is not null && following.IsWord("WITH", "WITHOUT"))
-                {
-                    return i + 1;
-                }
-                var before = i > 0 ? _toks[i - 1] : null;
-                if (word == "TIME" && before is not null && before.IsWord("WITH", "WITHOUT")
-                    && following is not null && following.IsWord("ZONE"))
-                {
-                    return i + 1; // TIMESTAMP WITH TIME ZONE
-                }
-                if (word is "INTEGER" or "INT" && before is not null
-                    && before.IsWord("SIGNED", "UNSIGNED"))
-                {
-                    return i + 1; // CAST(x AS UNSIGNED INTEGER)
-                }
-                if (DateParts.Contains(word) && following is not null && following.IsWord("FROM"))
-                {
-                    return i + 1; // EXTRACT(YEAR FROM ...)
                 }
             }
             CheckBare(tok.Text, scope);
+            ends.Add(i);
             return i + 1;
+        }
+
+        // Whether the word at i, directly inside OVER (...), is a frame keyword.
+        private bool FrameWord(int i, Tok? following, Tok? prev)
+        {
+            var word = _toks[i].Upper;
+            var nxt = following is { Kind: TokKind.Word } ? following.Upper : "";
+            var opens = prev is not null && prev.IsPunct('(');
+            return word switch
+            {
+                "PARTITION" => opens && nxt == "BY",
+                "ROWS" or "RANGE" or "GROUPS" => opens
+                    && (nxt is "BETWEEN" or "UNBOUNDED" or "CURRENT"
+                        || following is { Kind: TokKind.Number or TokKind.Param or TokKind.String }),
+                "UNBOUNDED" => nxt is "PRECEDING" or "FOLLOWING",
+                "CURRENT" => nxt == "ROW",
+                "EXCLUDE" => nxt is "CURRENT" or "GROUP" or "TIES" or "NO",
+                _ => false,
+            };
+        }
+
+        // The index past INTERVAL [-]'1' [DAY [TO SECOND]] at i, or null.
+        private int? IntervalLiteralEnd(int i, int end)
+        {
+            var k = i + 1;
+            if (k < end && (_toks[k].IsPunct('-') || _toks[k].IsPunct('+')))
+            {
+                k++;
+            }
+            if (!(k < end && _toks[k].Kind is TokKind.String or TokKind.Number or TokKind.Param))
+            {
+                return null;
+            }
+            k++;
+            if (k < end && _toks[k].Kind == TokKind.Word && DateParts.Contains(_toks[k].Upper))
+            {
+                k++;
+                if (k + 1 < end && _toks[k].IsWord("TO")
+                    && _toks[k + 1].Kind == TokKind.Word && DateParts.Contains(_toks[k + 1].Upper))
+                {
+                    k += 2;
+                }
+            }
+            return k;
         }
 
         // -- select list and ORDER BY -------------------------------------

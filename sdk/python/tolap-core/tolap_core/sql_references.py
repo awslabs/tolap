@@ -109,6 +109,17 @@ _TAIL_CLAUSES = frozenset(
 _CHECKED_TAIL = frozenset(("WHERE", "GROUP", "HAVING", "ORDER"))
 _SKIPPED_TAIL = frozenset(("LIMIT", "OFFSET", "FETCH", "FOR"))
 
+# The words a skipped tail clause may hold: LIMIT ALL, OFFSET 5 ROWS, FETCH FIRST 5
+# ROWS WITH TIES, FOR NO KEY UPDATE SKIP LOCKED, LOCK IN SHARE MODE. Anything else
+# means a column was taken for the clause keyword (MySQL's WHERE offset = 7), so the
+# clause is refused rather than left unread.
+_SKIPPED_TAIL_WORDS = frozenset(
+    (
+        "ALL FIRST NEXT ROW ROWS ONLY WITH TIES PERCENT UPDATE SHARE NO KEY NOWAIT "
+        "SKIP LOCKED LOCK IN MODE"
+    ).split()
+)
+
 _JOIN_WORDS = frozenset(
     ("JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL", "OUTER", "STRAIGHT_JOIN")
 )
@@ -139,6 +150,69 @@ _SELECT_MODIFIERS = frozenset(
 
 # The value an operand can end with, before a bare alias.
 _OPERAND_END_KEYWORDS = frozenset(("END", "NULL", "TRUE", "FALSE", "UNKNOWN"))
+
+# Words reserved on every modelled engine, so never a bare column: skipped wherever
+# they appear in an expression. Every other word is a keyword only in a position
+# (see _Analysis._bare); anywhere else it is checked as a column. TRUE and FALSE are
+# reserved everywhere but SQL Server, where a column so named is taken for the literal.
+_RESERVED = frozenset(
+    (
+        "AND CASE CROSS CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER "
+        "DISTINCT ELSE FALSE FOR FROM GROUP HAVING IN INNER IS JOIN LEFT LIKE NOT NULL "
+        "ON OR ORDER OUTER THEN TRUE WHEN WHERE WITH"
+    ).split()
+)
+
+# Reserved words that are themselves a value, so a word after one is not an operand.
+_RESERVED_VALUES = frozenset(
+    ("CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "CURRENT_USER", "NULL", "TRUE", "FALSE")
+)
+
+# Keywords that follow another keyword: ORDER BY, NULLS LAST, SIMILAR TO, WITH ROLLUP,
+# AT TIME ZONE, a window frame's UNBOUNDED PRECEDING and CURRENT ROW. None of the
+# first words is ever followed by an expression, so the second is never a column.
+_KEYWORD_PAIRS = {
+    "ORDER": frozenset(("BY",)),
+    "GROUP": frozenset(("BY",)),
+    "PARTITION": frozenset(("BY",)),
+    "ASC": frozenset(("NULLS", "SEPARATOR", "ROWS", "RANGE", "GROUPS")),
+    "DESC": frozenset(("NULLS", "SEPARATOR", "ROWS", "RANGE", "GROUPS")),
+    "FIRST": frozenset(("SEPARATOR", "ROWS", "RANGE", "GROUPS")),
+    "LAST": frozenset(("SEPARATOR", "ROWS", "RANGE", "GROUPS")),
+    "IGNORE": frozenset(("NULLS",)),
+    "RESPECT": frozenset(("NULLS",)),
+    "NULLS": frozenset(("FIRST", "LAST")),
+    "SIMILAR": frozenset(("TO",)),
+    "WITH": frozenset(("ROLLUP", "CUBE", "TIME")),
+    "WITHOUT": frozenset(("TIME",)),
+    "AT": frozenset(("TIME", "LOCAL")),
+    "ROWS": frozenset(("BETWEEN", "UNBOUNDED", "CURRENT")),
+    "RANGE": frozenset(("BETWEEN", "UNBOUNDED", "CURRENT")),
+    "GROUPS": frozenset(("BETWEEN", "UNBOUNDED", "CURRENT")),
+    "UNBOUNDED": frozenset(("PRECEDING", "FOLLOWING")),
+    "CURRENT": frozenset(("ROW",)),
+    "EXCLUDE": frozenset(("CURRENT", "TIES", "NO")),
+    "NO": frozenset(("OTHERS",)),
+}
+
+# The words that may follow an operand: infix and postfix operators, a sort order, a
+# unit after a number (MySQL's INTERVAL 7 DAY_HOUR), and the rest of a cast's type
+# name. A select item's alias is removed before its expression is walked, so any other
+# word after an operand is read as a column: MySQL's INTERVAL zone HOUR reads zone.
+_AFTER_OPERAND = frozenset(
+    (
+        "ILIKE REGEXP RLIKE GLOB SIMILAR BETWEEN ESCAPE DIV MOD XOR SOUNDS OVERLAPS "
+        "ASC DESC NULLS AT FILTER WITHIN RESPECT IGNORE SEPARATOR PRECEDING FOLLOWING "
+        "ROWS RANGE GROUPS PRECISION VARYING INTEGER INT "
+        "SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND "
+        "HOUR_SECOND HOUR_MINUTE DAY_MICROSECOND DAY_SECOND DAY_MINUTE DAY_HOUR YEAR_MONTH"
+    ).split()
+)
+
+# Operators written as a word after NOT: a NOT LIKE b, a NOT BETWEEN b AND c.
+_NEGATED_OPERATORS = frozenset(
+    ("LIKE", "ILIKE", "REGEXP", "RLIKE", "GLOB", "SIMILAR", "BETWEEN", "IN")
+)
 
 # The words recognised directly before a string literal: national (N), escape (E),
 # hex (X), bit or bytes (B), raw (R, RB, BR) and typed literals. A MySQL character
@@ -233,11 +307,11 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
         # Comments.
         if ch == "-" and nxt == "-":
             after = sql[i + 2] if i + 2 < n else ""
-            if mode != "mysql" or after == "" or after in _WHITESPACE:
-                i = _line_comment_end(sql, i, mode)
+            if mode != "mysql" or _mysql_dash_comment_follower(after):
+                i = _line_comment_end(sql, i)
                 continue
         if ch == "#" and mode == "mysql":
-            i = _line_comment_end(sql, i, mode)
+            i = _line_comment_end(sql, i)
             continue
         if ch == "/" and nxt == "*":
             if mode == "mysql" and i + 2 < n and sql[i + 2] == "!":
@@ -341,16 +415,25 @@ def _lex(sql: str, mode: str) -> list[_Tok]:
     return toks
 
 
-def _line_comment_end(sql: str, start: int, mode: str) -> int:
-    """Index just past a line comment. PostgreSQL also ends one at a carriage return;
-    MySQL and SQLite end one only at a line feed. Each mode models its own engine,
-    because ending a comment too early can open a string literal that hides the rest
-    of the query from the check."""
-    ends = [sql.find("\n", start)]
-    if mode == "postgres":
-        ends.append(sql.find("\r", start))
-    ends = [k for k in ends if k >= 0]
-    return min(ends) + 1 if ends else len(sql)
+def _mysql_dash_comment_follower(after: str) -> bool:
+    """Whether MySQL starts a ``--`` comment given the next character: end of input,
+    a space or any control character (U+0000-U+0020 and U+007F)."""
+    return after == "" or ord(after) <= 0x20 or ord(after) == 0x7F
+
+
+def _line_comment_end(sql: str, start: int) -> int:
+    """Index just past a line comment, which ends at a line feed. Engines disagree on
+    a carriage return: PostgreSQL and Trino end the comment there, MySQL does not.
+    Either reading can hide SQL that the other executes, so a carriage return inside
+    a line comment is refused unless it is part of a CRLF."""
+    end = sql.find("\n", start)
+    stop = end if end >= 0 else len(sql)
+    cr = sql.find("\r", start, stop)
+    while cr >= 0:
+        if cr + 1 != end:
+            raise _Unsupported("carriage return in comment")
+        cr = sql.find("\r", cr + 1, stop)
+    return end + 1 if end >= 0 else len(sql)
 
 
 def _adjacent(sql: str, quote_index: int) -> bool:
@@ -554,15 +637,35 @@ class _Analysis:
             raise _Unsupported("NATURAL JOIN")
         aliases = self._select_aliases(start + 1, select_end)
         for word, a, b in tails:
+            if a >= b:
+                raise _Unsupported(f"empty {word} clause")
             if word in _SKIPPED_TAIL:
-                for idx in range(a, b):
-                    if toks[idx].is_word("SELECT", "TABLE"):
-                        raise _Unsupported("subquery")
+                self._check_skipped_tail(word, a, b)
             elif word == "ORDER":
                 self._check_order_by(a, b, scope, aliases)
             else:
                 self._walk(a, b, scope)
         return AccessResult(allowed=True)
+
+    def _check_skipped_tail(self, word: str, start: int, end: int) -> None:
+        """Refuse a LIMIT, OFFSET, FETCH or FOR clause holding anything but its own
+        words, numbers and parameters (and, after FOR ... OF, table names)."""
+        toks = self.toks
+        names = False
+        for idx in range(start, end):
+            tok = toks[idx]
+            if tok.is_word("SELECT", "TABLE"):
+                raise _Unsupported("subquery")
+            if word == "FOR" and tok.is_word("OF"):
+                names = True
+                continue
+            if tok.kind in ("number", "param") or (tok.kind == "punct" and tok.text in ",()"):
+                continue
+            if tok.kind == "word" and tok.upper in _SKIPPED_TAIL_WORDS:
+                continue
+            if names and (tok.is_ident or tok.is_punct(".")):
+                continue
+            raise _Unsupported(f"{word} clause")
 
     def _find_from(self, start: int, end: int) -> int | None:
         """The SELECT's own FROM keyword, refusing set operations and SELECT INTO."""
@@ -815,14 +918,32 @@ class _Analysis:
     def _walk(self, start: int, end: int, scope: _Scope) -> None:
         """Check every column reference in the expression tokens [start, end)."""
         toks = self.toks
+        ends: set[int] = set()  # words that end an operand
+        windows: set[int] = set()  # the "(" opening each OVER (...) window
+        brackets: list[int] = []
         i = start
         while i < end:
             tok = toks[i]
             if tok.kind == "punct":
-                if tok.text in (":", "@") and i + 1 < end and toks[i + 1].is_ident:
-                    i += 2  # a cast's target type, a bind parameter, or a variable
-                else:
-                    i += 1
+                if tok.text in "([":
+                    brackets.append(i)
+                elif tok.text in ")]" and brackets:
+                    brackets.pop()
+                elif tok.text == ":" and i + 2 < end and toks[i + 1].is_punct(":"):
+                    if toks[i + 2].is_ident:
+                        ends.add(i + 2)
+                        i += 3  # a cast's target type
+                        continue
+                elif (
+                    tok.text == ":"
+                    and i + 1 < end
+                    and toks[i + 1].is_ident
+                    and not (brackets and toks[brackets[-1]].is_punct("["))
+                ):
+                    ends.add(i + 1)
+                    i += 2  # a named bind parameter; inside [...] it is a slice bound
+                    continue
+                i += 1
                 continue
             if not tok.is_ident:
                 i += 1
@@ -839,10 +960,13 @@ class _Analysis:
                 if parts[-1].is_punct("*"):
                     break
             if j + 1 < end and toks[j + 1].is_punct("(") and not parts[-1].is_punct("*"):
+                if j == i and tok.is_word("OVER") and i > start and toks[i - 1].is_punct(")"):
+                    windows.add(i + 1)
                 i = j + 1  # a function name; its arguments are walked
                 continue
             if len(parts) == 1:
-                i = self._bare(i, end, scope)
+                in_window = bool(brackets) and brackets[-1] in windows
+                i = self._bare(i, start, end, scope, ends, windows, in_window)
                 continue
             qualifier = ".".join(p.fold for p in parts[:-1])
             ref = scope.by_name.get(qualifier)
@@ -852,56 +976,171 @@ class _Analysis:
                 self._check_star(ref)
             else:
                 self._check_column(ref, parts[-1].text)
+                ends.add(j)
             i = j + 1
 
-    def _bare(self, i: int, end: int, scope: _Scope) -> int:
-        """Handle a lone identifier at ``i``; return the index to continue from."""
+    def _ends_operand(self, k: int, start: int, ends: set[int]) -> bool:
+        """Whether token ``k`` of the walk that began at ``start`` ends an operand."""
+        if k < start:
+            return False
+        tok = self.toks[k]
+        return (
+            tok.kind in ("qident", "string", "number", "param")
+            or tok.is_punct(")")
+            or tok.is_punct("]")
+            or k in ends
+        )
+
+    def _bare(
+        self,
+        i: int,
+        start: int,
+        end: int,
+        scope: _Scope,
+        ends: set[int],
+        windows: set[int],
+        in_window: bool,
+    ) -> int:
+        """Handle a lone identifier at ``i``; return the index to continue from.
+
+        A word is skipped only where it cannot be a column: a reserved word, a word
+        directly after an operand (an operator, ASC, an alias), the second word of a
+        keyword pair, or a window's frame words. Anywhere else it is checked, so a
+        column named like a keyword (``zone``, ``first``) is still read as one.
+        """
         toks = self.toks
         tok = toks[i]
         following = toks[i + 1] if i + 1 < end else None
+        prev = toks[i - 1] if i - 1 >= start else None
+        prev2 = toks[i - 2] if i - 2 >= start else None
         if tok.kind == "word":
             word = tok.upper
             if word in ("SELECT", "TABLE"):
                 raise _Unsupported("subquery")
-            if word in ("AS", "COLLATE", "OVER"):
-                # An alias or cast type, a collation, a named window.
-                return i + 2 if following is not None and following.is_ident else i + 1
+            if word in ("AS", "COLLATE"):
+                # An alias or cast type, or a collation.
+                if following is not None and following.is_ident:
+                    ends.add(i + 1)
+                    return i + 2
+                return i + 1
+            if word in _RESERVED:
+                if word in _RESERVED_VALUES:
+                    ends.add(i)
+                return i + 1
+            if word == "OVER" and prev is not None and prev.is_punct(")"):
+                if following is not None and following.is_ident:
+                    ends.add(i + 1)
+                    return i + 2  # a named window
+                return i + 1
+            if self._ends_operand(i - 1, start, ends):
+                if word in _OPERAND_END_KEYWORDS or word in ("ISNULL", "NOTNULL"):
+                    ends.add(i)
+                    return i + 1
+                if word in _AFTER_OPERAND or word in _DATE_PARTS:
+                    return i + 1  # an operator or modifier: DIV, ASC, BETWEEN, AT
+            if prev is not None and prev.kind == "word":
+                before = prev.upper
+                if word in _KEYWORD_PAIRS.get(before, ()):
+                    if word == "TIME" and not (following is not None and following.is_word("ZONE")):
+                        pass  # WITH TIME is only a keyword pair ahead of ZONE
+                    else:
+                        return i + 1
+                if (
+                    word == "ZONE"
+                    and before == "TIME"
+                    and prev2 is not None
+                    and prev2.is_word("WITH", "WITHOUT", "AT")
+                ):
+                    return i + 1
+                if before == "IS" or (
+                    before == "NOT" and prev2 is not None and prev2.is_word("IS")
+                ):
+                    ends.add(i)
+                    return i + 1  # IS [NOT] UNKNOWN, IS JSON, IS DISTINCT FROM
+                if (
+                    before == "NOT"
+                    and word in _NEGATED_OPERATORS
+                    and self._ends_operand(i - 2, start, ends)
+                ):
+                    return i + 1  # a NOT BETWEEN b; a prefix NOT is followed by a value
+            if in_window and self._frame_word(i, following, prev):
+                return i + 1
+            if prev is not None and prev.is_punct("(") and prev2 is not None:
+                if word in _DATE_PARTS and prev2.is_word("EXTRACT"):
+                    return i + 1  # EXTRACT(YEAR FROM ...)
+                if word in ("BOTH", "LEADING", "TRAILING") and prev2.is_word("TRIM"):
+                    return i + 1  # TRIM(LEADING 'x' FROM ...)
             if word == "INTERVAL":
-                k = i + 1
-                if k < end and toks[k].kind in ("string", "number"):
-                    k += 1
-                if k < end and toks[k].kind == "word" and toks[k].upper in _DATE_PARTS:
-                    k += 1
-                return k
-            if word in _KEYWORDS:
+                k = self._interval_literal_end(i, end)
+                if k is not None:
+                    ends.add(k - 1)
+                    return k
+                if (
+                    following is not None
+                    and following.is_ident
+                    and i + 2 < end
+                    and toks[i + 2].kind == "word"
+                    and toks[i + 2].upper in _DATE_PARTS
+                ):
+                    return i + 1  # MySQL's INTERVAL n DAY
+            if word in ("DATE", "TIME", "TIMESTAMP"):
+                if following is not None and following.kind == "string":
+                    return i + 1  # a typed literal: DATE '2024-01-01'
+                if (
+                    following is not None
+                    and following.is_word("WITH", "WITHOUT")
+                    and i + 3 < end
+                    and toks[i + 2].is_word("TIME")
+                    and toks[i + 3].is_word("ZONE")
+                ):
+                    return i + 4  # TIMESTAMP WITH TIME ZONE '...'
+            if word == "ARRAY" and following is not None and following.is_punct("["):
+                return i + 1  # an array constructor: ARRAY[1, 2]
+            if word == "GROUPING" and following is not None and following.is_word("SETS"):
                 return i + 1
-            if following is not None and following.kind == "string":
-                return i + 1  # a typed literal: DATE '2024-01-01'
-            if (
-                word in ("TIME", "TIMESTAMP")
-                and following is not None
-                and following.is_word("WITH", "WITHOUT")
-            ):
-                return i + 1
-            before = toks[i - 1] if i > 0 else None
-            if (
-                word == "TIME"
-                and before is not None
-                and before.is_word("WITH", "WITHOUT")
-                and following is not None
-                and following.is_word("ZONE")
-            ):
-                return i + 1  # TIMESTAMP WITH TIME ZONE
-            if (
-                word in ("INTEGER", "INT")
-                and before is not None
-                and before.is_word("SIGNED", "UNSIGNED")
-            ):
-                return i + 1  # CAST(x AS UNSIGNED INTEGER)
-            if word in _DATE_PARTS and following is not None and following.is_word("FROM"):
-                return i + 1  # EXTRACT(YEAR FROM ...)
         self._check_bare(tok.text, scope)
+        ends.add(i)
         return i + 1
+
+    def _frame_word(self, i: int, following: _Tok | None, prev: _Tok | None) -> bool:
+        """Whether the word at ``i``, directly inside OVER (...), is a frame keyword."""
+        word = self.toks[i].upper
+        nxt = following.upper if following is not None and following.kind == "word" else ""
+        opens = prev is not None and prev.is_punct("(")
+        if word == "PARTITION":
+            return opens and nxt == "BY"
+        if word in ("ROWS", "RANGE", "GROUPS"):
+            return opens and (
+                nxt in ("BETWEEN", "UNBOUNDED", "CURRENT")
+                or (following is not None and following.kind in ("number", "param", "string"))
+            )
+        if word == "UNBOUNDED":
+            return nxt in ("PRECEDING", "FOLLOWING")
+        if word == "CURRENT":
+            return nxt == "ROW"
+        if word == "EXCLUDE":
+            return nxt in ("CURRENT", "GROUP", "TIES", "NO")
+        return False
+
+    def _interval_literal_end(self, i: int, end: int) -> int | None:
+        """The index past ``INTERVAL [-]'1' [DAY [TO SECOND]]`` at ``i``, or None."""
+        toks = self.toks
+        k = i + 1
+        if k < end and (toks[k].is_punct("-") or toks[k].is_punct("+")):
+            k += 1
+        if not (k < end and toks[k].kind in ("string", "number", "param")):
+            return None
+        k += 1
+        if k < end and toks[k].kind == "word" and toks[k].upper in _DATE_PARTS:
+            k += 1
+            if (
+                k + 1 < end
+                and toks[k].is_word("TO")
+                and toks[k + 1].kind == "word"
+                and toks[k + 1].upper in _DATE_PARTS
+            ):
+                k += 2
+        return k
 
     # -- select list and ORDER BY -----------------------------------------
 

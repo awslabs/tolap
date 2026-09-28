@@ -101,6 +101,15 @@ const TAIL_CLAUSES = words("WHERE GROUP HAVING ORDER LIMIT OFFSET FETCH FOR WIND
 const CHECKED_TAIL = words("WHERE GROUP HAVING ORDER");
 const SKIPPED_TAIL = words("LIMIT OFFSET FETCH FOR");
 
+// The words a skipped tail clause may hold: LIMIT ALL, OFFSET 5 ROWS, FETCH FIRST 5
+// ROWS WITH TIES, FOR NO KEY UPDATE SKIP LOCKED, LOCK IN SHARE MODE. Anything else
+// means a column was taken for the clause keyword (MySQL's WHERE offset = 7), so the
+// clause is refused rather than left unread.
+const SKIPPED_TAIL_WORDS = words(
+  "ALL FIRST NEXT ROW ROWS ONLY WITH TIES PERCENT UPDATE SHARE NO KEY NOWAIT " +
+    "SKIP LOCKED LOCK IN MODE",
+);
+
 const JOIN_WORDS = words("JOIN INNER LEFT RIGHT FULL CROSS NATURAL OUTER STRAIGHT_JOIN");
 
 // Words refused as a table alias. Beyond the join and clause words these are the
@@ -125,6 +134,63 @@ const SELECT_MODIFIERS = words(
 
 // The value an operand can end with, before a bare alias.
 const OPERAND_END_KEYWORDS = words("END NULL TRUE FALSE UNKNOWN");
+
+// Words reserved on every modelled engine, so never a bare column: skipped wherever
+// they appear in an expression. Every other word is a keyword only in a position
+// (see Analysis.bare); anywhere else it is checked as a column. TRUE and FALSE are
+// reserved everywhere but SQL Server, where a column so named is taken for the literal.
+const RESERVED = words(
+  "AND CASE CROSS CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER " +
+    "DISTINCT ELSE FALSE FOR FROM GROUP HAVING IN INNER IS JOIN LEFT LIKE NOT NULL " +
+    "ON OR ORDER OUTER THEN TRUE WHEN WHERE WITH",
+);
+
+// Reserved words that are themselves a value, so a word after one is not an operand.
+const RESERVED_VALUES = words(
+  "CURRENT_DATE CURRENT_TIME CURRENT_TIMESTAMP CURRENT_USER NULL TRUE FALSE",
+);
+
+// Keywords that follow another keyword: ORDER BY, NULLS LAST, SIMILAR TO, WITH ROLLUP,
+// AT TIME ZONE, a window frame's UNBOUNDED PRECEDING and CURRENT ROW. None of the
+// first words is ever followed by an expression, so the second is never a column.
+const KEYWORD_PAIRS = new Map<string, Set<string>>([
+  ["ORDER", words("BY")],
+  ["GROUP", words("BY")],
+  ["PARTITION", words("BY")],
+  ["ASC", words("NULLS SEPARATOR ROWS RANGE GROUPS")],
+  ["DESC", words("NULLS SEPARATOR ROWS RANGE GROUPS")],
+  ["FIRST", words("SEPARATOR ROWS RANGE GROUPS")],
+  ["LAST", words("SEPARATOR ROWS RANGE GROUPS")],
+  ["IGNORE", words("NULLS")],
+  ["RESPECT", words("NULLS")],
+  ["NULLS", words("FIRST LAST")],
+  ["SIMILAR", words("TO")],
+  ["WITH", words("ROLLUP CUBE TIME")],
+  ["WITHOUT", words("TIME")],
+  ["AT", words("TIME LOCAL")],
+  ["ROWS", words("BETWEEN UNBOUNDED CURRENT")],
+  ["RANGE", words("BETWEEN UNBOUNDED CURRENT")],
+  ["GROUPS", words("BETWEEN UNBOUNDED CURRENT")],
+  ["UNBOUNDED", words("PRECEDING FOLLOWING")],
+  ["CURRENT", words("ROW")],
+  ["EXCLUDE", words("CURRENT TIES NO")],
+  ["NO", words("OTHERS")],
+]);
+
+// The words that may follow an operand: infix and postfix operators, a sort order, a
+// unit after a number (MySQL's INTERVAL 7 DAY_HOUR), and the rest of a cast's type
+// name. A select item's alias is removed before its expression is walked, so any other
+// word after an operand is read as a column: MySQL's INTERVAL zone HOUR reads zone.
+const AFTER_OPERAND = words(
+  "ILIKE REGEXP RLIKE GLOB SIMILAR BETWEEN ESCAPE DIV MOD XOR SOUNDS OVERLAPS " +
+    "ASC DESC NULLS AT FILTER WITHIN RESPECT IGNORE SEPARATOR PRECEDING FOLLOWING " +
+    "ROWS RANGE GROUPS PRECISION VARYING INTEGER INT " +
+    "SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND " +
+    "HOUR_SECOND HOUR_MINUTE DAY_MICROSECOND DAY_SECOND DAY_MINUTE DAY_HOUR YEAR_MONTH",
+);
+
+// Operators written as a word after NOT: a NOT LIKE b, a NOT BETWEEN b AND c.
+const NEGATED_OPERATORS = words("LIKE ILIKE REGEXP RLIKE GLOB SIMILAR BETWEEN IN");
 
 // The words recognised directly before a string literal: national (N), escape (E),
 // hex (X), bit or bytes (B), raw (R, RB, BR) and typed literals. A MySQL character
@@ -225,13 +291,13 @@ function lex(sql: string, mode: Mode): Tok[] {
     // Comments.
     if (ch === "-" && nxt === "-") {
       const after = i + 2 < n ? sql[i + 2]! : "";
-      if (mode !== "mysql" || after === "" || WHITESPACE.has(after)) {
-        i = lineCommentEnd(sql, i, mode);
+      if (mode !== "mysql" || mysqlDashCommentFollower(after)) {
+        i = lineCommentEnd(sql, i);
         continue;
       }
     }
     if (ch === "#" && mode === "mysql") {
-      i = lineCommentEnd(sql, i, mode);
+      i = lineCommentEnd(sql, i);
       continue;
     }
     if (ch === "/" && nxt === "*") {
@@ -354,16 +420,28 @@ function lex(sql: string, mode: Mode): Tok[] {
 }
 
 /**
- * Index just past a line comment. PostgreSQL also ends one at a carriage return;
- * MySQL and SQLite end one only at a line feed. Each mode models its own engine,
- * because ending a comment too early can open a string literal that hides the rest
- * of the query from the check.
+ * Whether MySQL starts a `--` comment given the next character: end of input, a
+ * space or any control character (U+0000-U+0020 and U+007F).
  */
-function lineCommentEnd(sql: string, start: number, mode: Mode): number {
-  const candidates = [sql.indexOf("\n", start)];
-  if (mode === "postgres") candidates.push(sql.indexOf("\r", start));
-  const ends = candidates.filter((k) => k >= 0);
-  return ends.length > 0 ? Math.min(...ends) + 1 : sql.length;
+function mysqlDashCommentFollower(after: string): boolean {
+  if (after === "") return true;
+  const code = after.charCodeAt(0);
+  return code <= 0x20 || code === 0x7f;
+}
+
+/**
+ * Index just past a line comment, which ends at a line feed. Engines disagree on a
+ * carriage return: PostgreSQL and Trino end the comment there, MySQL does not.
+ * Either reading can hide SQL that the other executes, so a carriage return inside
+ * a line comment is refused unless it is part of a CRLF.
+ */
+function lineCommentEnd(sql: string, start: number): number {
+  const end = sql.indexOf("\n", start);
+  const stop = end >= 0 ? end : sql.length;
+  for (let k = start; k < stop; k++) {
+    if (sql[k] === "\r" && k + 1 !== end) throw new Unsupported("carriage return in comment");
+  }
+  return end >= 0 ? end + 1 : sql.length;
 }
 
 /** Whether the character before the quote belongs to the preceding word. */
@@ -580,10 +658,9 @@ class Analysis {
     }
     const aliases = this.selectAliases(start + 1, selectEnd);
     for (const [word, a, b] of tails) {
+      if (a >= b) throw new Unsupported(`empty ${word} clause`);
       if (SKIPPED_TAIL.has(word)) {
-        for (let idx = a; idx < b; idx++) {
-          if (toks[idx]!.isWord("SELECT", "TABLE")) throw new Unsupported("subquery");
-        }
+        this.checkSkippedTail(word, a, b);
       } else if (word === "ORDER") {
         this.checkOrderBy(a, b, scope, aliases);
       } else {
@@ -591,6 +668,30 @@ class Analysis {
       }
     }
     return { allowed: true };
+  }
+
+  /**
+   * Refuse a LIMIT, OFFSET, FETCH or FOR clause holding anything but its own words,
+   * numbers and parameters (and, after FOR ... OF, table names).
+   */
+  private checkSkippedTail(word: string, start: number, end: number): void {
+    const toks = this.toks;
+    let names = false;
+    for (let idx = start; idx < end; idx++) {
+      const tok = toks[idx]!;
+      if (tok.isWord("SELECT", "TABLE")) throw new Unsupported("subquery");
+      if (word === "FOR" && tok.isWord("OF")) {
+        names = true;
+        continue;
+      }
+      if (tok.kind === "number" || tok.kind === "param") continue;
+      if (tok.kind === "punct" && (tok.text === "," || tok.text === "(" || tok.text === ")")) {
+        continue;
+      }
+      if (tok.kind === "word" && SKIPPED_TAIL_WORDS.has(tok.upper)) continue;
+      if (names && (tok.isIdent || tok.isPunct("."))) continue;
+      throw new Unsupported(`${word} clause`);
+    }
   }
 
   /** The SELECT's own FROM keyword, refusing set operations and SELECT INTO. */
@@ -863,15 +964,34 @@ class Analysis {
   /** Check every column reference in the expression tokens [start, end). */
   private walk(start: number, end: number, scope: Scope): void {
     const toks = this.toks;
+    const ends = new Set<number>(); // words that end an operand
+    const windows = new Set<number>(); // the "(" opening each OVER (...) window
+    const brackets: number[] = [];
     let i = start;
     while (i < end) {
       const tok = toks[i]!;
       if (tok.kind === "punct") {
-        if ((tok.text === ":" || tok.text === "@") && i + 1 < end && toks[i + 1]!.isIdent) {
-          i += 2; // a cast's target type, a bind parameter, or a variable
-        } else {
-          i += 1;
+        if (tok.text === "(" || tok.text === "[") {
+          brackets.push(i);
+        } else if ((tok.text === ")" || tok.text === "]") && brackets.length > 0) {
+          brackets.pop();
+        } else if (tok.text === ":" && i + 2 < end && toks[i + 1]!.isPunct(":")) {
+          if (toks[i + 2]!.isIdent) {
+            ends.add(i + 2);
+            i += 3; // a cast's target type
+            continue;
+          }
+        } else if (
+          tok.text === ":" &&
+          i + 1 < end &&
+          toks[i + 1]!.isIdent &&
+          !(brackets.length > 0 && toks[brackets[brackets.length - 1]!]!.isPunct("["))
+        ) {
+          ends.add(i + 1);
+          i += 2; // a named bind parameter; inside [...] it is a slice bound
+          continue;
         }
+        i += 1;
         continue;
       }
       if (!tok.isIdent) {
@@ -891,11 +1011,15 @@ class Analysis {
       }
       const lastPart = parts[parts.length - 1]!;
       if (j + 1 < end && toks[j + 1]!.isPunct("(") && !lastPart.isPunct("*")) {
+        if (j === i && tok.isWord("OVER") && i > start && toks[i - 1]!.isPunct(")")) {
+          windows.add(i + 1);
+        }
         i = j + 1; // a function name; its arguments are walked
         continue;
       }
       if (parts.length === 1) {
-        i = this.bare(i, end, scope);
+        const inWindow = brackets.length > 0 && windows.has(brackets[brackets.length - 1]!);
+        i = this.bare(i, start, end, scope, ends, inWindow);
         continue;
       }
       const qualifier = parts
@@ -904,64 +1028,214 @@ class Analysis {
         .join(".");
       const ref = scope.byName.get(qualifier);
       if (ref === undefined) throw new Unsupported("unresolved qualifier");
-      if (lastPart.isPunct("*")) this.checkStar(ref);
-      else this.checkColumn(ref, lastPart.text);
+      if (lastPart.isPunct("*")) {
+        this.checkStar(ref);
+      } else {
+        this.checkColumn(ref, lastPart.text);
+        ends.add(j);
+      }
       i = j + 1;
     }
   }
 
-  /** Handle a lone identifier at `i`; return the index to continue from. */
-  private bare(i: number, end: number, scope: Scope): number {
+  /** Whether token `k` of the walk that began at `start` ends an operand. */
+  private endsOperand(k: number, start: number, ends: Set<number>): boolean {
+    if (k < start) return false;
+    const tok = this.toks[k]!;
+    return (
+      tok.kind === "qident" ||
+      tok.kind === "string" ||
+      tok.kind === "number" ||
+      tok.kind === "param" ||
+      tok.isPunct(")") ||
+      tok.isPunct("]") ||
+      ends.has(k)
+    );
+  }
+
+  /**
+   * Handle a lone identifier at `i`; return the index to continue from.
+   *
+   * A word is skipped only where it cannot be a column: a reserved word, a word
+   * directly after an operand (an operator, ASC, an alias), the second word of a
+   * keyword pair, or a window's frame words. Anywhere else it is checked, so a
+   * column named like a keyword (`zone`, `first`) is still read as one.
+   */
+  private bare(
+    i: number,
+    start: number,
+    end: number,
+    scope: Scope,
+    ends: Set<number>,
+    inWindow: boolean,
+  ): number {
     const toks = this.toks;
     const tok = toks[i]!;
     const following = i + 1 < end ? toks[i + 1] : undefined;
+    const prev = i - 1 >= start ? toks[i - 1] : undefined;
+    const prev2 = i - 2 >= start ? toks[i - 2] : undefined;
     if (tok.kind === "word") {
       const word = tok.upper;
       if (word === "SELECT" || word === "TABLE") throw new Unsupported("subquery");
-      if (word === "AS" || word === "COLLATE" || word === "OVER") {
-        // An alias or cast type, a collation, a named window.
-        return following !== undefined && following.isIdent ? i + 2 : i + 1;
-      }
-      if (word === "INTERVAL") {
-        let k = i + 1;
-        if (k < end && (toks[k]!.kind === "string" || toks[k]!.kind === "number")) k += 1;
-        if (k < end && toks[k]!.kind === "word" && DATE_PARTS.has(toks[k]!.upper)) k += 1;
-        return k;
-      }
-      if (KEYWORDS.has(word)) return i + 1;
-      if (following !== undefined && following.kind === "string") {
-        return i + 1; // a typed literal: DATE '2024-01-01'
-      }
-      if (
-        (word === "TIME" || word === "TIMESTAMP") &&
-        following !== undefined &&
-        following.isWord("WITH", "WITHOUT")
-      ) {
+      if (word === "AS" || word === "COLLATE") {
+        // An alias or cast type, or a collation.
+        if (following !== undefined && following.isIdent) {
+          ends.add(i + 1);
+          return i + 2;
+        }
         return i + 1;
       }
-      const before = i > 0 ? toks[i - 1] : undefined;
-      if (
-        word === "TIME" &&
-        before !== undefined &&
-        before.isWord("WITH", "WITHOUT") &&
-        following !== undefined &&
-        following.isWord("ZONE")
-      ) {
-        return i + 1; // TIMESTAMP WITH TIME ZONE
+      if (RESERVED.has(word)) {
+        if (RESERVED_VALUES.has(word)) ends.add(i);
+        return i + 1;
       }
-      if (
-        (word === "INTEGER" || word === "INT") &&
-        before !== undefined &&
-        before.isWord("SIGNED", "UNSIGNED")
-      ) {
-        return i + 1; // CAST(x AS UNSIGNED INTEGER)
+      if (word === "OVER" && prev !== undefined && prev.isPunct(")")) {
+        if (following !== undefined && following.isIdent) {
+          ends.add(i + 1);
+          return i + 2; // a named window
+        }
+        return i + 1;
       }
-      if (DATE_PARTS.has(word) && following !== undefined && following.isWord("FROM")) {
-        return i + 1; // EXTRACT(YEAR FROM ...)
+      if (this.endsOperand(i - 1, start, ends)) {
+        if (OPERAND_END_KEYWORDS.has(word) || word === "ISNULL" || word === "NOTNULL") {
+          ends.add(i);
+          return i + 1;
+        }
+        if (AFTER_OPERAND.has(word) || DATE_PARTS.has(word)) {
+          return i + 1; // an operator or modifier: DIV, ASC, BETWEEN, AT
+        }
+      }
+      if (prev !== undefined && prev.kind === "word") {
+        const before = prev.upper;
+        if (KEYWORD_PAIRS.get(before)?.has(word)) {
+          // WITH TIME is only a keyword pair ahead of ZONE
+          if (!(word === "TIME" && !(following !== undefined && following.isWord("ZONE")))) {
+            return i + 1;
+          }
+        }
+        if (
+          word === "ZONE" &&
+          before === "TIME" &&
+          prev2 !== undefined &&
+          prev2.isWord("WITH", "WITHOUT", "AT")
+        ) {
+          return i + 1;
+        }
+        if (before === "IS" || (before === "NOT" && prev2 !== undefined && prev2.isWord("IS"))) {
+          ends.add(i);
+          return i + 1; // IS [NOT] UNKNOWN, IS JSON, IS DISTINCT FROM
+        }
+        if (
+          before === "NOT" &&
+          NEGATED_OPERATORS.has(word) &&
+          this.endsOperand(i - 2, start, ends)
+        ) {
+          return i + 1; // a NOT BETWEEN b; a prefix NOT is followed by a value
+        }
+      }
+      if (inWindow && this.frameWord(i, following, prev)) return i + 1;
+      if (prev !== undefined && prev.isPunct("(") && prev2 !== undefined) {
+        if (DATE_PARTS.has(word) && prev2.isWord("EXTRACT")) {
+          return i + 1; // EXTRACT(YEAR FROM ...)
+        }
+        if ((word === "BOTH" || word === "LEADING" || word === "TRAILING") && prev2.isWord("TRIM")) {
+          return i + 1; // TRIM(LEADING 'x' FROM ...)
+        }
+      }
+      if (word === "INTERVAL") {
+        const k = this.intervalLiteralEnd(i, end);
+        if (k !== undefined) {
+          ends.add(k - 1);
+          return k;
+        }
+        if (
+          following !== undefined &&
+          following.isIdent &&
+          i + 2 < end &&
+          toks[i + 2]!.kind === "word" &&
+          DATE_PARTS.has(toks[i + 2]!.upper)
+        ) {
+          return i + 1; // MySQL's INTERVAL n DAY
+        }
+      }
+      if (word === "DATE" || word === "TIME" || word === "TIMESTAMP") {
+        if (following !== undefined && following.kind === "string") {
+          return i + 1; // a typed literal: DATE '2024-01-01'
+        }
+        if (
+          following !== undefined &&
+          following.isWord("WITH", "WITHOUT") &&
+          i + 3 < end &&
+          toks[i + 2]!.isWord("TIME") &&
+          toks[i + 3]!.isWord("ZONE")
+        ) {
+          return i + 4; // TIMESTAMP WITH TIME ZONE '...'
+        }
+      }
+      if (word === "ARRAY" && following !== undefined && following.isPunct("[")) {
+        return i + 1; // an array constructor: ARRAY[1, 2]
+      }
+      if (word === "GROUPING" && following !== undefined && following.isWord("SETS")) {
+        return i + 1;
       }
     }
     this.checkBare(tok.text, scope);
+    ends.add(i);
     return i + 1;
+  }
+
+  /** Whether the word at `i`, directly inside OVER (...), is a frame keyword. */
+  private frameWord(i: number, following: Tok | undefined, prev: Tok | undefined): boolean {
+    const word = this.toks[i]!.upper;
+    const nxt = following !== undefined && following.kind === "word" ? following.upper : "";
+    const opens = prev !== undefined && prev.isPunct("(");
+    if (word === "PARTITION") return opens && nxt === "BY";
+    if (word === "ROWS" || word === "RANGE" || word === "GROUPS") {
+      return (
+        opens &&
+        (nxt === "BETWEEN" ||
+          nxt === "UNBOUNDED" ||
+          nxt === "CURRENT" ||
+          (following !== undefined &&
+            (following.kind === "number" ||
+              following.kind === "param" ||
+              following.kind === "string")))
+      );
+    }
+    if (word === "UNBOUNDED") return nxt === "PRECEDING" || nxt === "FOLLOWING";
+    if (word === "CURRENT") return nxt === "ROW";
+    if (word === "EXCLUDE") {
+      return nxt === "CURRENT" || nxt === "GROUP" || nxt === "TIES" || nxt === "NO";
+    }
+    return false;
+  }
+
+  /** The index past `INTERVAL [-]'1' [DAY [TO SECOND]]` at `i`, or undefined. */
+  private intervalLiteralEnd(i: number, end: number): number | undefined {
+    const toks = this.toks;
+    let k = i + 1;
+    if (k < end && (toks[k]!.isPunct("-") || toks[k]!.isPunct("+"))) k += 1;
+    if (
+      !(
+        k < end &&
+        (toks[k]!.kind === "string" || toks[k]!.kind === "number" || toks[k]!.kind === "param")
+      )
+    ) {
+      return undefined;
+    }
+    k += 1;
+    if (k < end && toks[k]!.kind === "word" && DATE_PARTS.has(toks[k]!.upper)) {
+      k += 1;
+      if (
+        k + 1 < end &&
+        toks[k]!.isWord("TO") &&
+        toks[k + 1]!.kind === "word" &&
+        DATE_PARTS.has(toks[k + 1]!.upper)
+      ) {
+        k += 2;
+      }
+    }
+    return k;
   }
 
   // -- select list and ORDER BY -----------------------------------------
