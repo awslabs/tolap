@@ -311,8 +311,13 @@ it.
   enforced it is a no-op, and it drops any row the data layer let through. A row filter on a
   transformed field is skipped: the output no longer carries the value, so the filter would drop
   every row, or compare against the mask.
-- The tag filter runs unless a tag key (`tags`, `labels`, `classification`) is transformed, and
-  the relevance floor runs unless a score key is.
+- `deniedTags` always runs, reading tags only from tag keys (`tags`, `labels`,
+  `classification`) that are not masked. A denylist never drops an untagged record, so a tag
+  key the data layer removed cannot make it over-drop. `allowedTags` runs unless a tag key is
+  transformed, because it does drop an untagged record.
+- The relevance floor runs per record, over the score keys (`score`, `similarity`,
+  `similarityScore`, `_score`) that are not transformed. When some score key is transformed, a
+  record carrying none of the others is kept, since its score may have been removed.
 - Hidden fields are stripped again, the result is projected to `AllowedFields` again, and
   `MaxResults` still truncates it.
 
@@ -347,9 +352,9 @@ unwraps every marker and enforces it in full.
 The marker is a claim by your code, not proof that the pipeline ran. The wrapper checks only
 that it is bound to the current context. If your tool returns a marker over data the pipeline
 never ran on, masked fields come back raw. Return it only when the data layer really ran
-`EnforcementEngine.ApplyResultPipeline` against this context's policy. SQL pushdown on its own
-does not qualify: the rewriter pushes row filters into the query, but not masking or field
-rules, so the post pass is still required.
+`EnforcementEngine.ApplyResultPipeline` against this context's policy, with the wrapper's hash
+salt. SQL pushdown on its own does not qualify: the rewriter pushes row filters into the query,
+but not masking or field rules, so the post pass is still required.
 
 ## Step 4: Use the Secure Tool Factory
 

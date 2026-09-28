@@ -520,15 +520,20 @@ A field is *transformed* when the policy hides it, projects it out (`allowedFiel
 is set and no pattern matches it) or masks it. An honoured marker's data gets:
 
 - each row filter whose field is not transformed;
-- the tag filter, if no tag key (`tags`, `labels`, `classification`) is transformed;
-- the relevance floor, if no score key is transformed;
+- `deniedTags`, always, reading tags only from tag keys (`tags`, `labels`,
+  `classification`) that are not masked: a denylist never drops an untagged record,
+  so a removed tag key cannot make it over-drop;
+- `allowedTags`, if no tag key is transformed;
+- the relevance floor, per record, over the score keys that are not transformed; when
+  some score key is transformed, a record carrying none of the others is kept;
 - hidden-field removal, allowed-field projection and the result limit.
 
 Over correctly enforced data these are no-ops, and they drop what the data layer let
-through. Skipped: masking, because `hash` is not idempotent; a record-dropping step
-over a transformed field, because the output no longer carries its value, so the
-step would fail closed on every record or compare against the mask; and the size
-ceiling, because a record's size changes once it is projected and masked.
+through. Skipped: masking, because `hash` is not idempotent; a row filter,
+`allowedTags` or score key over a transformed field, because the output no longer
+carries its value, so the step would fail closed on every record or compare against
+the mask; and the size ceiling, because a record's size changes once it is projected
+and masked.
 
 The binding is to the context, not to one call. A marker bound to a context matches
 every call made with that context until the context expires. The marker is a claim

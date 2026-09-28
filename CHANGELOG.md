@@ -39,9 +39,12 @@ in TypeScript, and `EnforcedResult.For(data, context)` in .NET.
   compared in constant time. Any other marker (bound to another context, tampered, empty, or
   nested inside the data) is logged without the signatures, unwrapped, and its data runs the
   full pipeline, which is what happened before this change.
-- An honoured marker skips masking and the size ceiling. Row filters, tag filters and the
-  relevance floor still run, except those that test a field the policy hides, projects out or
-  masks. Hidden-field removal, allowed-field projection and `maxResults` still run.
+- An honoured marker skips masking and the size ceiling. A row filter still runs unless its
+  field is hidden, projected out or masked. `deniedTags` always runs, reading only the tag
+  keys that are not masked; `allowedTags` runs unless a tag key is transformed. The relevance
+  floor runs per record over the score keys that are not transformed, and keeps a record
+  with none of them only when a score key is. Hidden-field removal, allowed-field projection
+  and `maxResults` still run.
   Pre-execution checks are unchanged.
 - A marker is bound to a context, not to one call: it is honoured on every call made with that
   context until the context expires. It is a claim by the tool code, not proof that the
