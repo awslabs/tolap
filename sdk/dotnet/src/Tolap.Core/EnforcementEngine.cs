@@ -687,8 +687,8 @@ public static class EnforcementEngine
 
     /// <summary>
     /// Re-applies the pipeline steps that are no-ops over a result the tool's data layer
-    /// already enforced: row filters, tag filters and the similarity floor on visible
-    /// fields, hidden-field removal, allowed-field projection and the result limit.
+    /// already enforced: row filters and tag filters on visible fields, the similarity
+    /// floor on unmasked score keys, hidden-field removal, allowed-field projection and the result limit.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -700,9 +700,10 @@ public static class EnforcementEngine
     /// against the mask. A row filter runs when its field is not transformed. DeniedTags
     /// always runs, reading tags only from tag keys that are not masked (it cannot drop a
     /// record for a missing tag); AllowedTags runs only when no tag key is transformed.
-    /// The similarity floor runs per record over the score keys that are not
-    /// transformed, and keeps a record with none of them only when some score key is
-    /// transformed, since its score may have been removed or masked. Over correctly
+    /// The similarity floor runs per record, walking the score keys in precedence order
+    /// to the first that is masked (the record is kept) or present (its value is read,
+    /// even when the key is hidden or projected out); a record with neither is dropped.
+    /// Over correctly
     /// enforced data those are no-ops, and they drop any record the data layer let
     /// through.
     /// </para>
@@ -851,11 +852,16 @@ public static class EnforcementEngine
     /// The similarity floor over already-enforced output, per record.
     /// </summary>
     /// <remarks>
-    /// Reads a record's score only from the score keys the field-level steps leave
-    /// untouched. A record carrying none of those keys is kept when some score key is
-    /// hidden, projected out or masked: its score may have been removed or masked, so its
-    /// absence proves nothing. When no score key is transformed this is
-    /// <see cref="ApplySimilarityFloor"/> exactly, which drops an unscored record.
+    /// Walks the score keys in the pipeline's precedence order and stops at the first one
+    /// that is either masked or present in the record. A masked key keeps the record: the
+    /// mask hides the value, so it cannot be read. A present key is read and the floor
+    /// applied to its value, which fails closed on a non-numeric value exactly as
+    /// <see cref="ApplySimilarityFloor"/> does. Only a masked key hides the value: a key
+    /// that is hidden or that AllowedFields projects out, but that the tool left in the
+    /// record, is still read, as DeniedTags reads a hidden tag key that is still present.
+    /// A record with no masked and no present score key is dropped, as
+    /// <see cref="ApplySimilarityFloor"/> drops an unscored record, so an unscored record
+    /// is kept only when a masked score key could have held its score.
     /// </remarks>
     private static IReadOnlyList<Dictionary<string, object?>> ApplyVisibleSimilarityFloor(
         IReadOnlyList<Dictionary<string, object?>> records,
@@ -863,14 +869,24 @@ public static class EnforcementEngine
     {
         var floor = policy.Limits?.MinSimilarityScore;
         if (floor is null) return records;
-        var visible = ScoreKeys.Where(key => !FieldIsTransformed(policy, key)).ToArray();
-        if (visible.Length == ScoreKeys.Length) return ApplySimilarityFloor(records, policy);
+        var rules = policy.ObjectRules?.FieldRules?.MaskedFields ?? [];
+        var masked = ScoreKeys.Where(key => RuleForKey(rules, key) is not null).ToHashSet();
+        if (masked.Count == 0) return ApplySimilarityFloor(records, policy);
 
-        return records
-            .Where(r =>
-                !r.Keys.Any(k => visible.Contains(k, StringComparer.OrdinalIgnoreCase))
-                || (NumericField(r, visible) is double score && score >= floor.Value))
-            .ToList();
+        return records.Where(record =>
+        {
+            foreach (var key in ScoreKeys)
+            {
+                if (masked.Contains(key)) return true;
+                if (record.Keys.Any(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return NumericField(record, [key]) is double score && score >= floor.Value;
+                }
+            }
+
+            // No masked and no present score key: unscored, so dropped (fails closed).
+            return false;
+        }).ToList();
     }
 
     /// <summary>

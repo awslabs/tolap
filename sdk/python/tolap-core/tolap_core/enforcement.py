@@ -573,29 +573,41 @@ def apply_similarity_floor(results: list, policy: EffectivePolicy) -> list:
 def _apply_visible_similarity_floor(results: list, policy: EffectivePolicy) -> list:
     """The relevance floor over already-enforced output, per record.
 
-    Reads a record's score only from the score keys the field-level steps leave
-    untouched. A record carrying none of those keys is kept when some score key is
-    hidden, projected out or masked: its score may have been removed or masked, so
-    its absence proves nothing. When no score key is transformed this is
-    :func:`apply_similarity_floor` exactly, which drops an unscored record.
+    Walks the score keys in the pipeline's precedence order and stops at the first
+    one that is either masked or present in the record:
+
+    - a masked key keeps the record: the mask hides the value, so it cannot be read;
+    - a present key is read and the floor applied to its value, which fails closed
+      on a non-numeric value exactly as :func:`apply_similarity_floor` does.
+
+    Only a masked key hides the value. A key that is hidden or that allowedFields
+    projects out, but that the tool left in the record, is still read, as deniedTags
+    reads a hidden tag key that is still present. A record with no masked and no
+    present score key is dropped, as :func:`apply_similarity_floor` drops an
+    unscored record, so an unscored record is kept only when a masked score key
+    could have held its score.
     """
     if not policy.limits or policy.limits.min_similarity_score is None:
         return results
-    visible = tuple(key for key in _SCORE_KEYS if not _field_is_transformed(policy, key))
-    if len(visible) == len(_SCORE_KEYS):
+    rules = _masking_rules(policy)
+    masked = {key for key in _SCORE_KEYS if _rule_for_key(rules, key) is not None}
+    if not masked:
         return apply_similarity_floor(results, policy)
 
     floor = policy.limits.min_similarity_score
     kept = []
     for record in results:
         lowered = {str(k).lower() for k in record} if isinstance(record, Mapping) else set()
-        if not any(key in lowered for key in visible):
-            kept.append(record)
-            continue
-        score = _numeric_field(record, visible)
-        if score is None or score < floor:
-            continue
-        kept.append(record)
+        # No masked and no present score key: unscored, so dropped (fails closed).
+        for key in _SCORE_KEYS:
+            if key in masked:
+                kept.append(record)
+                break
+            if key in lowered:
+                score = _numeric_field(record, (key,))
+                if score is not None and score >= floor:
+                    kept.append(record)
+                break
     return kept
 
 
@@ -739,8 +751,8 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
       1. row filters      each filter whose field is visible, unmasked and allowed
       2. tag filters      deniedTags always, over the tag keys that are not masked;
                           allowedTags when no tag key is hidden, projected out or masked
-      3. relevance floor  per record, over the score keys that are not hidden,
-                          projected out or masked
+      3. relevance floor  per record, walking the score keys in precedence order to
+                          the first masked (keep) or present (read) key
       5. hidden fields    removing an absent field is a no-op
       6. allowed fields   projecting a projection is a no-op
       8. result limit     truncating a truncated list is a no-op
@@ -750,13 +762,15 @@ def apply_idempotent_result_steps(result: Any, policy: EffectivePolicy) -> Any:
     backstop on data the data layer let through (a filter it could not push down, for
     example). It deliberately skips:
 
-      1-3. any row filter, the allowedTags half of the tag filter, and any score key
-           whose field is hidden, projected out or masked -- the field is missing
-           from every record, so the filter fails closed and drops all of them, or it
-           holds the mask, so the filter compares against the mask. deniedTags is
-           never skipped (it cannot drop a record for a missing tag) and the floor
-           keeps a record with no visible score key only when a score key is
-           transformed (its score may have been removed);
+      1-2. any row filter and the allowedTags half of the tag filter whose field is
+           hidden, projected out or masked -- the field is missing from every
+           record, so the filter fails closed and drops all of them, or it holds the
+           mask, so the filter compares against the mask. deniedTags is never
+           skipped (it cannot drop a record for a missing tag);
+      3.   a score key that is masked -- the floor keeps a record whose first masked
+           or present score key is masked. A hidden or projected-out score key the
+           tool left in the record is still read, and a record with no masked and no
+           present score key is dropped;
       4.   the size ceiling -- a record's size changes once it is projected and masked;
       7.   masking -- ``hash`` is not idempotent, so a second pass hashes the hash.
 

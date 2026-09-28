@@ -791,25 +791,40 @@ export function applySimilarityFloor<T>(
 /**
  * The similarity floor over already-enforced output, per record.
  *
- * Reads a record's score only from the score keys the field-level steps leave
- * untouched. A record carrying none of those keys is kept when some score key is
- * hidden, projected out or masked: its score may have been removed or masked, so
- * its absence proves nothing. When no score key is transformed this is
- * {@link applySimilarityFloor} exactly, which drops an unscored record.
+ * Walks the score keys in the pipeline's precedence order and stops at the first
+ * one that is either masked or present in the record:
+ *
+ * - a masked key keeps the record: the mask hides the value, so it cannot be read;
+ * - a present key is read and the floor applied to its value, which fails closed on
+ *   a non-numeric value exactly as {@link applySimilarityFloor} does.
+ *
+ * Only a masked key hides the value. A key that is hidden or that allowedFields
+ * projects out, but that the tool left in the record, is still read, as deniedTags
+ * reads a hidden tag key that is still present. A record with no masked and no
+ * present score key is dropped, as {@link applySimilarityFloor} drops an unscored
+ * record, so an unscored record is kept only when a masked score key could have
+ * held its score.
  */
 function applyVisibleSimilarityFloor<T>(results: T[], policy: EffectivePolicy): T[] {
   const floor = policy.limits?.minSimilarityScore;
   if (floor === undefined || floor === null) return results;
-  const visible = SCORE_KEYS.filter((key) => !fieldIsTransformed(policy, key));
-  if (visible.length === SCORE_KEYS.length) return applySimilarityFloor(results, policy);
+  const rules = maskingRules(policy);
+  const masked = new Set(SCORE_KEYS.filter((key) => ruleForKey(rules, key) !== undefined));
+  if (masked.size === 0) return applySimilarityFloor(results, policy);
 
   return results.filter((record) => {
     const present = isRecord(record)
       ? new Set(Object.keys(record).map((key) => key.toLowerCase()))
       : new Set<string>();
-    if (!visible.some((key) => present.has(key))) return true;
-    const score = numericField(record, visible);
-    return score !== undefined && score >= floor;
+    for (const key of SCORE_KEYS) {
+      if (masked.has(key)) return true;
+      if (present.has(key)) {
+        const score = numericField(record, [key]);
+        return score !== undefined && score >= floor;
+      }
+    }
+    // No masked and no present score key: unscored, so dropped (fails closed).
+    return false;
   });
 }
 
@@ -989,7 +1004,8 @@ function fieldIsTransformed(policy: EffectivePolicy, name: string): boolean {
  *   1. row filters        only those on a visible field (see below)
  *   2. tag filters        deniedTags always, over the tag keys that are not
  *                         masked; allowedTags only if no tag key is transformed
- *   3. similarity floor   per record, over the score keys that are not transformed
+ *   3. similarity floor   per record, walking the score keys in precedence order
+ *                         to the first masked (keep) or present (read) key
  *   5. hidden fields      removing an absent field is a no-op
  *   6. allowed fields     projecting a projection is a no-op
  *   8. result limit       truncating a truncated list is a no-op
@@ -1002,8 +1018,10 @@ function fieldIsTransformed(policy: EffectivePolicy, name: string): boolean {
  * a no-op, and it drops any record the data layer let through.
  *
  * deniedTags is never skipped: it cannot drop a record for a missing tag. The
- * similarity floor keeps a record with no visible score key only when some score
- * key is transformed, since its score may have been removed or masked.
+ * similarity floor skips only a masked score key: it keeps a record whose first
+ * masked or present score key is masked. A hidden or projected-out score key the
+ * tool left in the record is still read, and a record with no masked and no
+ * present score key is dropped.
  *
  * Always skipped:
  *
