@@ -277,9 +277,9 @@ or a list of them before returning, and the shape is enforceable.
 
 Some tools enforce at the data layer, for example an ORM adapter that runs
 `EnforcementEngine.ApplyResultPipeline` as it materializes rows. Running the pipeline a second
-time in `PostExecuteResult` is not harmless: `hash` masking is not idempotent, so every hashed
-field comes back hashed twice. Such a tool declares the result enforced by returning
-`EnforcedResult<T>`, bound to the signed context the call runs under:
+time in `ExecuteWithEnforcementAsync` is not harmless: `hash` masking is not idempotent, so
+every hashed field comes back hashed twice. Such a tool declares the result enforced by
+returning `EnforcedResult<T>`, bound to the signed context the call runs under:
 
 ```csharp
 using Tolap.Core;
@@ -296,37 +296,60 @@ var rows = await wrapper.ExecuteWithEnforcementAsync(
 The marker travels through the `Func<Task<object?>>` overload. The typed
 `IReadOnlyList<Dictionary<string, object?>>` overload has no room for one.
 
-Only the idempotent steps run on an honoured marker: hidden fields are stripped again, the
-result is projected to `AllowedFields` again, and `MaxResults` still truncates it. They cost
-nothing on data that really is enforced and still stop a hidden field, an unlisted field or an
-over-long list the data layer let through. Masking is skipped because `hash` is not idempotent,
-and so are the record-dropping steps (row filters, tag filters, the relevance floor, the size
-ceiling), because re-running them over output whose filter fields the data layer already hid
-fails closed and drops every row. Pre-execution checks run as usual.
+Only `ExecuteWithEnforcementAsync` honours a marker, because only there does the wrapper run the
+tool itself. On the SQL path (`ExecuteSqlWithEnforcementAsync`), the write path
+(`ExecuteWriteWithEnforcementAsync`) and `PostExecuteResult` called directly, a marker is
+logged, unwrapped, and its data runs the full pipeline.
+
+An honoured marker skips masking, because `hash` is not idempotent, and the size ceiling,
+because a record's size changes once it is projected and masked. Every other step still runs,
+except where it would test a field the data layer already transformed. A field is transformed
+when the policy hides it, projects it out (`AllowedFields` is set and does not list it) or masks
+it.
+
+- A row filter on a visible, unmasked, allowed field runs again. Over data that really is
+  enforced it is a no-op, and it drops any row the data layer let through. A row filter on a
+  transformed field is skipped: the output no longer carries the value, so the filter would drop
+  every row, or compare against the mask.
+- The tag filter runs unless a tag key (`tags`, `labels`, `classification`) is transformed, and
+  the relevance floor runs unless a score key is.
+- Hidden fields are stripped again, the result is projected to `AllowedFields` again, and
+  `MaxResults` still truncates it.
+
+Pre-execution checks run as usual.
 
 A marker is honoured only if **all** of these hold. Otherwise it is logged (without the
 signatures), unwrapped, and its data runs the full pipeline, which is exactly what happened
 before this existed:
 
 - `EnforceSignatures` is on and the context's signature verifies under the wrapper's signing
-  key. It is re-verified here because `PostExecuteResult` is public and can be reached without
-  `PreExecute`.
+  key. It is re-verified after the tool runs, because the tool could have changed the context.
 - The marker names that exact signature, compared in constant time. The signature covers the
-  whole envelope (policy, expiry, `jti`, purpose, delegation chain), so a marker from another
-  call, another user or a re-signed context does not match.
+  whole envelope (policy, expiry, `jti`, purpose, delegation chain), so a marker bound to
+  another user's context, or to a context re-signed with a new `jti`, does not match. A marker
+  bound to *this* context does match, on every call made with the context, for the context's
+  whole TTL: the binding is to the context, not to one call.
 - The marker is an `EnforcedResult`. Its constructor is `private protected` and
   `EnforcedResult<T>` is sealed, so no other type can pose as one.
 - No marker is nested inside the data. A marker anywhere else in a result (inside a list, in a
-  record field) is never honoured. The pipeline always unwraps it and enforces its contents, so
-  it cannot carry records past the hidden-field strip.
+  record field) is never honoured. The pipeline unwraps it and enforces its contents, so it
+  cannot carry records past the hidden-field strip. The search walks
+  `IReadOnlyDictionary<string, object?>` (which covers `Dictionary<string, object?>`) and
+  `IReadOnlyList`. It does not look inside an `ExpandoObject` or other non-generic
+  `IDictionary`, a `Hashtable`, a POCO or a `JsonElement`; the pipeline passes those through
+  unenforced anyway, so do not return them.
 
 A `Dictionary<string, object?>` with `data` and `contextSignature` keys is ordinary data. Only a
 typed object built by your tool code counts, and nothing the model sends as arguments can become
 one. The registry wrapper (`SecureMcpToolWrapper`) never hands a tool a signed context, so it
 unwraps every marker and enforces it in full.
 
-The marker is an assertion by your code, not a proof. Return it only when the data layer really
-ran `ApplyResultPipeline` against this context's policy.
+The marker is a claim by your code, not proof that the pipeline ran. The wrapper checks only
+that it is bound to the current context. If your tool returns a marker over data the pipeline
+never ran on, masked fields come back raw. Return it only when the data layer really ran
+`EnforcementEngine.ApplyResultPipeline` against this context's policy. SQL pushdown on its own
+does not qualify: the rewriter pushes row filters into the query, but not masking or field
+rules, so the post pass is still required.
 
 ## Step 4: Use the Secure Tool Factory
 

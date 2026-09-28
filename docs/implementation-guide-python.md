@@ -245,48 +245,70 @@ and the shape is enforceable.
 
 Some tools enforce at the data layer, for example an ORM adapter that runs
 `apply_result_pipeline` as it materializes rows. Running the pipeline a second time in
-`post_execute` is not harmless: `hash` masking is not idempotent, so every hashed field comes
-back hashed twice. Such a tool declares the result enforced by returning `EnforcedResult`, bound
-to the signed context the call runs under:
+`execute_with_enforcement` is not harmless: `hash` masking is not idempotent, so every hashed
+field comes back hashed twice. Such a tool declares the result enforced by returning
+`EnforcedResult`, bound to the signed context the call runs under:
 
 ```python
 from tolap_mcp import EnforcedResult
 
-def orm_query(context, **args): rows = orm.fetch_enforced(args, context.effective_policy)   #
-already ran the pipeline return EnforcedResult.for_context(rows, context)
+def orm_query(context, **args):
+    rows = orm.fetch_enforced(args, context.effective_policy)  # already ran the pipeline
+    return EnforcedResult.for_context(rows, context)
 
 wrapper.execute_with_enforcement(context, "orm-query", lambda **a: orm_query(context, **a), args)
 ```
 
-Only the idempotent steps run on an honoured marker: hidden fields are stripped again, the
-result is projected to `allowed_fields` again, and `max_results` still truncates it. They cost
-nothing on data that really is enforced and still stop a hidden field, an unlisted field or an
-over-long list the data layer let through. Masking is skipped because `hash` is not idempotent,
-and so are the record-dropping steps (row filters, tag filters, the relevance floor, the size
-ceiling), because re-running them over output whose filter fields the data layer already hid
-fails closed and drops every row. Pre-execution checks run as usual, and so does history
-recording.
+Only `execute_with_enforcement` honours a marker, because only there does the wrapper run the
+tool itself. On the SQL path (`execute_sql_with_enforcement`), the write path
+(`execute_write_with_enforcement`) and `post_execute` called directly, a marker is logged,
+unwrapped, and its data runs the full pipeline.
+
+An honoured marker skips masking, because `hash` is not idempotent, and the size ceiling,
+because a record's size changes once it is projected and masked. Every other step still runs,
+except where it would test a field the data layer already transformed. A field is transformed
+when the policy hides it, projects it out (`allowed_fields` is set and does not list it) or
+masks it.
+
+- A row filter on a visible, unmasked, allowed field runs again. Over data that really is
+  enforced it is a no-op, and it drops any row the data layer let through. A row filter on a
+  transformed field is skipped: the output no longer carries the value, so the filter would drop
+  every row, or compare against the mask.
+- The tag filter runs unless a tag key (`tags`, `labels`, `classification`) is transformed, and
+  the relevance floor runs unless a score key is.
+- Hidden fields are stripped again, the result is projected to `allowed_fields` again, and
+  `max_results` still truncates it.
+
+Pre-execution checks run as usual, and so does history recording.
 
 A marker is honoured only if **all** of these hold. Otherwise it is logged (without the
 signatures), unwrapped, and its data runs the full pipeline, which is exactly what happened
 before this existed:
 
 - `enforce_signatures` is on and the context's signature verifies under the wrapper's signing
-  key. It is re-verified here because `post_execute` is public and can be reached without
-  `pre_execute`.
+  key. It is re-verified after the tool runs, because the tool could have changed the context.
 - The marker names that exact signature, compared in constant time. The signature covers the
-  whole envelope (policy, expiry, `jti`, purpose, delegation chain), so a marker from another
-  call, another user or a re-signed context does not match.
+  whole envelope (policy, expiry, `jti`, purpose, delegation chain), so a marker bound to
+  another user's context, or to a context re-signed with a new `jti`, does not match. A marker
+  bound to *this* context does match, on every call made with the context, for the context's
+  whole TTL: the binding is to the context, not to one call.
 - The marker is exactly `EnforcedResult`. A subclass is treated as data.
 - No marker is nested inside the data. A marker anywhere else in a result (inside a list, in a
-  record field) is never honoured. The pipeline always unwraps it and enforces its contents, so
-  it cannot carry records past the hidden-field strip.
+  record field) is never honoured. The pipeline unwraps it and enforces its contents, so it
+  cannot carry records past the hidden-field strip. The search walks dicts and other mappings,
+  lists and tuples. It does not look inside a `set`, a dataclass or any other custom object; the
+  pipeline passes those through unenforced anyway, so do not return them.
 
 A `dict` with `data` and `context_signature` keys is ordinary data. Only a typed object built by
-your tool code counts, and nothing the model sends as arguments can become one.
+your tool code counts, and nothing the model sends as arguments can become one. `repr` and `str`
+of a marker show neither its data nor its signature.
 
-The marker is an assertion by your code, not a proof. Return it only when the data layer really
-ran `apply_result_pipeline` against this context's policy.
+The marker is a claim by your code, not proof that the pipeline ran. The wrapper checks only
+that it is bound to the current context. If your tool returns a marker over data the pipeline
+never ran on, masked fields come back raw. Return it only when the data layer really ran
+`apply_result_pipeline` against this context's policy. SQL pushdown on its own does not qualify:
+the rewriter pushes row filters into the query, but not masking or field rules, so the post pass
+is still required.
 
 ### SQL sources: choosing where the policy is applied
 

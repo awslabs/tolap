@@ -30,20 +30,35 @@ back hashed twice. Such a tool now returns a typed marker bound to the signed co
 `EnforcedResult.for_context(data, context)` in Python, `EnforcedResult.forContext(data, context)`
 in TypeScript, and `EnforcedResult.For(data, context)` in .NET.
 
+- Only `execute_with_enforcement` / `executeWithEnforcement` / `ExecuteWithEnforcementAsync`
+  honour a marker. The SQL path, the write path and the public post-execution method
+  (`post_execute` / `postExecute` / `PostExecuteResult`) called directly unwrap it and run the
+  full pipeline.
 - The marker is honoured only when signature enforcement is on, the context's signature
-  verifies, and the marker names that exact signature, compared in constant time. Any other
-  marker (from another context, tampered, empty, or nested inside the data) is logged
-  without the signatures, unwrapped, and its data runs the full pipeline, which is what
-  happened before this change.
-- An honoured marker still gets hidden-field removal, allowed-field projection and
-  `maxResults`, because those steps are idempotent. Masking and the record-dropping steps
-  are skipped. Pre-execution checks are unchanged.
+  verifies (re-checked after the tool runs), and the marker names that exact signature,
+  compared in constant time. Any other marker (bound to another context, tampered, empty, or
+  nested inside the data) is logged without the signatures, unwrapped, and its data runs the
+  full pipeline, which is what happened before this change.
+- An honoured marker skips masking and the size ceiling. Row filters, tag filters and the
+  relevance floor still run, except those that test a field the policy hides, projects out or
+  masks. Hidden-field removal, allowed-field projection and `maxResults` still run.
+  Pre-execution checks are unchanged.
+- A marker is bound to a context, not to one call: it is honoured on every call made with that
+  context until the context expires. It is a claim by the tool code, not proof that the
+  pipeline ran, so return one only when the data layer really ran it. SQL pushdown alone does
+  not qualify.
 - A record with lookalike keys (`data`, `contextSignature`) is ordinary data. There is no
-  flag or argument that switches enforcement off.
+  flag or argument that switches enforcement off. In TypeScript the honour check uses a
+  private-field brand, so a Proxy or an `Object.create(EnforcedResult.prototype)` object is
+  not honoured. A marker from a second copy of the package is recognized by its
+  `Symbol.for("tolap.EnforcedResult")` brand and unwrapped, never honoured. In Python the
+  signature is kept out of the marker's `repr`.
 - The result pipeline (`apply_result_pipeline` / `applyResultPipeline` /
   `ApplyResultPipeline`) and the registry wrappers never honour a marker. They unwrap
-  markers at any depth and enforce the contents, so a marker can never carry records past
-  the hidden-field strip or through `allowUnenforceableShapes` whole.
+  markers nested in lists and string-keyed maps and enforce the contents, so a marker can
+  never carry records past the hidden-field strip or through `allowUnenforceableShapes`
+  whole. Other containers (for example a Python `set`, a TypeScript `Map`, a .NET
+  `ExpandoObject`) are not searched.
 - New helper: `apply_idempotent_result_steps` / `applyIdempotentResultSteps` /
   `EnforcementEngine.ApplyIdempotentResultSteps`.
 - Shared fixture: [`fixtures/enforcement/already-enforced-results.json`](fixtures/enforcement/already-enforced-results.json).

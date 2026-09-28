@@ -502,27 +502,53 @@ accepted it in a write payload (issue #36). Pinned by
 
 A tool whose data layer already applied this pipeline MAY say so by returning the
 SDK's `EnforcedResult` marker (issue #33), bound to the signature of the signed
-context the call runs under. The context wrapper MUST honour the marker only when
-all of the following hold, and MUST otherwise unwrap it and apply the full pipeline
-to its data:
+context the call runs under. Only the context wrapper's execute-with-enforcement
+entry point (`execute_with_enforcement` / `executeWithEnforcement` /
+`ExecuteWithEnforcementAsync`), which runs the tool itself, MAY honour a marker. On
+every other path (the SQL path, the write path, and the public post-execution method
+called directly) the marker MUST be unwrapped and the full pipeline applied. The
+entry point MUST honour the marker only when all of the following hold, and MUST
+otherwise unwrap it and apply the full pipeline to its data:
 
 1. signature enforcement is on, and the context's signature verifies under the
-   wrapper's signing key, re-checked at post-execution;
-2. the marker's signature equals the context's signature byte-for-byte, compared in
-   constant time;
-3. the marker is the SDK's own marker type, never a record key or a caller-supplied
-   flag;
-4. the marker's data contains no further marker.
+wrapper's signing key, re-checked after the tool ran; 2. the marker's signature
+equals the context's signature byte-for-byte, compared in constant time; 3. the
+marker is the SDK's own marker type, built by its constructor, never a record key or
+a caller-supplied flag; 4. the marker's data contains no further marker.
 
-An honoured marker still gets the idempotent steps: hidden-field removal,
-allowed-field projection and the result limit. Masking is skipped, because `hash`
-is not idempotent. So are the record-dropping steps (row filters, tag filters, the
-relevance floor and the size ceiling), because re-evaluating them over output
-whose filter fields were already hidden fails closed and drops every row. The
-pipeline function itself never honours a marker. It replaces every marker, at any
-depth, with its data before step 1, so a marker cannot carry records past field
-removal. A wrapper that never hands the tool a signed context (the registry
-wrappers) has nothing to bind to, so it honours no marker.
+A field is *transformed* when the policy hides it, projects it out (`allowedFields`
+is set and no pattern matches it) or masks it. An honoured marker's data gets:
+
+- each row filter whose field is not transformed;
+- the tag filter, if no tag key (`tags`, `labels`, `classification`) is transformed;
+- the relevance floor, if no score key is transformed;
+- hidden-field removal, allowed-field projection and the result limit.
+
+Over correctly enforced data these are no-ops, and they drop what the data layer let
+through. Skipped: masking, because `hash` is not idempotent; a record-dropping step
+over a transformed field, because the output no longer carries its value, so the
+step would fail closed on every record or compare against the mask; and the size
+ceiling, because a record's size changes once it is projected and masked.
+
+The binding is to the context, not to one call. A marker bound to a context matches
+every call made with that context until the context expires. The marker is a claim
+by the tool code, not proof that the pipeline ran: an honoured marker skips masking,
+so if the data layer did not really run the pipeline, masked fields are returned
+raw. A tool MUST NOT return a marker for data the pipeline did not run over. SQL
+pushdown alone does not qualify: it applies row filters, not masking or field rules.
+
+The pipeline function itself never honours a marker. Before step 1 it replaces every
+marker it finds with its data, so a marker cannot carry records past field removal.
+The search walks the same containers the pipeline steps do: lists and string-keyed
+maps (Python `list`, `tuple` and any `Mapping`, TypeScript arrays and plain objects,
+.NET `IReadOnlyList` and `IReadOnlyDictionary<string, object?>`). It does not look
+inside other containers (a Python `set`, a dataclass or other custom object; a
+TypeScript `Map`, `Set` or class instance; a .NET `ExpandoObject`, `Hashtable`, POCO
+or `JsonElement`), and the pipeline passes those through unenforced anyway. In
+TypeScript a marker built by a second copy of the package is found by its registered
+`Symbol.for("tolap.EnforcedResult")` brand and unwrapped, but a brand is never
+grounds to honour one. A wrapper that never hands the tool a signed context (the
+registry wrappers) has nothing to bind to, so it honours no marker.
 `fixtures/enforcement/already-enforced-results.json` is the shared conformance
 fixture.
 
