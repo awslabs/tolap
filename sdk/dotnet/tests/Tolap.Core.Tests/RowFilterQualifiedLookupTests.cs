@@ -26,7 +26,7 @@ public class RowFilterQualifiedLookupTests
     private const string FixturePath = "enforcement/row-filter-qualified-lookup.json";
 
     /// <summary>Asserted so that a dropped case fails the suite rather than shrinking it quietly.</summary>
-    private const int ExpectedCaseCount = 29;
+    private const int ExpectedCaseCount = 30;
 
     private static readonly IReadOnlyList<JsonElement> Cases =
         FixtureHelper.ReadFixtureAsJson(FixturePath).Clone()

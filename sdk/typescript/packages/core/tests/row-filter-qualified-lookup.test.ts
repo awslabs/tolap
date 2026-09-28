@@ -31,7 +31,7 @@ const FIXTURE_PATH = path.resolve(
 );
 
 /** Asserted so that a dropped case fails the suite rather than shrinking it quietly. */
-const EXPECTED_CASE_COUNT = 29;
+const EXPECTED_CASE_COUNT = 30;
 
 interface LookupCase {
   name: string;

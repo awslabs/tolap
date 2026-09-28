@@ -31,7 +31,7 @@ from tolap_core.serialization import deserialize_effective_policy
 FIXTURE_PATH = "enforcement/row-filter-qualified-lookup.json"
 
 #: Asserted so that a dropped case fails the suite rather than shrinking it quietly.
-EXPECTED_CASE_COUNT = 29
+EXPECTED_CASE_COUNT = 30
 
 _FIXTURE = load_fixture(FIXTURE_PATH)
 

@@ -851,6 +851,32 @@
       "expected": [
         "same-non-ascii"
       ]
+    },
+    {
+      "name": "non-ascii-qualifier-case-variant-is-not-folded",
+      "notes": "'\u00c9TAT' and '\u00e9tat' differ only in the case of a non-ASCII letter. Full Unicode lower-casing (str.lower, toLowerCase, ToLowerInvariant) makes them equal and would keep the row. The ASCII-only fold leaves '\u00c9' alone, so the qualifiers differ and the row is dropped.",
+      "records": [
+        {
+          "id": "accented",
+          "\u00e9tat.region": "eu"
+        }
+      ],
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "rowFilters": [
+            {
+              "field": "\u00c9TAT.region",
+              "operator": "equals",
+              "value": "eu"
+            }
+          ]
+        }
+      },
+      "expected": []
     }
   ]
 }
