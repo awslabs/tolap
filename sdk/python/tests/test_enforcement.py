@@ -65,16 +65,34 @@ class TestValidateObjectAccess:
                 )
 
 
+_FIELD_ACCESS_ALLOWED_SET_CASE_COUNT = 16
+
+
 class TestValidateFieldAccess:
     """Test field-level access validation."""
 
-    def test_field_access_allowed_set(self) -> None:
-        data = load_fixture("enforcement/validate-field-access-allowed-set.json")
-        policy = _build_effective_policy(data["policy"])
-        result = validate_field_access(data["input"]["fields"], policy)
+    def test_field_access_allowed_set_carries_every_case(self) -> None:
+        # Asserted so that a dropped case fails the suite rather than shrinking it quietly.
+        cases = load_fixture("enforcement/validate-field-access-allowed-set.json")["cases"]
 
-        assert sorted(result.allowed) == sorted(data["expected"]["allowed"])
-        assert sorted(result.denied) == sorted(data["expected"]["denied"])
+        assert len(cases) == _FIELD_ACCESS_ALLOWED_SET_CASE_COUNT
+        assert len({case["name"] for case in cases}) == len(cases)
+
+    @pytest.mark.parametrize(
+        "case",
+        load_fixture("enforcement/validate-field-access-allowed-set.json")["cases"],
+        ids=lambda case: case["name"],
+    )
+    def test_field_access_allowed_set(self, case: dict) -> None:
+        # Shared with the TypeScript and .NET runners. Order is part of the contract:
+        # both lists follow the input order.
+        policy = _build_effective_policy(case["policy"])
+        result = validate_field_access(
+            case["input"]["fields"], policy, case["input"].get("objectName")
+        )
+
+        assert result.allowed == case["expected"]["allowed"], case["name"]
+        assert result.denied == case["expected"]["denied"], case["name"]
 
     def test_field_access_hidden(self) -> None:
         data = load_fixture("enforcement/validate-field-access-hidden.json")

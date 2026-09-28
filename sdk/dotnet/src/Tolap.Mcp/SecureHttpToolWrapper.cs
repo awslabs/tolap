@@ -836,6 +836,8 @@ public sealed class SecureHttpToolWrapper
     /// collection — rather than the transport envelope, so an API's <c>meta</c>/paging
     /// block survives while a record returning columns the policy never listed is
     /// trimmed. A null allow-list is unrestricted; an empty allow-list denies every field.
+    /// Keys are matched with <see cref="EnforcementEngine.AllowedFieldMatches"/>, so an entry
+    /// qualified with one object never keeps another object's column (issue #36).
     /// </remarks>
     private static object? ProjectAllowedFields(
         object? body,
@@ -880,7 +882,7 @@ public sealed class SecureHttpToolWrapper
             var projected = new Dictionary<string, object?>();
             foreach (var (key, value) in dict)
             {
-                if (allowed.Any(a => EnforcementEngine.FieldNameMatches(a, key)))
+                if (allowed.Any(a => EnforcementEngine.AllowedFieldMatches(a, key)))
                     projected[key] = value;
             }
             return projected;

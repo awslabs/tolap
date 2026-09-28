@@ -293,10 +293,24 @@ function containsIgnoreCase(haystack: string[], needle: string): boolean {
 
 /**
  * Validate which fields can be accessed under the given effective policy.
+ *
+ * `hiddenFields` uses the broad field-name matcher the post-execution pass uses
+ * (`fieldNameMatches`), so a hidden `patients.ssn` also denies a bare `ssn`.
+ * `allowedFields` uses the allow-direction rule (`allowedFieldMatches`), so an
+ * entry does not allow another object's field: `*.name` does not allow
+ * `encounters.name` (issue #36).
+ *
+ * `objectName` is the object the fields belong to, when the caller knows it. The
+ * entry is still matched against the field as written; a bare field is read as
+ * `objectName.field` only to detect a qualifier conflict
+ * ({@link allowedFieldInObject}). So under `patients.name` a bare `name` read from
+ * `encounters` is denied and one read from `patients` is allowed, while `p*` does
+ * not allow a bare `ssn` read from `patients`.
  */
 export function validateFieldAccess(
   fields: string[],
   policy: EffectivePolicy,
+  objectName?: string,
 ): FieldAccessResult {
   const allowed: string[] = [];
   const denied: string[] = [];
@@ -305,17 +319,18 @@ export function validateFieldAccess(
 
   for (const field of fields) {
     // Hidden fields are always denied
-    if (
-      fieldRules?.hiddenFields &&
-      matchesAnyGlob(fieldRules.hiddenFields, field)
-    ) {
+    if (fieldRules?.hiddenFields?.some((pattern) => fieldNameMatches(pattern, field))) {
       denied.push(field);
       continue;
     }
 
-    // If allowedFields is defined, field must be in it
+    // If allowedFields is defined, field must be in it ([] denies every field)
     if (fieldRules?.allowedFields) {
-      if (matchesAnyGlob(fieldRules.allowedFields, field)) {
+      if (
+        fieldRules.allowedFields.some((pattern) =>
+          allowedFieldInObject(pattern, field, objectName),
+        )
+      ) {
         allowed.push(field);
       } else {
         denied.push(field);
@@ -328,6 +343,38 @@ export function validateFieldAccess(
   }
 
   return { allowed, denied };
+}
+
+/**
+ * Whether an `allowedFields` entry allows `field` read from or written to
+ * `objectName`.
+ *
+ * The entry is matched against the field *as written*. The object name is used
+ * only to detect a qualifier conflict: a bare field is read as `objectName.field`
+ * for that check alone. Matching the qualified form instead would let a bare glob
+ * reach a field it never names, because `*` crosses `.`: `p*` would allow a bare
+ * `ssn` of `patients` through `patients.ssn` (issue #36).
+ */
+function allowedFieldInObject(
+  pattern: string,
+  field: string,
+  objectName: string | undefined,
+): boolean {
+  return (
+    fieldNameMatches(pattern, field) &&
+    !qualifiersConflict(pattern, qualifyWithObject(field, objectName))
+  );
+}
+
+/**
+ * `objectName.field` for a bare field when the object is known, else `field`.
+ *
+ * Used only for the `allowedFields` qualifier-conflict check (issue #36), never
+ * for the match itself. A field that already carries a qualifier keeps it, and the
+ * deny-direction rules always see the field as written.
+ */
+function qualifyWithObject(field: string, objectName: string | undefined): string {
+  return objectName && !field.includes(".") ? `${objectName}.${field}` : field;
 }
 
 // ---------------------------------------------------------------------------
@@ -585,6 +632,25 @@ function allowedFieldPatterns(policy: EffectivePolicy): string[] | undefined {
   return policy.objectRules?.fieldRules?.allowedFields;
 }
 
+/**
+ * Whether an `allowedFields` entry allows a record or payload key.
+ *
+ * {@link fieldNameMatches} drops qualifiers, which is the right breadth for the
+ * deny-direction rules (hidden, read-only, masked) but widens an allow-list:
+ * `patients.name` allowed `encounters.name` (issue #36). So an entry allows a
+ * key only if the matcher accepts it *and* the two are not qualified with
+ * different objects — the same qualifier rule row filters use
+ * ({@link qualifiersConflict}, spec §4).
+ *
+ * A qualified entry still allows a bare key, a bare entry allows every object's
+ * key, and `patients.*` allows the object's own columns and bare keys but not
+ * `encounters.id`. Glob characters in the entry's qualifier are literal for the
+ * comparison, so `*.name` allows `name` and no qualified key.
+ */
+function allowedFieldMatches(pattern: string, key: string): boolean {
+  return fieldNameMatches(pattern, key) && !qualifiersConflict(pattern, key);
+}
+
 function projectRecord(
   record: Record<string, unknown>,
   patterns: string[],
@@ -596,7 +662,7 @@ function projectRecord(
        dangerous key. Retained so the projection cannot copy one forward even if it
        is ever called on an un-cloned record. */
     if (isDangerousKey(key)) continue;
-    if (patterns.some((pattern) => fieldNameMatches(pattern, key))) {
+    if (patterns.some((pattern) => allowedFieldMatches(pattern, key))) {
       safeSet(out, key, record[key]);
     }
   }
@@ -1056,7 +1122,11 @@ function objectQualifier(name: string): string | null {
   return dot >= 0 ? asciiLower(name.slice(0, dot)) : null;
 }
 
-/** Whether a filter and a row key are both qualified, by different objects. */
+/**
+ * Whether a policy field reference and a key are both qualified, by different
+ * objects. Used by row filters (issue #32) and by the allowedFields check
+ * (issue #36).
+ */
 function qualifiersConflict(fieldName: string, key: string): boolean {
   const fieldQualifier = objectQualifier(fieldName);
   const keyQualifier = objectQualifier(key);
@@ -1659,7 +1729,13 @@ function validateWriteObject(
  *
  * Field names match with the bidirectional, case-insensitive, glob-aware matcher the
  * read path uses (§3.2), so a `readOnlyFields` entry of `patients.created_at` blocks
- * a payload key of `created_at`.
+ * a payload key of `created_at`. The `allowedFields` check additionally refuses a key
+ * qualified with a different object than the entry ({@link allowedFieldInObject}), so
+ * `patients.name` does not make `encounters.name` writable. When the write names its
+ * target object, a bare payload key is read as `objectName.key` for that conflict
+ * check only, so under `patients.name` an insert into `encounters` carrying
+ * `{ name }` is refused. The entry is always matched against the key as written, so
+ * `p*` does not make a bare `ssn` writable in `patients`.
  *
  * The field is named in the reason. That discloses nothing: the caller supplied it.
  * Row denials, by contrast, never name a value.
@@ -1667,6 +1743,7 @@ function validateWriteObject(
 function validateWrittenFields(
   fields: string[],
   policy: EffectivePolicy,
+  objectName?: string,
 ): AccessResult {
   const fieldRules = policy.objectRules?.fieldRules;
   if (!fieldRules) return { allowed: true };
@@ -1690,7 +1767,14 @@ function validateWrittenFields(
     // undefined is unrestricted; [] denies every field (canonical spec §3), so this
     // tests for presence rather than truthiness.
     if (fieldRules.allowedFields !== undefined) {
-      if (!fieldRules.allowedFields.some((pattern) => fieldNameMatches(pattern, name))) {
+      // The allow direction does not let a qualified entry reach another object's
+      // key (issue #36); see allowedFieldInObject. A bare key is read as belonging
+      // to the write's target object for the conflict check only.
+      if (
+        !fieldRules.allowedFields.some((pattern) =>
+          allowedFieldInObject(pattern, name, objectName),
+        )
+      ) {
         return { allowed: false, reason: `field not in allowed set: ${name}` };
       }
     }
@@ -1904,7 +1988,7 @@ export function validateWrite(
     }
   }
 
-  const fields = validateWrittenFields(written, policy);
+  const fields = validateWrittenFields(written, policy, objectName);
   if (!fields.allowed) return fields;
 
   return validateWriteTargetRow(

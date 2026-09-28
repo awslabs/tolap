@@ -194,7 +194,7 @@ public sealed class SecureContextToolWrapper
 
         if (args.Fields is not null && args.Fields.Length > 0)
         {
-            var r = EnforcementEngine.ValidateFieldAccess(args.Fields, policy);
+            var r = EnforcementEngine.ValidateFieldAccess(args.Fields, policy, args.ObjectName);
             if (r.Denied.Length > 0)
             {
                 return new AccessResult(false, $"denied fields: {string.Join(", ", r.Denied)}");

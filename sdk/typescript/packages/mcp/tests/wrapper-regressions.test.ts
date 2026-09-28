@@ -202,6 +202,40 @@ describe("defect 2: wrappers project results to allowedFields", () => {
     expect(body.results).toEqual([{ safetyreportid: "1" }]);
     expect(body.meta.disclaimer).toBe("d");
   });
+
+  it("HTTP wrapper keeps the allowedFields qualifier rule under a collectionPath (issue #36)", async () => {
+    // Pinned at wrapper level so an inlined projection that drops the rule is caught,
+    // not only a change to the core function the shared fixture covers.
+    const policy = createPolicy({
+      objectRules: {
+        endpointRules: { allowedEndpoints: ["/*"], allowedMethods: ["GET"] },
+        fieldRules: { allowedFields: ["patients.name"] },
+      },
+    });
+    const fetchFn: FetchLike = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        meta: { total: 1 },
+        results: [
+          { "patients.name": "pat", "encounters.name": "enc", name: "bare", "encounters.id": 2 },
+        ],
+      }),
+    });
+    const wrapper = new SecureHttpToolWrapper(
+      { signingKey: SIGNING_KEY, baseUrl: "https://api.example.gov" },
+      fetchFn,
+    );
+
+    const body = (await wrapper.request(signed(policy), {
+      method: "GET",
+      path: "/patients",
+      collectionPath: "results",
+    })) as Record<string, any>;
+
+    expect(body.results).toStrictEqual([{ "patients.name": "pat", name: "bare" }]);
+    expect(body.meta).toStrictEqual({ total: 1 });
+  });
 });
 
 // ---------------------------------------------------------------------------

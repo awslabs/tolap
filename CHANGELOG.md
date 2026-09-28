@@ -27,6 +27,49 @@ through a conflicting qualifier or an ambiguous bare name, are now dropped rathe
 The update and delete target-row check uses the same lookup, so a write whose target row has
 only a conflicting key, or an ambiguous one, is now refused with `target row not permitted` (#32).
 
+**`allowedFields` for one object allowed another object's column.** The allow-list was matched
+with the same field-name matcher as the deny rules, and that matcher drops qualifiers, so an
+entry `patients.name` also allowed `encounters.name`. Where a result record or a write payload
+carried keys qualified with their object, the projection kept a key the policy never listed and
+the write path accepted it. All three SDKs now apply the row-filter qualifier rule from #32
+when `allowedFields` decides inclusion
+([canonical-enforcement-spec §4](docs/canonical-enforcement-spec.md#allowedfields-does-not-cross-objects)).
+An entry does not allow a key qualified with a different object. Qualifiers are compared ASCII
+case-insensitively, and `db.patients` and `patients` count as different. A qualified entry
+still allows a bare key, a bare entry still allows every object's key, `patients.*` allows the
+object's own columns and bare keys but not `encounters.id`, and `*` allows everything. Glob
+characters in an entry's qualifier are literal, so `*.name` now allows only a bare `name`.
+The rule compares the qualifiers the keys carry: a key with no qualifier is not attributed to
+an object, except where the caller names one (below). It covers the post-execution projection,
+the HTTP wrappers' projection, `validate_field_access`/`validateFieldAccess`/`ValidateFieldAccess`,
+and the write path's allowed-field check. `hiddenFields`, `readOnlyFields` and masking keep the
+broad matcher. The shared fixtures
+[`fixtures/enforcement/allowed-fields-qualified.json`](fixtures/enforcement/allowed-fields-qualified.json)
+and
+[`fixtures/enforcement/validate-field-access-allowed-set.json`](fixtures/enforcement/validate-field-access-allowed-set.json)
+pin the behaviour. Policies that relied on the old matching through a conflicting qualifier,
+a longer qualifier such as `db.patients.name`, a deeper key such as `patients.address.city`
+under `patients.*`, or a qualified key under `*.name` now drop that column on reads and refuse
+it on writes with `field not in allowed set` (#36).
+
+**The field pre-check and the write path now use the object they are given.**
+`validate_field_access` (and its TypeScript and .NET counterparts) takes an optional object
+name, and the MCP and context wrappers pass the object the tool call names. When it is known, a
+bare field is read as `object.field` for the `allowedFields` qualifier comparison, and
+`validate_write` does the same for bare payload keys when it is given the target object. The
+entry is still matched against the field as written, so a bare glob such as `p*` does not
+allow a bare `ssn` of `patients` through `patients.ssn`. Under `patients.name`, a bare
+`name` read from or written to `encounters` is now refused, while one read from or written to
+`patients` is still allowed. The pre-check's `allowedFields` test also moves from a plain glob
+to the allow rule above, and its `hiddenFields` test to the broad field-name matcher the
+post-execution pass uses. Both are narrowing changes for most policies: `*.name` no longer
+allows `encounters.name`, a bare `name` under `*.name` is refused once the object is known,
+`patients.*` no longer allows the deeper `patients.address.zip`, a hidden `patients.ssn` now
+also denies a bare `ssn`, and a hidden `patients.*` denies every field, as the post-execution
+pass already stripped every such key. One case widens, to match the
+projection: with no object named, a qualified entry such as `patients.name` now allows a bare
+`name` in the pre-check, which the post-execution projection already kept (#36).
+
 ## 1.1.0 — 2026-09-01
 
 Purpose binding. TOLAP could already answer "what may this identity see?"; it can now answer

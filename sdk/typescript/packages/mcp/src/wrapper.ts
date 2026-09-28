@@ -212,7 +212,7 @@ export class SecureMcpToolWrapper {
 
     // Field access check
     if (tool.accessedFields && tool.accessedFields.length > 0) {
-      const result = validateFieldAccess(tool.accessedFields, policy);
+      const result = validateFieldAccess(tool.accessedFields, policy, tool.objectName);
       if (result.denied.length > 0) {
         return {
           allowed: false,

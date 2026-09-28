@@ -48,18 +48,86 @@ public class EnforcementEngineTests
 
     // -- ValidateFieldAccess tests from fixtures --
 
+    private const string FieldAccessAllowedSetFixture = "enforcement/validate-field-access-allowed-set.json";
+
+    /// <summary>Asserted so that a dropped case fails the suite rather than shrinking it quietly.</summary>
+    private const int FieldAccessAllowedSetCaseCount = 16;
+
+    private static IReadOnlyList<JsonElement> FieldAccessAllowedSetCases()
+        => FixtureHelper.ReadFixtureAsJson(FieldAccessAllowedSetFixture).Clone()
+            .GetProperty("cases").EnumerateArray().Select(c => c.Clone()).ToList();
+
+    public static IEnumerable<object[]> FieldAccessAllowedSetCaseNames()
+        => FieldAccessAllowedSetCases().Select(c => new object[] { c.GetProperty("name").GetString()! });
+
     [Fact]
-    public void ValidateFieldAccess_AllowedSet_DeniesFieldsOutsideSet()
+    public void ValidateFieldAccess_AllowedSet_CarriesEveryCase()
     {
+        var names = FieldAccessAllowedSetCases().Select(c => c.GetProperty("name").GetString()).ToList();
+
+        names.Should().HaveCount(FieldAccessAllowedSetCaseCount);
+        names.Distinct(StringComparer.Ordinal).Should().HaveCount(names.Count);
+    }
+
+    /// <summary>
+    /// Shared with the Python and TypeScript runners. Order is part of the contract: both
+    /// lists follow the input order.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(FieldAccessAllowedSetCaseNames))]
+    public void ValidateFieldAccess_AllowedSet_MatchesTheSharedCorpus(string caseName)
+    {
+        var testCase = FieldAccessAllowedSetCases().Single(c => c.GetProperty("name").GetString() == caseName);
+        var input = testCase.GetProperty("input");
+        var fields = input.GetProperty("fields").EnumerateArray().Select(f => f.GetString()!).ToArray();
+        var objectName = input.TryGetProperty("objectName", out var o) ? o.GetString() : null;
+        var policy = TolapJsonOptions.Deserialize<EffectivePolicy>(testCase.GetProperty("policy").GetRawText());
+
+        var result = EnforcementEngine.ValidateFieldAccess(fields, policy, objectName);
+
+        var expected = testCase.GetProperty("expected");
+        result.Allowed.Should().Equal(
+            expected.GetProperty("allowed").EnumerateArray().Select(f => f.GetString()), caseName);
+        result.Denied.Should().Equal(
+            expected.GetProperty("denied").EnumerateArray().Select(f => f.GetString()), caseName);
+    }
+
+    /// <summary>
+    /// The original two-argument overload must keep its exact signature, so assemblies
+    /// compiled against it still bind, and must behave as the three-argument overload with a
+    /// null object name.
+    /// </summary>
+    [Fact]
+    public void ValidateFieldAccess_TwoArgumentOverload_KeepsItsSignatureAndDelegatesWithNullObject()
+    {
+        var method = typeof(EnforcementEngine).GetMethod(
+            nameof(EnforcementEngine.ValidateFieldAccess),
+            new[] { typeof(string[]), typeof(EffectivePolicy) });
+        method.Should().NotBeNull("the two-argument overload is part of the binary contract");
+        method!.ReturnType.Should().Be(typeof(FieldAccessResult));
+        method.IsStatic.Should().BeTrue();
+        method.IsPublic.Should().BeTrue();
+
+        var threeArg = typeof(EnforcementEngine).GetMethod(
+            nameof(EnforcementEngine.ValidateFieldAccess),
+            new[] { typeof(string[]), typeof(EffectivePolicy), typeof(string) });
+        threeArg.Should().NotBeNull();
+        threeArg!.GetParameters()[2].HasDefaultValue.Should().BeFalse(
+            "the object-name overload is separate and has no default value");
+
         var policy = CreatePolicyWithFieldRules(
-            allowedFields: new[] { "name", "age", "region" },
+            allowedFields: new[] { "patients.name", "*.id" },
             hiddenFields: null);
+        var fields = new[] { "name", "encounters.name", "id", "patients.id" };
 
-        var result = EnforcementEngine.ValidateFieldAccess(
-            new[] { "name", "age", "ssn", "region" }, policy);
+        // Called directly: a bare 'name' stays bare, so 'patients.name' allows it.
+        var result = EnforcementEngine.ValidateFieldAccess(fields, policy);
+        var viaNull = EnforcementEngine.ValidateFieldAccess(fields, policy, null);
 
-        result.Allowed.Should().BeEquivalentTo(new[] { "name", "age", "region" });
-        result.Denied.Should().BeEquivalentTo(new[] { "ssn" });
+        result.Allowed.Should().Equal("name", "id");
+        result.Denied.Should().Equal("encounters.name", "patients.id");
+        result.Allowed.Should().Equal(viaNull.Allowed);
+        result.Denied.Should().Equal(viaNull.Denied);
     }
 
     [Fact]

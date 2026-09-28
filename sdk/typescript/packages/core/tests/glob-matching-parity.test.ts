@@ -4,9 +4,13 @@
  * One case corpus, one outcome table, asserted with identical expected allow/deny
  * outcomes **and** identical denial reasons in all three SDKs. Every expectation in
  * this file was produced by running Python's `validate_access`,
- * `validate_field_access` and `validate_endpoint` over the same rules and subjects,
- * and independently confirmed against .NET's `EnforcementEngine.GlobMatch` compiled
- * and executed rather than read.
+ * `validate_field_access` and `validate_endpoint` over the same rules and subjects.
+ * The object and endpoint expectations were independently confirmed against .NET's
+ * `EnforcementEngine.GlobMatch`, compiled and executed rather than read. The field
+ * expectations are backed by the field pre-check rule (`hiddenFields` through the
+ * broad field-name matcher, `allowedFields` through the allow-direction rule of
+ * issue #36), not by a plain glob, and were cross-checked against Python's
+ * `validate_field_access` and .NET's `EnforcementEngine.ValidateFieldAccess`.
  *
  * §3.1 states two rules for the enforcement dialect — objects, fields, endpoints and
  * storage prefixes — and TypeScript diverged on both, in opposite directions:
@@ -178,11 +182,16 @@ const FIELD_CORPUS: FieldCase[] = [
   // Case-insensitivity on allowedFields, both ways round.
   { id: "allow-lower-rule-upper-field", allowedFields: ["name"], fields: ["NAME", "ssn"], allowed: ["NAME"], denied: ["ssn"] },
   { id: "allow-upper-rule-lower-field", allowedFields: ["NAME"], fields: ["name", "ssn"], allowed: ["name"], denied: ["ssn"] },
-  { id: "hidden-glob-cased", hiddenFields: ["Patients.*"], fields: ["PATIENTS.SSN", "other.ssn"], allowed: ["other.ssn"], denied: ["PATIENTS.SSN"] },
+  // hiddenFields uses the broad field-name matcher, as the post-execution pass does, and
+  // that matcher's bare-leaf form of `Patients.*` is `*`: the pre-check denies what the
+  // post pass would strip (issue #36).
+  { id: "hidden-glob-cased", hiddenFields: ["Patients.*"], fields: ["PATIENTS.SSN", "other.ssn"], allowed: [], denied: ["PATIENTS.SSN", "other.ssn"] },
 
-  // `*` crosses `.`: a table-scoped rule reaches a nested field, not just a leaf.
+  // `*` crosses `.`: a table-scoped hidden rule reaches a nested field, not just a leaf.
   { id: "hidden-star-crosses-dot", hiddenFields: ["patients.*"], fields: ["patients.address.zip"], allowed: [], denied: ["patients.address.zip"] },
-  { id: "allow-star-crosses-dot", allowedFields: ["patients.*"], fields: ["patients.address.zip", "billing.amt"], allowed: ["patients.address.zip"], denied: ["billing.amt"] },
+  // The allow direction compares qualifiers (issue #36): `patients.address.zip` is
+  // qualified with `patients.address`, not `patients`, so `patients.*` does not allow it.
+  { id: "allow-star-stays-within-its-object", allowedFields: ["patients.*"], fields: ["patients.address.zip", "patients.id", "billing.amt"], allowed: ["patients.id"], denied: ["patients.address.zip", "billing.amt"] },
   { id: "hidden-leading-star-dot", hiddenFields: ["*.ssn"], fields: ["patients.ssn", "patients.name"], allowed: ["patients.name"], denied: ["patients.ssn"] },
 
   { id: "hidden-bare-star", hiddenFields: ["*"], fields: ["anything", "a.b.c"], allowed: [], denied: ["anything", "a.b.c"] },

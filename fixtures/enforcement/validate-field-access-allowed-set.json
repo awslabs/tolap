@@ -1,17 +1,515 @@
 {
-  "description": "Fields not in allowedFields set -- deny fields outside the allowed set",
+  "description": "validateFieldAccess against allowedFields and hiddenFields when fields and entries may be bare or qualified with an object name.",
+  "notes": "Rule, identical in every SDK. hiddenFields uses the field-name matcher, which drops qualifiers. allowedFields uses the allow-direction rule of allowed-fields-qualified.json: an entry allows a field when the matcher accepts it and the two are not qualified with different objects (issue #36). When 'input.objectName' is given, the entry is still matched against the field as written, and a bare field is read as 'objectName.field' only to detect a qualifier conflict. Matching the qualified form would let a bare glob reach a field it never names, because '*' crosses '.'. 'expected' lists the allowed and denied fields in input order.",
   "action": "validateFieldAccess",
-  "input": { "fields": ["name", "age", "ssn", "region"] },
-  "policy": {
-    "permissions": { "canQuery": true },
-    "objectRules": {
-      "fieldRules": {
-        "allowedFields": ["name", "age", "region"]
+  "cases": [
+    {
+      "name": "fields-outside-the-allowed-set-are-denied",
+      "notes": "The original case: a field the allow-list does not name is denied.",
+      "input": {
+        "fields": [
+          "name",
+          "age",
+          "ssn",
+          "region"
+        ]
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name",
+              "age",
+              "region"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "name",
+          "age",
+          "region"
+        ],
+        "denied": [
+          "ssn"
+        ]
+      }
+    },
+    {
+      "name": "empty-allowed-fields-denies-every-field",
+      "notes": "allowedFields: [] denies every field.",
+      "input": {
+        "fields": [
+          "name",
+          "patients.id"
+        ]
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": []
+          }
+        }
+      },
+      "expected": {
+        "allowed": [],
+        "denied": [
+          "name",
+          "patients.id"
+        ]
+      }
+    },
+    {
+      "name": "glob-qualifier-does-not-allow-another-objects-field",
+      "notes": "'*.name' used to allow 'encounters.name' through a plain glob. Glob characters in an entry's qualifier are literal, so '*.name' allows only a bare 'name' (issue #36).",
+      "input": {
+        "fields": [
+          "encounters.name",
+          "patients.name",
+          "name"
+        ]
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "name"
+        ],
+        "denied": [
+          "encounters.name",
+          "patients.name"
+        ]
+      }
+    },
+    {
+      "name": "glob-qualifier-denies-a-bare-field-of-a-named-object",
+      "notes": "With the object known, a bare 'name' is read as 'patients.name', which '*.name' does not allow.",
+      "input": {
+        "fields": [
+          "name"
+        ],
+        "objectName": "patients"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [],
+        "denied": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "qualified-entry-denies-another-objects-field",
+      "notes": "'patients.name' allows its own column and not 'encounters.name'.",
+      "input": {
+        "fields": [
+          "encounters.name",
+          "patients.name"
+        ]
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "patients.name"
+        ],
+        "denied": [
+          "encounters.name"
+        ]
+      }
+    },
+    {
+      "name": "qualified-entry-allows-a-bare-field-of-its-object",
+      "notes": "With the object known to be 'patients', a bare 'name' is read as 'patients.name' and allowed.",
+      "input": {
+        "fields": [
+          "name"
+        ],
+        "objectName": "patients"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "name"
+        ],
+        "denied": []
+      }
+    },
+    {
+      "name": "qualified-entry-denies-a-bare-field-of-another-object",
+      "notes": "With the object known to be 'encounters', a bare 'name' is read as 'encounters.name' and denied under 'patients.name'.",
+      "input": {
+        "fields": [
+          "name"
+        ],
+        "objectName": "encounters"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [],
+        "denied": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "qualified-entry-allows-a-bare-field-without-object",
+      "notes": "With no object named, a bare field stays bare and a qualified entry allows it, as in the read projection.",
+      "input": {
+        "fields": [
+          "name"
+        ]
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "name"
+        ],
+        "denied": []
+      }
+    },
+    {
+      "name": "qualified-field-keeps-its-own-qualifier",
+      "notes": "A field that is already qualified is not requalified with the object name, so 'encounters.name' is still denied when the object is 'patients'.",
+      "input": {
+        "fields": [
+          "encounters.name",
+          "name"
+        ],
+        "objectName": "patients"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "name"
+        ],
+        "denied": [
+          "encounters.name"
+        ]
+      }
+    },
+    {
+      "name": "object-wildcard-allows-own-fields-only",
+      "notes": "'patients.*' allows the object's own fields and bare fields read from it, and not another object's.",
+      "input": {
+        "fields": [
+          "patients.id",
+          "id",
+          "encounters.id"
+        ],
+        "objectName": "patients"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "patients.id",
+          "id"
+        ],
+        "denied": [
+          "encounters.id"
+        ]
+      }
+    },
+    {
+      "name": "bare-entry-allows-every-objects-field",
+      "notes": "A bare entry names no object, so it allows the field on every object. Unchanged.",
+      "input": {
+        "fields": [
+          "name",
+          "patients.name",
+          "encounters.name"
+        ],
+        "objectName": "encounters"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "name"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "name",
+          "patients.name",
+          "encounters.name"
+        ],
+        "denied": []
+      }
+    },
+    {
+      "name": "hidden-uses-the-broad-matcher",
+      "notes": "hiddenFields matches like the post-execution pass, so a hidden 'patients.ssn' also denies a bare 'ssn' and 'encounters.ssn'.",
+      "input": {
+        "fields": [
+          "ssn",
+          "encounters.ssn",
+          "name"
+        ]
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "hiddenFields": [
+              "patients.ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "name"
+        ],
+        "denied": [
+          "ssn",
+          "encounters.ssn"
+        ]
+      }
+    },
+    {
+      "name": "hidden-wins-over-allowed",
+      "notes": "Hidden is checked first, so a field both hidden and allowed is denied.",
+      "input": {
+        "fields": [
+          "ssn",
+          "name"
+        ],
+        "objectName": "patients"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "patients.ssn",
+              "patients.name"
+            ],
+            "hiddenFields": [
+              "ssn"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "name"
+        ],
+        "denied": [
+          "ssn"
+        ]
+      }
+    },
+    {
+      "name": "bare-glob-does-not-reach-a-bare-field-through-the-object-name",
+      "notes": "'p*' does not match 'ssn'. Reading the bare field as 'patients.ssn' for the match would let 'p*' allow it, because '*' crosses '.'. The object name is used only for the qualifier-conflict check. 'pid' is the control.",
+      "input": {
+        "fields": [
+          "ssn",
+          "pid"
+        ],
+        "objectName": "patients"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "p*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "pid"
+        ],
+        "denied": [
+          "ssn"
+        ]
+      }
+    },
+    {
+      "name": "infix-glob-does-not-reach-a-bare-field-through-the-object-name",
+      "notes": "'*s*' does not match 'name', though it matches 'patients.name'. 'ssn' is the control.",
+      "input": {
+        "fields": [
+          "name",
+          "ssn"
+        ],
+        "objectName": "patients"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "*s*"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "ssn"
+        ],
+        "denied": [
+          "name"
+        ]
+      }
+    },
+    {
+      "name": "glob-does-not-reach-a-bare-field-through-a-short-object-name",
+      "notes": "'o*f' does not match 'f', though it matches 'o.f'. 'of' is the control.",
+      "input": {
+        "fields": [
+          "f",
+          "of"
+        ],
+        "objectName": "o"
+      },
+      "policy": {
+        "version": "1.0",
+        "permissions": {
+          "canQuery": true
+        },
+        "objectRules": {
+          "fieldRules": {
+            "allowedFields": [
+              "o*f"
+            ]
+          }
+        }
+      },
+      "expected": {
+        "allowed": [
+          "of"
+        ],
+        "denied": [
+          "f"
+        ]
       }
     }
-  },
-  "expected": {
-    "allowed": ["name", "age", "region"],
-    "denied": ["ssn"]
-  }
+  ]
 }

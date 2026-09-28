@@ -435,6 +435,54 @@ Row filters add a rule of their own on top of this matcher. A key qualified with
 object is never read, and an ambiguous match is treated as absent. See §7, "Finding the
 filtered field on a row".
 
+#### `allowedFields` does not cross objects
+
+The matcher above compares the unqualified forms of both sides, so `patients.ssn` also matches
+`encounters.ssn`. For `hiddenFields`, `readOnlyFields` and `maskedFields` that breadth errs
+toward restricting, and those rules keep it. For `allowedFields` it would widen access, so an
+allow-list entry allows a key only when the matcher accepts it **and** the entry and the key
+are not qualified with different objects. This holds wherever `allowedFields` decides
+inclusion: the post-execution projection (step 6), the HTTP wrappers' projection, the field
+pre-check (`validateFieldAccess`), and the write path's allowed-field check (connector spec
+§4.2).
+
+The rule compares the qualifiers the keys themselves carry. A bare key is not attributed to
+any object, so a qualified entry allows it, with one exception: when the caller names the
+object, the field pre-check and the write path read a bare field or payload key as
+`object.field` for the qualifier comparison only. Under `patients.name`, a bare `name` checked
+against `encounters` is refused and one checked against `patients` is allowed. The entry itself
+is always matched against the key as written: because `*` crosses `.`, matching the qualified
+form would let a bare glob reach a key it never names, so `p*` must not allow a bare `ssn` of
+`patients` through `patients.ssn`. The deny rules always see the key as written, and the
+pre-check matches `hiddenFields` with the broad matcher above.
+
+The object qualifier is the one row filters use (§7): everything before the last `.`, compared
+ASCII case-insensitively (only `A`–`Z` folds). So:
+
+| Entry | Key | Allowed? |
+|---|---|---|
+| `patients.name` | `patients.name`, `PATIENTS.Name`, `name` | yes |
+| `patients.name` | `encounters.name`, `db.patients.name` | no |
+| `db.patients.name` | `patients.name` | no |
+| `name` | `name`, `patients.name`, `encounters.name` | yes |
+| `patients.*` | `patients.id`, `id` | yes |
+| `patients.*` | `encounters.id`, `patients.address.city` | no |
+| `patients.n*` | `patients.nickname` | yes |
+| `patients.n*` | `encounters.name` | no |
+| `*` | any key | yes |
+| `*.name` | `name` | yes |
+| `*.name` | `patients.name`, `encounters.name` | no |
+
+Glob characters in an entry's qualifier are literal for the qualifier comparison, so `*.name`
+allows only a bare `name`. That choice fails toward not-allowed: an author who means `name` on
+every object writes the bare `name`. `hiddenFields` is still applied first, so a hidden field
+stays hidden whatever `allowedFields` says.
+
+Before this rule an entry `patients.name` kept an `encounters.name` key in a result record and
+accepted it in a write payload (issue #36). Pinned by
+`fixtures/enforcement/allowed-fields-qualified.json` and
+`fixtures/enforcement/validate-field-access-allowed-set.json`.
+
 ## 5. Result shapes — fail closed
 
 | Shape                              | Behavior            |

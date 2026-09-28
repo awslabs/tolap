@@ -228,7 +228,7 @@ class SecureMcpToolWrapper:
 
         # Field-level access check
         if fields is not None:
-            field_result = validate_field_access(fields, policy)
+            field_result = validate_field_access(fields, policy, object_name)
             if field_result.denied:
                 denied_str = ", ".join(field_result.denied)
                 return AccessResult(allowed=False, reason=f"denied fields: {denied_str}")
