@@ -4,6 +4,25 @@ All notable changes to TOLAP are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+**A row filter could read another object's column.** When a row had no exact key for a filter's
+field, the lookup fell back to the field-name matcher. That matcher drops qualifiers, so a filter
+on `patients.region` was evaluated against `encounters.region` whenever the leaf names matched.
+For joins and multi-object projections, this let the other object's value decide whether a row
+was kept. A bare filter such as `region` that matched several qualified keys used whichever
+came first, so the decision depended on key order. All three SDKs now use the same lookup
+([canonical-enforcement-spec §7](docs/canonical-enforcement-spec.md#7-row-filters--fail-closed)).
+An exact key wins. Otherwise a key qualified with a different object is never a candidate. One
+candidate supplies the value, and none or several make the field absent, so the row is dropped.
+A qualified filter still reads a bare key, and a bare filter still reads a single qualified key.
+The shared fixture
+[`fixtures/enforcement/row-filter-qualified-lookup.json`](fixtures/enforcement/row-filter-qualified-lookup.json)
+pins the behaviour. Rows that relied on the old lookup, through a conflicting qualifier or an
+ambiguous bare name, are now dropped rather than kept (#32).
+
 ## 1.1.0 — 2026-09-01
 
 Purpose binding. TOLAP could already answer "what may this identity see?"; it can now answer

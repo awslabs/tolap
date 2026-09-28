@@ -510,6 +510,24 @@ Previously the negative operators failed *open*: a missing field yields
 `undefined != "x"` → true, so a filter written to exclude classified rows
 retained every row that simply lacked the column.
 
+### Finding the filtered field on a row
+
+A row filter's field is looked up on the row in this order:
+
+1. An exact key is used as-is.
+2. Otherwise every key the field-name matcher (§4) accepts is a candidate, **except** a key
+   whose object qualifier conflicts with the filter's: both are qualified and the qualifiers
+   (everything before the last `.`) differ, compared case-insensitively. A qualified filter
+   `patients.region` still reads a bare key `region`, and a bare filter `region` still reads
+   `patients.region`. But `patients.region` never reads `encounters.region`.
+3. Exactly one candidate supplies the value. No candidate means the field is absent. More than
+   one candidate also means absent, because picking one would make the decision depend on key
+   order. Either way the row is dropped by the rule above.
+
+Before this rule, the lookup used the matcher alone. A filter on `patients.region` could be
+evaluated against `encounters.region`, and a bare filter used whichever matching key came first
+(issue #32). Pinned by `fixtures/enforcement/row-filter-qualified-lookup.json`.
+
 Additional requirements:
 
 - `matches` compiles as `^(?:pattern)$`. The non-capturing group is required:

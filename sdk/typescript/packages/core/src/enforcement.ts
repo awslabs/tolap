@@ -1036,12 +1036,46 @@ function compileRowFilterPattern(pattern: string): RegExp | null {
 }
 
 /**
+ * The lower-cased object qualifier of a field reference, or `null` if bare.
+ *
+ * The qualifier is everything before the last `.`: `patients` for
+ * `patients.region`, `db.patients` for `db.patients.region`.
+ */
+function objectQualifier(name: string): string | null {
+  const lowered = name.toLowerCase();
+  const dot = lowered.lastIndexOf(".");
+  return dot >= 0 ? lowered.slice(0, dot) : null;
+}
+
+/** Whether a filter and a row key are both qualified, by different objects. */
+function qualifiersConflict(fieldName: string, key: string): boolean {
+  const fieldQualifier = objectQualifier(fieldName);
+  const keyQualifier = objectQualifier(key);
+  return (
+    fieldQualifier !== null &&
+    keyQualifier !== null &&
+    fieldQualifier !== keyQualifier
+  );
+}
+
+/**
  * Look up a filter's field on a row, or `MISSING` when it is absent.
  *
- * Filters use either bare names ("region") or dotted paths ("patients.region");
- * both are accepted, preferring the exact key when present. `MISSING` is
- * distinct from a stored `null` so that "field absent" can fail closed while an
- * explicit null is still comparable.
+ * Filters use either bare names ("region") or dotted paths ("patients.region").
+ * The lookup is, in order (spec §7):
+ *
+ * 1. An exact key is used as-is.
+ * 2. Otherwise every key {@link fieldNameMatches} accepts is a candidate, except
+ *    a key qualified with a *different* object than the filter. The matcher
+ *    alone drops qualifiers, so without that exclusion a filter on
+ *    `patients.region` read `encounters.region` (issue #32). A qualified filter
+ *    may still read a bare key, and a bare filter a qualified one.
+ * 3. Exactly one candidate supplies the value. None is `MISSING`, and so is more
+ *    than one: picking whichever key came first would make the decision depend
+ *    on key order, so an ambiguous field fails closed.
+ *
+ * `MISSING` is distinct from a stored `null` so that "field absent" can fail
+ * closed while an explicit null is still comparable.
  */
 function rowFieldValue(
   row: Record<string, unknown>,
@@ -1050,10 +1084,12 @@ function rowFieldValue(
   if (Object.prototype.hasOwnProperty.call(row, fieldName)) {
     return row[fieldName];
   }
-  for (const key of Object.keys(row)) {
-    if (fieldNameMatches(fieldName, key)) return row[key];
-  }
-  return MISSING;
+  const candidates = Object.keys(row).filter(
+    (key) =>
+      fieldNameMatches(fieldName, key) && !qualifiersConflict(fieldName, key),
+  );
+  if (candidates.length !== 1) return MISSING;
+  return row[candidates[0]!];
 }
 
 /** Equality that does not conflate booleans with numbers (`1` != `true`). */
