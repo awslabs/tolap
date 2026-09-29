@@ -177,6 +177,9 @@ A few rules worth knowing:
   1.1.0 do not enforce `toolRules`; enforcement ships in the next release.
 
 The full rules are in [§16 of the canonical spec](docs/canonical-enforcement-spec.md#16-tool-rules).
+To see all three modes running side by side, try the tool-access example in
+[Python](examples/python/tool_access_example.py), [TypeScript](examples/typescript/tool-access-example.ts)
+or [.NET](examples/dotnet/ToolAccessExample.cs).
 
 ## Purpose Binding
 
@@ -395,7 +398,7 @@ never comes up.
 ```typescript
 import { merge, signContext, buildSecurityContext } from "@aws/tolap-core";
 import { InMemoryPolicyStore } from "@aws/tolap-store";
-import { SecureMcpToolWrapper } from "@aws/tolap-mcp";
+import { SecureContextToolWrapper } from "@aws/tolap-mcp";
 
 // 1. Create a policy store and add policies
 const store = new InMemoryPolicyStore();
@@ -404,6 +407,12 @@ await store.putDefinition({
   name: "analyst-db-access",
   permissions: { canQuery: true, readOnly: true },
   objectRules: {
+    // Optional: which tools this identity may call. Leave it out and tool gating stays with
+    // your host, exactly as before.
+    toolRules: {
+      allowedTools: ["query_patients", "count_patients"],
+      hiddenTools: ["export_segment_csv"]
+    },
     // hiddenFields and maskedFields nest under fieldRules, not directly under objectRules.
     fieldRules: {
       hiddenFields: ["ssn", "date_of_birth"],
@@ -432,6 +441,14 @@ const policy = await store.resolvePolicy("user-123", "tenant-acme", "ds-postgres
 //    context cannot be replayed against a different source. Never hand-roll this: a plain
 //    JSON.stringify is not the canonical form and the signature will not verify.
 const context = signContext(buildSecurityContext("user-123", "tenant-acme", policy), signingKey);
+
+// 5. Enforce. Your tools/list handler shows only the tools this identity may call, and every
+//    call is re-checked: tool rules first, then the data rules.
+const wrapper = new SecureContextToolWrapper({ signingKey });
+wrapper.filterTools(context, ["query_patients", "count_patients", "export_segment_csv"]);
+// -> ["query_patients", "count_patients"]
+wrapper.preExecute(context, { toolName: "export_segment_csv", objectName: "patients" });
+// -> { allowed: false, reason: "tool is hidden" }, refused before any query is built
 ```
 
 Want to see this running inside a real agent framework? [`examples/`](examples/) has 14 of them, all
@@ -704,7 +721,7 @@ asked for. So it refuses instead. Full table, thresholds and window included, in
 Four schemas. Three for the policy layers, one for the envelope that carries the resolved policy
 around.
 
-1. **[Policy Definition](schema/v1.0/policy-definition.schema.json)** -- Declares access rules: objects, fields, rows, tags, endpoints, masking, limits, and an optional `purposeProfile`
+1. **[Policy Definition](schema/v1.0/policy-definition.schema.json)** -- Declares access rules: tools, objects, fields, rows, tags, endpoints, masking, limits, and an optional `purposeProfile`
 2. **[Policy Assignment](schema/v1.0/policy-assignment.schema.json)** -- Links a policy to a user/group/role with scope, expiry, and audit trail
 3. **[Effective Policy](schema/v1.0/effective-policy.schema.json)** -- The merged result enforced at the tool layer
 4. **[Security Context](schema/v1.0/security-context.schema.json)** — **new in 1.1.0.** The signed envelope. It had no schema at all before this release, just prose and two known-answer fixtures. It describes the *canonical signing projection*, not any one SDK's context type, because the three differ on purpose and only meet at the signed form. Practical upshot: `delegationHop` and `principalType` finally have a published contract, and every `fixtures/signing/*.json` payload is checked against it. Before, a signing fixture could carry any field it liked and nothing noticed.

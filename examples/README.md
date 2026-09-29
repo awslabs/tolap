@@ -4,12 +4,12 @@
 
 | Language | Frameworks | Tests |
 | --- | --- | --: |
-| [Python](python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 60 |
-| [TypeScript](typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 49 |
-| [.NET](dotnet/) | MCP SDK, Semantic Kernel | 36 |
+| [Python](python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 73 |
+| [TypeScript](typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 62 |
+| [.NET](dotnet/) | MCP SDK, Semantic Kernel | 49 |
 
-Each language also carries two examples that are **not** framework integrations. Both exist in all
-three languages with the same inputs and byte-identical printed output, so a cross-language
+Each language also carries three examples that are **not** framework integrations. All three exist
+in all three languages with the same inputs and byte-identical printed output, so a cross-language
 divergence shows up as a diff rather than as three separately-written expectations.
 
 The **enforcement-mode example** shows `SqlEnforcementMode` -- whether the policy is pushed into
@@ -26,6 +26,17 @@ teaches nothing about whether the real work still passes. It also signs a contex
 declared purpose, and shows verification failing: the purpose and the chain are inside the
 signature, which is what makes a captured context non-repurposable. The judge is stubbed rather
 than called, so the example needs no credential and its verdicts are pinned.
+
+The **tool-access example** shows `objectRules.toolRules`, the layer between "may this agent reach
+the server?" and "what may this call return?". One server registers four tools and the host shows
+every user the same list. Three identities hold three signed policies: an analyst with
+`allowedTools`, a support user with `hiddenTools`, and one with no `toolRules` at all. For each the
+example prints what a `tools/list` handler would show (`filter_tools` / `filterTools` /
+`FilterTools`), calls every tool anyway and prints the refusals with the SDK's own reasons, and
+shows a permitted call still meeting the data rules. It tries a mis-cased name too, because the two
+lists match differently: `allowedTools` exactly, `hiddenTools` case-insensitively. The policy with
+no `toolRules` lists and admits every tool, which is the point: tool gating then stays with the
+host, exactly as before, and the policy alone picks the mode with no code change.
 
 ## The one thing to understand
 
@@ -68,7 +79,7 @@ All three are mutation-verified — bypassing enforcement in the shared helper f
 20/30 (TypeScript) and 8/12 (.NET). The survivors are the paired controls, which assert the
 *source* returns more than the policy allows and are correctly insensitive to that change.
 
-Those ratios count the framework suites. The two non-framework examples call their own APIs rather
+Those ratios count the framework suites. The three non-framework examples call their own APIs rather
 than the shared helper, so each was verified against its own mutation:
 
 - Bypassing `apply_result_pipeline` fails **29 of the 44** Python tests in the framework and
@@ -82,6 +93,10 @@ than the shared helper, so each was verified against its own mutation:
   its 16 Python tests. The 8 survivors are the delegation-chain, scope-narrowing, judge-disposition
   and signature-tamper cases, which validate a chain or a verdict independently of any policy and
   are correctly insensitive to that change.
+- Making `validate_tool_access` ignore `toolRules` fails 8 of the 13 Python tool-access tests. The
+  5 survivors are the policy with no `toolRules` (its listing and its calls) and the three
+  data-rule checks, which do not depend on tool gating and are correctly insensitive to that
+  change.
 
 ## The one framework that differs
 

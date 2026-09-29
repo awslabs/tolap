@@ -14,7 +14,7 @@ framework expects and routes data access through the same function
 
 ## Not a framework integration: choosing where enforcement happens
 
-[`enforcement-mode-example.ts`](enforcement-mode-example.ts) is the first of **two** examples here that are not framework integrations (the other is the purpose-binding example below). It shows
+[`enforcement-mode-example.ts`](enforcement-mode-example.ts) is the first of **three** examples here that are not framework integrations (the others are the purpose-binding and tool-access examples below). It shows
 `SqlEnforcementMode`, the choice of *where* a database policy is applied:
 
 - **`RewriteAndPost`** (the default) pushes row filters into `WHERE`, the limit into `LIMIT`, and
@@ -67,6 +67,38 @@ output is identical; only the wrapper the map hangs off differs.
 
 The same example exists in all three languages with byte-identical printed output.
 
+## Not a framework integration: which tools an identity may call
+
+[`tool-access-example.ts`](tool-access-example.ts) covers the layer between "may this agent reach the server?", which your
+host or gateway answers once for everyone, and "what may this call return?", which the other examples
+answer. A policy that carries `objectRules.toolRules` gives each identity its own tool list:
+
+```
+allowedTools   the only tools this identity may call   matched exactly
+hiddenTools    tools this identity may never call      matched case-insensitively
+```
+
+One server registers four tools. Three identities hold three signed policies — an analyst with
+`allowedTools`, a support user with `hiddenTools`, and an auditor with no `toolRules` at all — and
+for each the example prints what a `tools/list` handler would show (`filterTools`), calls every tool
+anyway through `preExecute`, and prints the refusals with the SDK's own reasons. A permitted
+call still meets the data rules, which are the same in all three policies so that `toolRules` is
+the only variable.
+
+Two details in there are the ones that catch implementations out. A mis-cased name is refused by
+both lists, but for different reasons: `allowedTools` matches exactly, so `Query_Patients` is not on
+it, and `hiddenTools` matches case-insensitively, so `Delete_Patient` cannot slip past the hide. And
+`allowedTools: []` is not "unrestricted" — it denies every tool. The policy with no `toolRules` lists
+and admits every tool, leaving tool gating with the host exactly as before; there is no switch in
+the code, only in the policy.
+
+The same example exists in all three languages with byte-identical printed output.
+
+```bash
+npx tsx tool-access-example.ts
+```
+
+
 ## Read this before the code
 
 **TOLAP is not an MCP server, and it does not speak the MCP protocol.** It ships no JSON-RPC, no
@@ -91,11 +123,11 @@ query runs. The gap between raw and enforced is asserted, not described.
 ```bash
 npm install
 npm run typecheck
-npm test        # 49 assertions: 30 across the five frameworks, 3 for the enforcement
-                # modes, 16 for purpose binding
+npm test        # 62 assertions: 30 across the five frameworks, 3 for the enforcement
+                # modes, 16 for purpose binding, 13 for tool access
 ```
 
-Nothing runs these files standalone in CI — the TypeScript job typechecks and tests — so both
+Nothing runs these files standalone in CI — the TypeScript job typechecks and tests — so all three
 non-framework examples are *executed* from `examples.test.ts` rather than merely imported. An
 example that only ever compiles will drift.
 

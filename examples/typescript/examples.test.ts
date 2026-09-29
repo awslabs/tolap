@@ -386,3 +386,127 @@ describe("purpose-binding example", () => {
     }
   });
 });
+
+/**
+ * The lines the tool-access example must print, byte for byte.
+ *
+ * Repeated verbatim in the Python and .NET suites, for the same reason as the purpose-binding
+ * lines above: a divergence between the SDKs has to surface as a *different line*. The reason
+ * strings are the SDK's own, not the example's.
+ */
+const TOOL_EXPECTED_LINES = [
+  // allowedTools: an exact-match allow-list, so the mis-cased name is refused too.
+  "--- analyst-001  allowedTools [query_patients, count_patients] -------",
+  "tools/list shows: query_patients, count_patients",
+  "  query_patients        ALLOW",
+  "  export_segment_csv    DENY    tool not in allowed set",
+  "  delete_patient        DENY    tool not in allowed set",
+  "  Query_Patients        DENY    tool not in allowed set",
+  // hiddenTools: a case-insensitive deny-list.
+  "--- support-001  hiddenTools [export_segment_csv, delete_patient] ----",
+  "  export_segment_csv    DENY    tool is hidden",
+  "  delete_patient        DENY    tool is hidden",
+  "  Delete_Patient        DENY    tool is hidden",
+  // No toolRules: tool gating stays with the host.
+  "--- auditor-001  no toolRules ----------------------------------------",
+  "tools/list shows: query_patients, count_patients, export_segment_csv, delete_patient",
+  "  export_segment_csv    ALLOW",
+  "  delete_patient        ALLOW",
+  // The data rules, still applied to a permitted call.
+  "    id=1  name=Alice Nguyen  region=us-east  dob=[REDACTED]",
+  "    id=2  name=Bruno Sato  region=us-east  dob=[REDACTED]",
+];
+
+describe("tool-access example", () => {
+  // Each assertion is an outcome — which tools were listed, which call was refused and with what
+  // reason, what a permitted call returned — so an example that printed plausible verdicts while
+  // gating nothing would fail here.
+
+  async function identity(userId: string) {
+    const ex = await import("./tool-access-example.js");
+    const found = ex.IDENTITIES.find((i) => i.userId === userId);
+    if (found === undefined) throw new Error(`no identity ${userId}`);
+    return { ex, identity: found };
+  }
+
+  it.each([
+    ["analyst-001", ["query_patients", "count_patients"]],
+    ["support-001", ["query_patients", "count_patients"]],
+    ["auditor-001", ["query_patients", "count_patients", "export_segment_csv", "delete_patient"]],
+  ])("tools/list shows %s what it may call", async (userId, expected) => {
+    const { ex, identity: id } = await identity(userId as string);
+
+    expect(ex.wrapper().filterTools(ex.signedContext(id), ex.TOOLS)).toEqual(expected);
+  });
+
+  it.each([
+    ["analyst-001", "export_segment_csv", "tool not in allowed set"],
+    ["analyst-001", "delete_patient", "tool not in allowed set"],
+    // allowedTools matches exactly.
+    ["analyst-001", "Query_Patients", "tool not in allowed set"],
+    ["support-001", "export_segment_csv", "tool is hidden"],
+    // hiddenTools matches case-insensitively.
+    ["support-001", "Delete_Patient", "tool is hidden"],
+  ])(
+    "refuses %s calling %s before the source is reached",
+    async (userId, tool, expectedReason) => {
+      // Listing is not permission: a client that calls a tool it was never shown is refused.
+      const { ex, identity: id } = await identity(userId);
+
+      const { decision, rows } = ex.callTool(ex.signedContext(id), tool);
+
+      expect(decision.allowed).toBe(false);
+      expect(decision.reason).toBe(expectedReason);
+      expect(rows).toBeUndefined();
+    },
+  );
+
+  it("leaves every tool callable when the policy has no toolRules", async () => {
+    // Paired allow: a policy with no toolRules leaves tool gating with the host.
+    const { ex, identity: id } = await identity("auditor-001");
+    const context = ex.signedContext(id);
+
+    for (const tool of ex.TOOLS) {
+      expect(ex.callTool(context, tool).decision.allowed, tool).toBe(true);
+    }
+  });
+
+  it.each(["analyst-001", "support-001", "auditor-001"])(
+    "applies the data rules to a permitted call for %s",
+    async (userId) => {
+      const { ex, identity: id } = await identity(userId);
+
+      const { decision, rows } = ex.callTool(ex.signedContext(id), "query_patients");
+
+      expect(decision.allowed).toBe(true);
+      // The fake source really returns ssn, so its absence here is enforcement.
+      expect(ex.fakeSource().some((r) => "ssn" in r)).toBe(true);
+      expect(rows).toEqual(EXPECTED);
+    },
+  );
+
+  it("prints every expected line", async () => {
+    // The example throws if its tool list and its calls disagree or if ssn leaks, so this covers
+    // those paths too. Nothing runs this file standalone in CI, so the run has to happen here.
+    const ex = await import("./tool-access-example.js");
+
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    };
+    try {
+      ex.main();
+    } finally {
+      console.log = original;
+    }
+
+    for (const expected of TOOL_EXPECTED_LINES) {
+      expect(lines, `missing line: ${expected}`).toContain(expected);
+    }
+    // All three identities went through the data rules, and no ssn value was printed.
+    const firstRow = "    id=1  name=Alice Nguyen  region=us-east  dob=[REDACTED]";
+    expect(lines.filter((l) => l === firstRow)).toHaveLength(3);
+    expect(lines.join("\n")).not.toContain("111-22-3333");
+  });
+});

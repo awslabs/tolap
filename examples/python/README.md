@@ -16,7 +16,7 @@ its framework expects and routes the actual data access through the same functio
 
 ## Not a framework integration: choosing where enforcement happens
 
-[`enforcement_mode_example.py`](enforcement_mode_example.py) is the first of **two** examples here that are not framework integrations (the other is the purpose-binding example below). It shows
+[`enforcement_mode_example.py`](enforcement_mode_example.py) is the first of **three** examples here that are not framework integrations (the others are the purpose-binding and tool-access examples below). It shows
 `SqlEnforcementMode`, the choice of *where* a database policy is applied:
 
 - **`RewriteAndPost`** (the default) pushes row filters into `WHERE`, the limit into `LIMIT`, and
@@ -65,6 +65,38 @@ the review step.
 
 The same example exists in all three languages with byte-identical printed output.
 
+## Not a framework integration: which tools an identity may call
+
+[`tool_access_example.py`](tool_access_example.py) covers the layer between "may this agent reach the server?", which your
+host or gateway answers once for everyone, and "what may this call return?", which the other examples
+answer. A policy that carries `objectRules.toolRules` gives each identity its own tool list:
+
+```
+allowedTools   the only tools this identity may call   matched exactly
+hiddenTools    tools this identity may never call      matched case-insensitively
+```
+
+One server registers four tools. Three identities hold three signed policies -- an analyst with
+`allowedTools`, a support user with `hiddenTools`, and an auditor with no `toolRules` at all -- and
+for each the example prints what a `tools/list` handler would show (`filter_tools`), calls every tool
+anyway through `pre_execute`, and prints the refusals with the SDK's own reasons. A permitted
+call still meets the data rules, which are the same in all three policies so that `toolRules` is
+the only variable.
+
+Two details in there are the ones that catch implementations out. A mis-cased name is refused by
+both lists, but for different reasons: `allowedTools` matches exactly, so `Query_Patients` is not on
+it, and `hiddenTools` matches case-insensitively, so `Delete_Patient` cannot slip past the hide. And
+`allowedTools: []` is not "unrestricted" -- it denies every tool. The policy with no `toolRules` lists
+and admits every tool, leaving tool gating with the host exactly as before; there is no switch in
+the code, only in the policy.
+
+The same example exists in all three languages with byte-identical printed output.
+
+```bash
+python3 examples/python/tool_access_example.py
+```
+
+
 ## Read this before the code
 
 **TOLAP is not an MCP server, and it does not speak the MCP protocol.** It ships no JSON-RPC, no
@@ -100,8 +132,8 @@ pip install -r requirements.txt
 pip install -e ../../sdk/python/tolap-core -e ../../sdk/python/tolap-store -e ../../sdk/python/tolap-mcp
 
 python mcp_server_example.py     # or any other
-pytest test_examples.py          # 60 assertions: 42 across the seven frameworks, 2 for the
-                                 # enforcement modes, 16 for purpose binding
+pytest test_examples.py          # 73 assertions: 42 across the seven frameworks, 2 for the
+                                 # enforcement modes, 16 for purpose binding, 13 for tool access
 ```
 
 Each example skips cleanly if its framework is absent, so you can install only the one you need.

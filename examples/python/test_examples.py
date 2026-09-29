@@ -464,3 +464,133 @@ class TestPurposeBindingExample:
         lines = result.stdout.splitlines()
         for expected in PURPOSE_EXPECTED_LINES:
             assert expected in lines, f"missing line: {expected!r}"
+
+
+#: The lines the tool-access example must print, byte for byte.
+#:
+#: Repeated verbatim in the TypeScript and .NET suites, for the same reason as the purpose-binding
+#: lines above: a divergence between the SDKs has to surface as a *different line*. The reason
+#: strings are the SDK's own, not the example's.
+TOOL_EXPECTED_LINES = [
+    # allowedTools: an exact-match allow-list, so the mis-cased name is refused too.
+    "--- analyst-001  allowedTools [query_patients, count_patients] -------",
+    "tools/list shows: query_patients, count_patients",
+    "  query_patients        ALLOW",
+    "  export_segment_csv    DENY    tool not in allowed set",
+    "  delete_patient        DENY    tool not in allowed set",
+    "  Query_Patients        DENY    tool not in allowed set",
+    # hiddenTools: a case-insensitive deny-list.
+    "--- support-001  hiddenTools [export_segment_csv, delete_patient] ----",
+    "  export_segment_csv    DENY    tool is hidden",
+    "  delete_patient        DENY    tool is hidden",
+    "  Delete_Patient        DENY    tool is hidden",
+    # No toolRules: tool gating stays with the host.
+    "--- auditor-001  no toolRules ----------------------------------------",
+    "tools/list shows: query_patients, count_patients, export_segment_csv, delete_patient",
+    "  export_segment_csv    ALLOW",
+    "  delete_patient        ALLOW",
+    # The data rules, still applied to a permitted call.
+    "    id=1  name=Alice Nguyen  region=us-east  dob=[REDACTED]",
+    "    id=2  name=Bruno Sato  region=us-east  dob=[REDACTED]",
+]
+
+
+class TestToolAccessExample:
+    """The tool-access example, executed rather than trusted.
+
+    Each assertion is an outcome -- which tools were listed, which call was refused and with what
+    reason, what a permitted call returned -- so an example that printed plausible verdicts while
+    gating nothing would fail here.
+    """
+
+    @pytest.mark.parametrize(
+        ("user_id", "expected"),
+        [
+            ("analyst-001", ["query_patients", "count_patients"]),
+            ("support-001", ["query_patients", "count_patients"]),
+            (
+                "auditor-001",
+                ["query_patients", "count_patients", "export_segment_csv", "delete_patient"],
+            ),
+        ],
+    )
+    def test_tools_list_shows_what_each_identity_may_call(
+        self, user_id: str, expected: list[str]
+    ) -> None:
+        import tool_access_example as ex
+
+        identity = next(i for i in ex.IDENTITIES if i.user_id == user_id)
+        listed = ex.wrapper().filter_tools(ex.signed_context(identity), ex.TOOLS)
+
+        assert listed == expected
+
+    @pytest.mark.parametrize(
+        ("user_id", "tool", "expected_reason"),
+        [
+            ("analyst-001", "export_segment_csv", "tool not in allowed set"),
+            ("analyst-001", "delete_patient", "tool not in allowed set"),
+            # allowedTools matches exactly.
+            ("analyst-001", "Query_Patients", "tool not in allowed set"),
+            ("support-001", "export_segment_csv", "tool is hidden"),
+            # hiddenTools matches case-insensitively.
+            ("support-001", "Delete_Patient", "tool is hidden"),
+        ],
+    )
+    def test_an_unlisted_tool_is_refused_before_the_source_is_reached(
+        self, user_id: str, tool: str, expected_reason: str
+    ) -> None:
+        """Listing is not permission: a client that calls a tool it was never shown is refused."""
+        import tool_access_example as ex
+
+        identity = next(i for i in ex.IDENTITIES if i.user_id == user_id)
+        decision, rows = ex.call_tool(ex.signed_context(identity), tool)
+
+        assert decision.allowed is False
+        assert decision.reason == expected_reason
+        assert rows is None
+
+    def test_without_tool_rules_every_tool_is_callable(self) -> None:
+        """Paired allow: a policy with no toolRules leaves tool gating with the host."""
+        import tool_access_example as ex
+
+        identity = next(i for i in ex.IDENTITIES if i.tool_rules is None)
+        context = ex.signed_context(identity)
+
+        for tool in ex.TOOLS:
+            decision, _ = ex.call_tool(context, tool)
+            assert decision.allowed is True, tool
+
+    @pytest.mark.parametrize("user_id", ["analyst-001", "support-001", "auditor-001"])
+    def test_a_permitted_tool_still_meets_the_data_rules(self, user_id: str) -> None:
+        import tool_access_example as ex
+
+        identity = next(i for i in ex.IDENTITIES if i.user_id == user_id)
+        decision, rows = ex.call_tool(ex.signed_context(identity), "query_patients")
+
+        assert decision.allowed is True
+        # The fake source really returns ssn, so its absence here is enforcement.
+        assert any("ssn" in row for row in ex.fake_source())
+        assert rows == EXPECTED
+
+    def test_the_example_script_prints_every_expected_line(self) -> None:
+        """Runs the script as CI does, and checks the printed outcomes line by line.
+
+        The script raises ``SystemExit`` if its tool list and its calls disagree or if ssn
+        leaks, so this covers those paths too.
+        """
+        import pathlib
+        import subprocess
+        import sys
+
+        script = pathlib.Path(__file__).parent / "tool_access_example.py"
+        result = subprocess.run(
+            [sys.executable, str(script)], capture_output=True, text=True, timeout=60
+        )
+
+        assert result.returncode == 0, result.stderr
+        lines = result.stdout.splitlines()
+        for expected in TOOL_EXPECTED_LINES:
+            assert expected in lines, f"missing line: {expected!r}"
+        # All three identities went through the data rules, and no ssn value was printed.
+        assert lines.count("    id=1  name=Alice Nguyen  region=us-east  dob=[REDACTED]") == 3
+        assert "111-22-3333" not in result.stdout
