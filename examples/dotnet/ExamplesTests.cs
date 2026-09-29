@@ -448,3 +448,135 @@ public class PurposeBindingExampleTests
     }
 }
 
+
+/// <summary>
+/// The tool-access example, executed rather than trusted.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Each test asserts an <i>outcome</i> — which tools were listed, which call was refused and with
+/// what reason, what a permitted call returned — so an example that printed plausible verdicts
+/// while gating nothing would fail here.
+/// </para>
+/// <para>
+/// The expected lines are byte-identical to <c>examples/python/test_examples.py</c> and
+/// <c>examples/typescript/examples.test.ts</c>. The reason strings are the SDK's own, not the
+/// example's, so a divergence between the SDKs surfaces as a different line.
+/// </para>
+/// </remarks>
+public class ToolAccessExampleTests
+{
+    private static readonly string[] ExpectedLines =
+    [
+        // allowedTools: an exact-match allow-list, so the mis-cased name is refused too.
+        "--- analyst-001  allowedTools [query_patients, count_patients] -------",
+        "tools/list shows: query_patients, count_patients",
+        "  query_patients        ALLOW",
+        "  export_segment_csv    DENY    tool not in allowed set",
+        "  delete_patient        DENY    tool not in allowed set",
+        "  Query_Patients        DENY    tool not in allowed set",
+        // hiddenTools: a case-insensitive deny-list.
+        "--- support-001  hiddenTools [export_segment_csv, delete_patient] ----",
+        "  export_segment_csv    DENY    tool is hidden",
+        "  delete_patient        DENY    tool is hidden",
+        "  Delete_Patient        DENY    tool is hidden",
+        // No toolRules: tool gating stays with the host.
+        "--- auditor-001  no toolRules ----------------------------------------",
+        "tools/list shows: query_patients, count_patients, export_segment_csv, delete_patient",
+        "  export_segment_csv    ALLOW",
+        "  delete_patient        ALLOW",
+        // The data rules, still applied to a permitted call.
+        "    id=1  name=Alice Nguyen  region=us-east  dob=[REDACTED]",
+        "    id=2  name=Bruno Sato  region=us-east  dob=[REDACTED]",
+    ];
+
+    private static readonly List<Dictionary<string, object?>> Expected = new()
+    {
+        new() { ["id"] = 1, ["name"] = "Alice Nguyen", ["region"] = "us-east", ["dob"] = "[REDACTED]" },
+        new() { ["id"] = 2, ["name"] = "Bruno Sato", ["region"] = "us-east", ["dob"] = "[REDACTED]" },
+    };
+
+    private static ToolAccessExample.Identity IdentityFor(string userId) =>
+        ToolAccessExample.Identities.Single(i => i.UserId == userId);
+
+    [Theory]
+    [InlineData("analyst-001", new[] { "query_patients", "count_patients" })]
+    [InlineData("support-001", new[] { "query_patients", "count_patients" })]
+    [InlineData("auditor-001", new[] { "query_patients", "count_patients", "export_segment_csv", "delete_patient" })]
+    public void ToolsList_ShowsWhatEachIdentityMayCall(string userId, string[] expected)
+    {
+        var context = ToolAccessExample.SignedContext(IdentityFor(userId));
+
+        ToolAccessExample.Wrapper().FilterTools(context, ToolAccessExample.Tools)
+            .Should().Equal(expected);
+    }
+
+    [Theory]
+    [InlineData("analyst-001", "export_segment_csv", "tool not in allowed set")]
+    [InlineData("analyst-001", "delete_patient", "tool not in allowed set")]
+    // AllowedTools matches exactly.
+    [InlineData("analyst-001", "Query_Patients", "tool not in allowed set")]
+    [InlineData("support-001", "export_segment_csv", "tool is hidden")]
+    // HiddenTools matches case-insensitively.
+    [InlineData("support-001", "Delete_Patient", "tool is hidden")]
+    public void AnUnlistedTool_IsRefused_BeforeTheSourceIsReached(string userId, string tool, string expectedReason)
+    {
+        // Listing is not permission: a client that calls a tool it was never shown is refused.
+        var call = ToolAccessExample.CallTool(ToolAccessExample.SignedContext(IdentityFor(userId)), tool);
+
+        call.Decision.Allowed.Should().BeFalse();
+        call.Decision.Reason.Should().Be(expectedReason);
+        call.Rows.Should().BeNull();
+    }
+
+    [Fact]
+    public void WithoutToolRules_EveryToolIsCallable()
+    {
+        // Paired allow: a policy with no ToolRules leaves tool gating with the host.
+        var context = ToolAccessExample.SignedContext(IdentityFor("auditor-001"));
+
+        foreach (var tool in ToolAccessExample.Tools)
+            ToolAccessExample.CallTool(context, tool).Decision.Allowed.Should().BeTrue(tool);
+    }
+
+    [Theory]
+    [InlineData("analyst-001")]
+    [InlineData("support-001")]
+    [InlineData("auditor-001")]
+    public void APermittedTool_StillMeetsTheDataRules(string userId)
+    {
+        var call = ToolAccessExample.CallTool(
+            ToolAccessExample.SignedContext(IdentityFor(userId)), "query_patients");
+
+        call.Decision.Allowed.Should().BeTrue();
+        // The fake source really returns ssn, so its absence here is enforcement.
+        ToolAccessExample.FakeRows().Should().Contain(r => r.ContainsKey("ssn"));
+        call.Rows.Should().BeEquivalentTo(Expected);
+    }
+
+    [Fact]
+    public async Task TheExampleRunsClean_AndPrintsTheLinesTheOtherTwoLanguagesPrint()
+    {
+        // RunExampleAsync throws if its tool list and its calls disagree or if ssn leaks, so this
+        // covers those paths too.
+        var original = Console.Out;
+        var captured = new StringWriter();
+        try
+        {
+            Console.SetOut(captured);
+            await ToolAccessExample.RunExampleAsync();
+        }
+        finally
+        {
+            Console.SetOut(original);
+        }
+
+        var lines = captured.ToString().Split(Environment.NewLine);
+
+        foreach (var expected in ExpectedLines)
+            lines.Should().Contain(expected);
+        // All three identities went through the data rules, and no ssn value was printed.
+        lines.Count(l => l == "    id=1  name=Alice Nguyen  region=us-east  dob=[REDACTED]").Should().Be(3);
+        captured.ToString().Should().NotContain("111-22-3333");
+    }
+}
