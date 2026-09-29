@@ -1579,7 +1579,7 @@ no identity to filter by and is unchanged.
 duplicate name (`additionalProperties: false`, `pattern`, `uniqueItems`).
 
 **Version skew:** Released SDK versions up to and including 1.1.0 do not enforce
-`toolRules`; enforcement ships in the next release. How that shows depends on where the older
+`toolRules`; enforcement ships in 1.2.0. How that shows depends on where the older
 SDK sits:
 
 - An older SDK that resolves or merges the policy itself drops `toolRules` from the policy

@@ -489,8 +489,7 @@ async def list_tools(ctx):
 Empty means opposite things in the two places: `allowed_tools=[]` on the options is
 *unrestricted*, while `toolRules.allowedTools: []` in a policy *denies every tool*; when both
 are set, a tool must pass both. Upgrade the wrappers before you author `toolRules`: released
-SDK versions up to and including 1.1.0 do not enforce `toolRules`; enforcement ships in the
-next release (threat model R-9).
+SDK versions up to and including 1.1.0 do not enforce `toolRules`; enforcement ships in 1.2.0 (threat model R-9).
 
 
 ## Step 5: Wire It Together

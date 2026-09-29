@@ -474,8 +474,7 @@ Listing is not permission: `preExecute` re-checks every call. Empty means the op
 two places a tool list appears: the wrapper's static `allowedTools` option treats an empty or
 omitted list as unrestricted, while the policy's `toolRules.allowedTools: []` denies every
 tool (canonical spec §16). Upgrade every wrapper before authoring `toolRules`: released SDK
-versions up to and including 1.1.0 do not enforce `toolRules`; enforcement ships in the next
-release (threat model R-9).
+versions up to and including 1.1.0 do not enforce `toolRules`; enforcement ships in 1.2.0 (threat model R-9).
 
 
 ## Step 5: Wire It Together

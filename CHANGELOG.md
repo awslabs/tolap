@@ -4,7 +4,14 @@ All notable changes to TOLAP are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 1.2.0 — 2026-09-29
+
+Per-identity tool gating, and security fixes to the SQL pre-check and to how field and
+row rules resolve qualified names. Upgrade every wrapper before you write `toolRules`:
+versions up to and including 1.1.0 do not enforce them.
+
+The schema stays at **v1.0**. Every addition is an optional property, so a v1.0 policy is
+still a valid v1.0 policy.
 
 ### Added
 - `objectRules.toolRules` (`allowedTools`, `hiddenTools`): per-identity MCP tool gating,

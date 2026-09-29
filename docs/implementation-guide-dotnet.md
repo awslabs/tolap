@@ -497,8 +497,7 @@ Listing is not permission: `PreExecute` re-checks every call. Empty means the op
 two places a tool list appears: the wrapper's static `AllowedTools` option treats a null or
 empty array as unrestricted, while the policy's `ToolRules.AllowedTools` of `[]` denies every
 tool (canonical spec section 16). Upgrade every wrapper before authoring `toolRules`: released
-SDK versions up to and including 1.1.0 do not enforce `toolRules`; enforcement ships in the
-next release (threat model R-9).
+SDK versions up to and including 1.1.0 do not enforce `toolRules`; enforcement ships in 1.2.0 (threat model R-9).
 
 
 ## Step 5: Wire It Together
