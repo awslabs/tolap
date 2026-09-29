@@ -284,7 +284,8 @@ for a runnable side-by-side comparison.
 2. **Assign it** to a user, group, role or service account. The audit fields aren't optional.
 3. **Resolve.** The SDK pulls every policy that applies and merges them, most restrictive winning.
 4. **Sign.** The merged result gets an HMAC so it survives the trip across a boundary intact.
-5. **Enforce.** The wrapper applies it on every call, and the agent notices nothing.
+5. **Enforce.** The wrapper first decides which tools this identity may see and call, then applies
+   the data rules on every call that gets through. The agent notices nothing.
 
 ```json
 {
@@ -293,6 +294,10 @@ for a runnable side-by-side comparison.
   "objectRules": {
     "allowedObjects": ["patients", "encounters", "diagnoses"],
     "hiddenObjects": ["billing_internal", "audit_log"],
+    "toolRules": {
+      "allowedTools": ["query_patients", "count_patients"],
+      "hiddenTools": ["export_segment_csv"]
+    },
     "fieldRules": {
       "hiddenFields": ["patients.ssn", "patients.date_of_birth"],
       "maskedFields": [
@@ -309,8 +314,10 @@ for a runnable side-by-side comparison.
 }
 ```
 
-What the agent actually gets: `J*********` for the name, a hash where the email was, no SSN column
-at all, and rows only from us-east and us-west. Nothing else made it past the tool.
+What the agent actually gets: only `query_patients` and `count_patients` in its tool list, and a
+refusal if it calls `export_segment_csv` anyway. Through those two tools it sees `J*********` for
+the name, a hash where the email was, no SSN column at all, and rows only from us-east and
+us-west. Nothing else made it past the tool.
 
 ## SDK Packages
 
