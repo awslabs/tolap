@@ -82,7 +82,7 @@ point: what the tool is allowed to hand back. Everything after that follows from
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/problem-dark.svg">
-  <img src="assets/diagrams/problem-light.svg" alt="Two paths from a tool call. Both clear the same IAM/OAuth check. WITHOUT TOLAP the full result — ssn, plaintext email, every region — lands in the agent's context window before any gate, and content guardrails run too late to matter. WITH TOLAP the wrapper enforces the policy at the source, so the context window holds only a dropped ssn, a hashed email and in-region rows, and there is nothing left to leak." width="900">
+  <img src="assets/diagrams/problem-light.svg" alt="Two paths from a tool call. Both clear the same IAM/OAuth check. WITHOUT TOLAP there is no per-identity tool gate, so every user can call every tool, and the full result — ssn, plaintext email, every region — lands in the agent's context window before any gate, and content guardrails run too late to matter. WITH TOLAP the wrapper first checks whether this identity may call the tool at all (objectRules.toolRules), then enforces the data policy at the source, so the context window holds only a dropped ssn, a hashed email and in-region rows, and there is nothing left to leak." width="900">
 </picture>
 
 </div>
