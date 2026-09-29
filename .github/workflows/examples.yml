@@ -65,7 +65,7 @@ jobs:
 
       - name: Every framework enforces identically
         working-directory: examples/python
-        run: python -m pytest test_examples.py -v
+        run: python -m pytest test_examples.py test_policy_tour.py -v
 
   typescript-examples:
     name: TypeScript — five frameworks, one policy
