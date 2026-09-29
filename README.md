@@ -27,7 +27,7 @@ databases, APIs, knowledge bases and object storage. Three SDKs, byte-identical.
 ![License](https://img.shields.io/badge/License-Apache_2.0-2DD4BF?style=flat-square)
 ![SDKs](https://img.shields.io/badge/SDKs-.NET_·_Python_·_TypeScript-F59E0B?style=flat-square)
 ![Schema](https://img.shields.io/badge/schema-v1.0-64748B?style=flat-square)
-![Version](https://img.shields.io/badge/packages-1.1.0-64748B?style=flat-square)
+![Version](https://img.shields.io/badge/packages-1.2.0-64748B?style=flat-square)
 
 **[Documentation](docs/architecture.md)** ·
 **[Quick Start](#quick-start)** ·
@@ -174,7 +174,7 @@ A few rules worth knowing:
   this identity may see. A policy that grants no read or write permission lists nothing. Listing
   isn't permission: every call is re-checked.
 - Upgrade your wrappers before you write `toolRules`. Released SDK versions up to and including
-  1.1.0 do not enforce `toolRules`; enforcement ships in the next release.
+  1.1.0 do not enforce `toolRules`; enforcement ships in 1.2.0.
 
 The full rules are in [§16 of the canonical spec](docs/canonical-enforcement-spec.md#16-tool-rules).
 To see all three modes running side by side, try the tool-access example in
