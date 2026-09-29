@@ -779,7 +779,7 @@ what TOLAP doesn't promise. Worth reading before you rely on any of the above.
 - [Connector Spec](docs/connector-spec.md) -- Normative per-category behavior: which policy fields apply to `db` / `api` / `kb` / `storage`, what an object and a record mean for each, and which fields are advisory rather than enforced
 - [Local Testing](docs/local-testing.md) -- Running the suites against live Postgres/MySQL and the test API server
 - [Building locally](tools/build-local.sh) -- Builds and installs all nine SDK packages from source
-- [Integration examples](examples/) -- Fourteen integrations across Python, TypeScript and .NET (MCP SDK, Strands, LangChain, Vercel AI, Mastra, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents), each CI-tested to enforce the same policy identically
+- [Integration examples](examples/) -- Fourteen integrations across Python, TypeScript and .NET (MCP SDK, Strands, LangChain, Vercel AI, Mastra, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents), each CI-tested to enforce the same policy identically, plus six examples that walk through every policy rule, queries across joins, HTTP APIs and knowledge bases, tool access, purpose binding and enforcement mode
 - [Threat Model](docs/security/threat-model.md) -- STRIDE analysis per trust boundary, with the defects found and fixed since revision 1
 - [Testing Anti-Patterns](docs/testing-antipatterns.md) -- Eight defects that shipped here while the suite was green, and the smell to grep for in each
 - Design records -- the reasoning behind decisions that were not obvious, kept out of the specs so the normative documents stay normative:
@@ -801,13 +801,15 @@ Fourteen runnable integrations across three languages. Every one is CI-tested to
 
 | Language | Frameworks | Tests |
 | --- | --- | --: |
-| [Python](examples/python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 60 |
-| [TypeScript](examples/typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 49 |
-| [.NET](examples/dotnet/) | MCP SDK, Semantic Kernel | 36 |
+| [Python](examples/python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 126 |
+| [TypeScript](examples/typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 115 |
+| [.NET](examples/dotnet/) | MCP SDK, Semantic Kernel | 102 |
 
-Each language also has two examples that aren't framework integrations — one for enforcement mode,
-one for purpose binding. That's 20 files in total. Those six sit outside the fourteen, and their
-tests are included in the numbers above.
+Each language also has six examples that aren't framework integrations: enforcement mode, purpose
+binding, tool access, a policy tour of every rule, query safety across joins, and HTTP APIs with
+knowledge bases. That's 32 files in total. Those eighteen sit outside the fourteen, and their tests
+are included in the numbers above. [`examples/`](examples/#what-each-example-covers) maps each
+policy feature to the examples that show it.
 
 **One thing to be clear about: TOLAP is not an MCP server and doesn't speak the MCP protocol.** No
 JSON-RPC, no stdio transport, no `tools/list`, and not one package declares an MCP dependency.

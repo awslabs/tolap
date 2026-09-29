@@ -4,11 +4,11 @@
 
 | Language | Frameworks | Tests |
 | --- | --- | --: |
-| [Python](python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 73 |
-| [TypeScript](typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 62 |
-| [.NET](dotnet/) | MCP SDK, Semantic Kernel | 49 |
+| [Python](python/) | MCP SDK, Strands, LangChain, OpenAI Agents, Pydantic AI, Semantic Kernel, Bedrock Agents | 126 |
+| [TypeScript](typescript/) | MCP SDK, LangChain.js, Vercel AI SDK, Mastra, OpenAI Agents JS | 115 |
+| [.NET](dotnet/) | MCP SDK, Semantic Kernel | 102 |
 
-Each language also carries three examples that are **not** framework integrations. All three exist
+Each language also carries six examples that are **not** framework integrations. All six exist
 in all three languages with the same inputs and byte-identical printed output, so a cross-language
 divergence shows up as a diff rather than as three separately-written expectations.
 
@@ -37,6 +37,61 @@ shows a permitted call still meeting the data rules. It tries a mis-cased name t
 lists match differently: `allowedTools` exactly, `hiddenTools` case-insensitively. The policy with
 no `toolRules` lists and admits every tool, which is the point: tool gating then stays with the
 host, exactly as before, and the policy alone picks the mode with no code change.
+
+The **policy tour** holds the integration constant and changes the policy instead, so each rule is
+seen on its own against data that shows what it did. It covers all five mask types (`full`,
+`partial` with `showFirst`/`showLast`/`maskChar`, `hash` with each of `sha256`, `sha512` and
+`blake2b`, `null` and `redact`), `allowedFields` next to `hiddenFields`, `allowedObjects` next to
+`hiddenObjects` with a refused call for each, the row-filter operators one at a time over the same
+six rows, `canQuery: false`, `readOnly` refusing a write and the write checks that still run once
+writes are granted, the three limits, and a user policy and a group policy resolved into one, with
+the most restrictive rule winning field by field.
+
+The **query-safety example** shows what 1.2.0 changed for queries that span tables and for results
+enforced twice. A joined, comma-joined or derived table reaching a hidden object is refused before
+the source runs, and a construct the pre-check cannot resolve is refused rather than guessed at. A
+join's rows are keyed by object, and the example shows a row filter on `patients.region` no longer
+reading `encounters.region`, and `patients.name` no longer allowing `encounters.name`. Last, a tool
+returns an `EnforcedResult`: a hash-masked field is hashed once instead of twice, a marker bound to
+another context is ignored, and a false claim is shown for what it is, the tool's word rather than
+proof.
+
+The **HTTP and knowledge-base example** covers the two sources that are not a table, and policies
+scoped to a source. Through the HTTP wrapper, `endpointRules` refuses a hidden path, a path outside
+the allowlist and a disallowed method before the request leaves the process. A `POST` that passes
+the endpoint rules is still refused without `canInsert`, and the rows that come back still meet the
+field and row rules. For a knowledge base, `tagRules` become a metadata filter the provider applies
+at retrieval, rendered for Bedrock, and the post pass re-applies them with `minSimilarityScore`,
+catching a chunk the provider could not filter. Both policies carry `sourcePatterns`, so one
+identity resolves to a different policy per source, and to deny-all for a source neither names.
+
+## What each example covers
+
+Every rule a policy can carry is enforced in at least one example, by the SDK rather than by the
+script:
+
+| Policy feature | Where it's shown |
+| --- | --- |
+| `permissions.canQuery`, `readOnly`, `canInsert` / `canUpdate` / `canDelete` | policy tour; `canInsert` also in HTTP and knowledge bases |
+| `objectRules.allowedObjects`, `hiddenObjects` | policy tour; every framework example refuses `encounters` |
+| `fieldRules.allowedFields`, `hiddenFields`, `readOnlyFields` | policy tour; qualified names in query safety |
+| `maskedFields`: `full`, `partial`, `hash` (`sha256`, `sha512`, `blake2b`), `null`, `redact` | policy tour; `redact` in every framework example |
+| `rowFilters`: `equals`, `notEquals`, `in`, `notIn`, `greaterThan`, `greaterThanOrEqual`, `lessThanOrEqual`, `between`, `contains`, `startsWith`, `like`, `matches`, `isNull`, `isNotNull` | policy tour (`greaterThanOrEqual` inside the merge) |
+| `rowFilters`: `lessThan`, `notLike` | not run on their own; they mirror `lessThanOrEqual` and `like` |
+| `limits.maxResults`, `minSimilarityScore`, `maxObjectSizeBytes` | policy tour; `maxResults` in every framework example |
+| Merging assigned policies, most restrictive wins | policy tour |
+| `objectRules.toolRules` | tool access |
+| `purposeProfile`, delegation chain, judge | purpose binding |
+| `objectRules.endpointRules`, `allowedMethods` | HTTP and knowledge bases |
+| `objectRules.tagRules`, knowledge-base filter pushdown | HTTP and knowledge bases |
+| `sourcePatterns` | HTTP and knowledge bases |
+| `SqlEnforcementMode` | enforcement mode |
+| SQL pre-check across joins and derived tables | query safety |
+| `EnforcedResult` | query safety |
+| Signing and verification | every example; a tampered context in purpose binding |
+
+Not shown anywhere: hash masking with a salt or HMAC key, and upsert, whose checks are those of
+insert and update.
 
 ## The one thing to understand
 
@@ -79,8 +134,9 @@ All three are mutation-verified — bypassing enforcement in the shared helper f
 20/30 (TypeScript) and 8/12 (.NET). The survivors are the paired controls, which assert the
 *source* returns more than the policy allows and are correctly insensitive to that change.
 
-Those ratios count the framework suites. The three non-framework examples call their own APIs rather
-than the shared helper, so each was verified against its own mutation:
+Those ratios count the framework suites. The enforcement-mode, purpose-binding and tool-access
+examples call their own APIs rather than the shared helper, so each was verified against its own
+mutation:
 
 - Bypassing `apply_result_pipeline` fails **29 of the 44** Python tests in the framework and
   enforcement-mode suites: 28 of the 42 framework assertions, and one of the two enforcement-mode
@@ -97,6 +153,9 @@ than the shared helper, so each was verified against its own mutation:
   5 survivors are the policy with no `toolRules` (its listing and its calls) and the three
   data-rule checks, which do not depend on tool gating and are correctly insensitive to that
   change.
+
+The policy tour, query-safety and HTTP and knowledge-base suites pin every printed result line
+exactly, identically in all three languages, but have not yet been mutation-verified.
 
 ## The one framework that differs
 
