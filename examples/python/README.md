@@ -16,7 +16,7 @@ its framework expects and routes the actual data access through the same functio
 
 ## Not a framework integration: choosing where enforcement happens
 
-[`enforcement_mode_example.py`](enforcement_mode_example.py) is the first of **three** examples here that are not framework integrations (the others are the purpose-binding and tool-access examples below). It shows
+[`enforcement_mode_example.py`](enforcement_mode_example.py) is the first of **six** examples here that are not framework integrations (the others are the purpose-binding, tool-access, policy-tour, query-safety and HTTP and knowledge-base examples below). It shows
 `SqlEnforcementMode`, the choice of *where* a database policy is applied:
 
 - **`RewriteAndPost`** (the default) pushes row filters into `WHERE`, the limit into `LIMIT`, and
@@ -96,6 +96,73 @@ The same example exists in all three languages with byte-identical printed outpu
 python3 examples/python/tool_access_example.py
 ```
 
+## Not a framework integration: every policy rule, one at a time
+
+[`policy_tour_example.py`](policy_tour_example.py) holds the integration constant and changes the policy instead, so each
+rule is seen on its own against data that shows what it did:
+
+```
+masks          full, partial, hash (sha256 / sha512 / blake2b), null, redact
+fields         allowedFields next to hiddenFields
+objects        allowedObjects next to hiddenObjects, a refused call for each
+row filters    each operator on its own, over the same six rows
+permissions    canQuery false, readOnly refusing a write, the write checks that remain
+limits         minSimilarityScore, maxObjectSizeBytes, maxResults
+merging        a user policy and a group policy, the most restrictive rule winning
+```
+
+Every masked value and every verdict is the SDK's, printed next to the raw value it replaced. The
+merge section resolves two assigned policies through the SDK's resolver and prints the rule each
+field of the merged policy came from: allowed objects intersected, hidden fields unioned, the
+stricter mask, the lower `maxResults`, and a write grant only where every policy grants it.
+
+The same example exists in all three languages with byte-identical printed output.
+
+```bash
+python3 examples/python/policy_tour_example.py
+```
+
+## Not a framework integration: queries that span tables
+
+[`query_safety_example.py`](query_safety_example.py) shows what 1.2.0 changed about joins and about results enforced
+twice, in three sections:
+
+1. **The SQL pre-check reads every table.** A joined, comma-joined or derived table reaching
+   `billing_internal` is refused before the source runs, a subquery in `WHERE` is refused as a
+   construct the check cannot resolve, and a column is resolved through its alias to the table it
+   belongs to.
+2. **Qualified names stay with their object.** A row filter on `patients.region` no longer reads
+   `encounters.region`, and `allowedFields` entry `patients.name` no longer lets `encounters.name`
+   through.
+3. **A tool can declare its result already enforced** with `EnforcedResult.for_context`. A hash-masked field is
+   then hashed once, not twice. A marker bound to another context is ignored, and a tool that
+   returns a marker without enforcing shows why the marker is a claim, not proof.
+
+The same example exists in all three languages with byte-identical printed output.
+
+```bash
+python3 examples/python/query_safety_example.py
+```
+
+## Not a framework integration: HTTP APIs, knowledge bases and `sourcePatterns`
+
+[`http_and_kb_example.py`](http_and_kb_example.py) covers the two sources that are not a table. One identity holds two
+policies, each with `sourcePatterns`, so resolution picks the API policy for the API, the
+knowledge-base policy for the knowledge base, and deny-all for a source neither names.
+
+Through `SecureHttpToolWrapper`, `endpointRules` refuses a hidden path, a path outside the
+allowlist and a disallowed method before the request is sent. A `POST` that passes the endpoint
+rules is still refused without `canInsert` -- an endpoint allowlist is not a write grant -- and the
+JSON that comes back still meets the field, row and limit rules. For the knowledge base,
+`tagRules` become a metadata filter the provider applies at retrieval (`build_kb_filter` / `render_kb_filter`), and
+the post pass re-applies them with `minSimilarityScore`, catching a chunk tagged under a key the
+provider never filters on.
+
+The same example exists in all three languages with byte-identical printed output.
+
+```bash
+python3 examples/python/http_and_kb_example.py
+```
 
 ## Read this before the code
 
@@ -132,8 +199,10 @@ pip install -r requirements.txt
 pip install -e ../../sdk/python/tolap-core -e ../../sdk/python/tolap-store -e ../../sdk/python/tolap-mcp
 
 python mcp_server_example.py     # or any other
-pytest test_examples.py          # 73 assertions: 42 across the seven frameworks, 2 for the
-                                 # enforcement modes, 16 for purpose binding, 13 for tool access
+pytest                           # every test file, 126 assertions: 42 across the seven
+                                 # frameworks, 2 for the enforcement modes, 16 for purpose
+                                 # binding, 13 for tool access, 27 for the policy tour, 18 for
+                                 # query safety, 8 for HTTP and knowledge bases
 ```
 
 Each example skips cleanly if its framework is absent, so you can install only the one you need.
