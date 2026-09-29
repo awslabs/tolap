@@ -4,6 +4,16 @@ All notable changes to TOLAP are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+- A publish workflow (`.github/workflows/publish.yml`) for PyPI and npm, with NuGet
+  opt-in. PyPI uses trusted publishing, npm publishes with provenance, and every upload
+  waits for approval in a GitHub environment. See [docs/releasing.md](docs/releasing.md).
+
+### Changed
+- Every GitHub Action is pinned to a commit SHA, kept current by Dependabot.
+
 ## 1.2.0 — 2026-09-29
 
 Per-identity tool gating, and security fixes to the SQL pre-check and to how field and
