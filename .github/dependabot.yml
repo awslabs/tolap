@@ -1,0 +1,12 @@
+# Keeps the commit-SHA pins in .github/workflows current. Every action is pinned to a
+# full SHA (with the version in a trailing comment) so a moved or compromised tag cannot
+# change what a publish run executes; Dependabot bumps the SHA and the comment together.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
