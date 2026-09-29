@@ -192,6 +192,7 @@ public class EnforcementModeExampleTests
 /// the same in all three SDKs, so a divergence surfaces as a different result.
 /// </para>
 /// </remarks>
+[Collection(ConsoleCapture.Name)]
 public class PurposeBindingExampleTests
 {
     // ---------------------------------------------------------------- resolution filtering (15.1)
@@ -464,6 +465,7 @@ public class PurposeBindingExampleTests
 /// example's, so a divergence between the SDKs surfaces as a different line.
 /// </para>
 /// </remarks>
+[Collection(ConsoleCapture.Name)]
 public class ToolAccessExampleTests
 {
     private static readonly string[] ExpectedLines =
@@ -579,4 +581,14 @@ public class ToolAccessExampleTests
         lines.Count(l => l == "    id=1  name=Alice Nguyen  region=us-east  dob=[REDACTED]").Should().Be(3);
         captured.ToString().Should().NotContain("111-22-3333");
     }
+}
+
+/// <summary>
+/// Tests that swap <see cref="Console.Out"/> join this collection so xUnit runs them one at a time.
+/// Two tests capturing the console in parallel would each read the other's output.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public class ConsoleCapture
+{
+    public const string Name = "Console capture";
 }
