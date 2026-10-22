@@ -22,7 +22,7 @@
     "constructs": "^10.4.2",
     "typescript": "^5.4.0",
     "@types/node": "^25.5.2",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.12"
   },
   "private": true,
   "bin": {
