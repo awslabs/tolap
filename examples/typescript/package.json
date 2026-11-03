@@ -19,7 +19,7 @@
     "@aws/tolap-mcp": "file:../../sdk/typescript/packages/mcp",
     "@aws/tolap-store": "file:../../sdk/typescript/packages/store",
     "ai": "~7.0",
-    "zod": "^4.0.0"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "typescript": "~5.7",
