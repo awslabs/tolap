@@ -23,7 +23,7 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Npgsql" Version="8.0.3" />
-    <PackageReference Include="MySqlConnector" Version="2.3.7" />
+    <PackageReference Include="MySqlConnector" Version="2.6.1" />
     <!--
       AWS SDKs are TEST-ONLY, exactly as Npgsql and MySqlConnector are. No shipped
       package (Tolap.Core / Tolap.Store / Tolap.Mcp) references them and none should:
